@@ -1,2 +1,3 @@
-// core — public surface (cross-module entry point).
-export const placeholder = 'core-public' as const;
+export { buildHonoApp } from './composition/hono-app.ts';
+export { runMigrations } from './composition/migrations.ts';
+export { type ContributionRegistry, createContributionRegistry } from './composition/registry.ts';
