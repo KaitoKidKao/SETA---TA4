@@ -43,4 +43,16 @@ export const copilotApi = {
       HitlResolveResponse,
     );
   },
+  async renameThread(id: string, title: string) {
+    await fetchJson(`/api/copilot/v1/threads/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+  },
+  async deleteThread(id: string) {
+    await fetchJson(`/api/copilot/v1/threads/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
 };

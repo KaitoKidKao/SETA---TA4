@@ -1,18 +1,17 @@
-import { openai } from '@ai-sdk/openai';
 import type { Mastra } from '@mastra/core';
 import { Agent } from '@mastra/core/agent';
+import { Memory } from '@mastra/memory';
 import { hashRoleSummary } from '@seta/core';
-import { MockLanguageModelV3 } from 'ai/test';
 import { LRUCache } from 'lru-cache';
 import type { ZodTypeAny } from 'zod';
-import { copilotEnv } from './env.ts';
 import { ROUTER_INSTRUCTIONS, SELF_INSTRUCTIONS } from './instructions.ts';
+import { type AgentName, resolveModel } from './model-registry.ts';
 import { filterToolsByRbac } from './rbac-filter.ts';
 import { type CopilotTool, toToolBag } from './tools/_types.ts';
 import { makeListMyThreadsTool } from './tools/copilot.list-my-threads.ts';
 import { STATIC_SELF_TOOLS } from './tools/self-tools.ts';
 
-export type AgentName = 'router' | 'self';
+export type { AgentName } from './model-registry.ts';
 
 export type AgentFactoryDeps = { mastra: Mastra };
 
@@ -74,25 +73,23 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const allowedTools = filterToolsByRbac(baseTools, session);
     const tools = toToolBag(allowedTools);
 
+    const storage = deps.mastra.getStorage();
+    const memory = storage
+      ? new Memory({
+          storage: storage as never,
+          options: { semanticRecall: false, generateTitle: true },
+        })
+      : undefined;
+
     const agent = new Agent({
       id: agentName === 'router' ? 'supervisor' : 'self',
       name: agentName === 'router' ? 'Supervisor' : 'Self',
       instructions: agentName === 'router' ? ROUTER_INSTRUCTIONS : SELF_INSTRUCTIONS,
-      model: resolveModel(),
+      model: resolveModel(undefined, { agentName }).model,
       tools: tools as never,
+      ...(memory ? { memory } : {}),
     });
     cache.set(key, agent);
     return agent;
   };
-}
-
-function resolveModel() {
-  const id = copilotEnv.COPILOT_MODEL;
-  const slash = id.indexOf('/');
-  if (slash < 0) throw new Error(`COPILOT_MODEL must be in 'provider/model' form, got ${id}`);
-  const provider = id.slice(0, slash);
-  const model = id.slice(slash + 1);
-  if (provider === 'openai') return openai(model);
-  if (provider === 'mock') return new MockLanguageModelV3();
-  throw new Error(`Unsupported COPILOT_MODEL provider: ${provider} (supported: openai, mock)`);
 }

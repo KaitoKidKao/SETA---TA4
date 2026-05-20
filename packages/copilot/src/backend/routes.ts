@@ -8,6 +8,7 @@ import { hitlCalls } from '../db/schema.ts';
 import type { AgentName } from './agent-factory.ts';
 import { copilotEnv } from './env.ts';
 import { approveHitl, HitlError, rejectHitl } from './hitl.ts';
+import { listModels, ModelNotFoundError, resolveModel } from './model-registry.ts';
 import { RateLimitError, reserveTurn } from './rate-limit.ts';
 import { runWrappedTool } from './tool-runner.ts';
 
@@ -16,6 +17,7 @@ const ChatBody = z.object({
   messages: z.array(z.unknown()).min(1),
   trigger: z.enum(['submit-message', 'regenerate-message']).optional(),
   resourceId: z.string().optional(),
+  model: z.string().optional(),
 });
 
 export type SessionLike = {
@@ -100,8 +102,22 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
     const agent = deps.factory(session, agentName);
     const resourceId = parsed.data.resourceId ?? session.user_id;
 
+    let modelOverride: ReturnType<typeof resolveModel>['model'] | undefined;
+    try {
+      modelOverride = resolveModel(parsed.data.model, {
+        agentName,
+        lastUserText: userText,
+      }).model;
+    } catch (e) {
+      if (e instanceof ModelNotFoundError) {
+        return c.json({ error: 'unknown_model', message: e.message }, 400);
+      }
+      throw e;
+    }
+
     const result = await agent.stream(messages, {
       memory: { thread: parsed.data.id, resource: resourceId },
+      ...(modelOverride ? { model: modelOverride as never } : {}),
     });
 
     const uiStream = createUIMessageStream({
@@ -136,6 +152,12 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
   };
 
   type ListThreadsArgs = { filter?: { resourceId?: string }; perPage?: number | false };
+  type MastraStoredMessage = {
+    id?: string;
+    role?: string;
+    content?: unknown;
+    createdAt?: Date | string;
+  };
   type MemoryStore = {
     listThreads(args: ListThreadsArgs): Promise<{ threads: ThreadRow[] }>;
     getThreadById(q: { threadId: string; resourceId?: string }): Promise<ThreadRow | null>;
@@ -145,8 +167,35 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
       metadata: Record<string, unknown>;
     }): Promise<ThreadRow>;
     deleteThread(q: { threadId: string }): Promise<void>;
-    listMessages(q: { threadId: string }): Promise<{ messages: unknown[] }>;
+    listMessages(q: {
+      threadId: string;
+      page?: number;
+      perPage?: number;
+    }): Promise<{ messages: MastraStoredMessage[]; total?: number; hasMore?: boolean }>;
   };
+
+  type UIMessagePart = { type: 'text'; text: string };
+  type UIMessageLike = { id: string; role: 'user' | 'assistant'; parts: UIMessagePart[] };
+
+  function toUIMessage(m: MastraStoredMessage, idx: number): UIMessageLike | null {
+    const role = m.role === 'user' || m.role === 'assistant' ? m.role : null;
+    if (!role) return null;
+    const id = m.id ?? `msg-${idx}`;
+    const content = m.content;
+    const parts: UIMessagePart[] = [];
+    if (typeof content === 'string') {
+      parts.push({ type: 'text', text: content });
+    } else if (Array.isArray(content)) {
+      for (const c of content) {
+        if (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text') {
+          const text = (c as { text?: unknown }).text;
+          if (typeof text === 'string') parts.push({ type: 'text', text });
+        }
+      }
+    }
+    if (parts.length === 0) return null;
+    return { id, role, parts };
+  }
 
   const getMemoryStore = (): MemoryStore | null => {
     const m = deps.mastra as {
@@ -209,10 +258,24 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
     if (!thread || thread.resourceId !== check.session.user_id) {
       return c.json({ error: 'not_found', message: 'thread not found' }, 404);
     }
-    const messagesResult = storage
-      ? await storage.listMessages({ threadId: thread.id })
-      : { messages: [] };
-    return c.json({ thread, messages: messagesResult.messages });
+    const pageRaw = c.req.query('page');
+    const perPageRaw = c.req.query('perPage');
+    const page = pageRaw ? Math.max(0, Number.parseInt(pageRaw, 10)) : 0;
+    const perPage = perPageRaw ? Math.min(200, Math.max(1, Number.parseInt(perPageRaw, 10))) : 50;
+    const result = storage
+      ? await storage.listMessages({ threadId: thread.id, page, perPage })
+      : { messages: [], total: 0, hasMore: false };
+    const uiMessages = result.messages
+      .map((m, i) => toUIMessage(m, i))
+      .filter((m): m is UIMessageLike => m !== null);
+    return c.json({
+      thread: { id: thread.id, title: thread.title ?? null, updatedAt: thread.updatedAt ?? null },
+      messages: uiMessages,
+      page,
+      perPage,
+      total: result.total ?? uiMessages.length,
+      hasMore: result.hasMore ?? false,
+    });
   });
 
   app.patch('/api/copilot/v1/threads/:id', async (c) => {
@@ -250,6 +313,22 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
     }
     if (storage) await storage.deleteThread({ threadId: thread.id });
     return c.json({ ok: true });
+  });
+
+  app.get('/api/copilot/v1/models', async (c) => {
+    const check = checkPerm(c.get('session') as SessionLike | undefined, 'copilot.chat.use');
+    if (!check.ok) return c.json(check.denied.body, check.denied.status);
+    const { models, default: defaultKey } = listModels();
+    const withAuto = [
+      {
+        key: 'auto',
+        label: 'Auto',
+        tier: 'auto' as const,
+        supportsReasoning: models.some((m) => m.supportsReasoning),
+      },
+      ...models,
+    ];
+    return c.json({ models: withAuto, default: defaultKey });
   });
 
   app.get('/api/copilot/v1/health', async (c) => {

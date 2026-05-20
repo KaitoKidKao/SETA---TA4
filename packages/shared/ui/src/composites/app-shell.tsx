@@ -20,6 +20,7 @@ export interface AppShellProps {
   copilotPanel?: React.ReactNode;
   copilotAlert?: boolean;
   defaultCopilotOpen?: boolean;
+  hideCopilot?: boolean;
   notificationCount?: number;
 
   children: React.ReactNode;
@@ -39,6 +40,7 @@ export function AppShell({
   copilotPanel,
   copilotAlert = false,
   defaultCopilotOpen = false,
+  hideCopilot = false,
   notificationCount = 0,
   children,
   className,
@@ -51,6 +53,7 @@ export function AppShell({
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
       if (e.key === '\\') {
+        if (hideCopilot) return;
         e.preventDefault();
         setCopilotOpen((o) => !o);
       } else if (e.key === 'b' || e.key === 'B') {
@@ -61,7 +64,7 @@ export function AppShell({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [hideCopilot]);
 
   return (
     <div
@@ -78,6 +81,7 @@ export function AppShell({
         copilotOpen={copilotOpen}
         copilotAlert={copilotAlert}
         onCopilotToggle={() => setCopilotOpen((o) => !o)}
+        hideCopilotButton={hideCopilot}
         notificationCount={notificationCount}
       />
       <div className="flex min-h-0 flex-1">
@@ -92,7 +96,7 @@ export function AppShell({
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-canvas">
           {children}
         </main>
-        {copilotOpen && (
+        {!hideCopilot && copilotOpen && (
           <CopilotPanel onClose={() => setCopilotOpen(false)}>{copilotPanel}</CopilotPanel>
         )}
       </div>
