@@ -91,7 +91,7 @@ for (const m of MODULES_CHECKED) checkModule(m);
 
 if (errors.length > 0) {
   console.error('lint:module-shape — violations:');
-  for (const e of errors) console.error('  ' + e);
+  for (const e of errors) console.error(`  ${e}`);
   process.exit(1);
 }
 
