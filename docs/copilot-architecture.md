@@ -35,38 +35,73 @@ graph LR
 
 ## What the user sees
 
-```mermaid
-journey
-    title Who should take this task
-    section Ask
-      User asks in chat: 5: User
-      Assistant routes: 3: Copilot
-    section Suggest
-      Find candidates: 3: Copilot
-      Score and rank: 3: Copilot
-      Show top-5 card: 5: Copilot
-    section Decide
-      Pick assignee: 5: User
-    section Record
-      Assign and audit: 5: Platform
+### Scenario 1 — "Who should take this task?"
+
+User types in chat:
+
+> *who should take on the OAuth redirect task?*
+
+The assistant replies with an **approval card** in the chat thread:
+
+```
+┌─ Suggested assignees for "Fix OAuth redirect on Safari" ──────┐
+│                                                                │
+│  ● Carol      react, ts, auth     load: 2 tasks   free: 18h   │
+│               score 0.89                          [ Assign ]   │
+│                                                                │
+│  ○ Alice      react, ts, auth     load: 3 tasks   free: 12h   │
+│               score 0.85                          [ Assign ]   │
+│                                                                │
+│  ○ Bob        react, ts           load: 7 tasks   free:  5h   │
+│               score 0.65                          [ Assign ]   │
+│                                                                │
+│  [ Pick someone else… ]              [ Leave unassigned ]      │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-```mermaid
-journey
-    title Create a task with dedup catch
-    section Draft
-      Type title: 5: User
-    section Check
-      Vector search: 3: Copilot
-      Classify match: 3: Copilot
-    section Decide
-      Show duplicates card: 5: Copilot
-      Pick comment on existing: 5: User
-    section Record
-      Post comment and audit: 5: Platform
+One click on `Assign` → task is assigned, audit row written, the assistant confirms inline.
+
+### Scenario 2 — "Create a task for fixing the Safari login"
+
+User types in chat:
+
+> *create a task to fix the Safari OAuth login redirect*
+
+Before the task lands, the assistant checks for duplicates and shows:
+
+```
+┌─ Looks like a possible duplicate ─────────────────────────────┐
+│                                                                │
+│  This draft is similar to existing tasks:                      │
+│                                                                │
+│  ● #142  "Safari login broken after OAuth"     score 0.91     │
+│          [ Link ▾ ]    Comment · Related · Sub-task            │
+│                                                                │
+│  ○ #98   "Login redirect loop on macOS"        score 0.78     │
+│          [ Link ▾ ]                                            │
+│                                                                │
+│  [ Create new anyway ]                       [ Cancel ]        │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-Both flows share the same contract — **propose, decide, record** — and the same approval card surface.
+User clicks `Link ▾ → Comment` on #142 → a comment lands on the existing ticket, no new task is created, audit row is written.
+
+---
+
+Both scenarios share the same shape:
+
+```mermaid
+flowchart LR
+    Ask[User asks] --> Propose[Assistant proposes<br/>via approval card]
+    Propose --> Decide[User decides<br/>1 click]
+    Decide --> Record[Platform records<br/>+ audit]
+
+    style Propose fill:#FFC107
+    style Decide fill:#0047FF,color:#fff
+    style Record fill:#E6EEFF
+```
+
+**Propose · Decide · Record** is the contract for every write the assistant performs.
 
 ---
 
