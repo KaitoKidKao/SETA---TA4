@@ -1,8 +1,5 @@
-import { Switch } from '@seta/shared-ui';
+import { Badge, Switch } from '@seta/shared-ui';
 import type { NotificationPrefRowDTO, PatchPrefInput } from '../../../notifications/api/client.ts';
-
-export const EMAIL_DEFERRED_HINT =
-  'Email delivery ships in v1.x — your selection will take effect then.';
 
 export interface NotificationPrefRowProps {
   row: NotificationPrefRowDTO;
@@ -11,40 +8,65 @@ export interface NotificationPrefRowProps {
 }
 
 export function NotificationPrefRow({ row, onToggle, disabled }: NotificationPrefRowProps) {
+  const inAppId = `notif-${row.event_type}-in-app`;
+  const emailId = `notif-${row.event_type}-email`;
+  const anyOn = row.in_app_enabled || (row.email_enabled && row.email_available);
+
   return (
-    <tr className="border-b border-border last:border-b-0">
-      <td className="px-4 py-3 text-sm font-medium">{row.label}</td>
-      <td className="px-4 py-3">
-        <Switch
+    <div className="flex items-start justify-between gap-6 px-5 py-4">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-body font-medium text-ink">{row.label}</span>
+          <Badge variant={anyOn ? 'success' : 'secondary'}>{anyOn ? 'On' : 'Off'}</Badge>
+        </div>
+        <p className="m-0 mt-1 font-mono text-caption text-ink-subtle">{row.event_type}</p>
+      </div>
+
+      <div className="flex shrink-0 items-start gap-6">
+        <ChannelToggle
+          id={inAppId}
+          label="In-app"
           checked={row.in_app_enabled}
           disabled={disabled}
           onCheckedChange={(enabled) =>
             onToggle({ event_type: row.event_type, channel: 'in_app', enabled })
           }
-          aria-label={`Toggle in-app notifications for ${row.label}`}
         />
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={row.email_enabled}
-            disabled={disabled}
-            onCheckedChange={(enabled) =>
-              onToggle({ event_type: row.event_type, channel: 'email', enabled })
-            }
-            aria-label={`Toggle email notifications for ${row.label}`}
-            title={row.email_available ? undefined : EMAIL_DEFERRED_HINT}
-          />
-          {!row.email_available && (
-            <span
-              className="rounded bg-surface-3 px-1.5 py-0.5 font-medium text-muted-foreground text-xs"
-              title={EMAIL_DEFERRED_HINT}
-            >
-              v1.x
-            </span>
-          )}
-        </div>
-      </td>
-    </tr>
+        <ChannelToggle
+          id={emailId}
+          label="Email"
+          checked={row.email_enabled}
+          disabled={disabled || !row.email_available}
+          onCheckedChange={(enabled) =>
+            onToggle({ event_type: row.event_type, channel: 'email', enabled })
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+interface ChannelToggleProps {
+  id: string;
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onCheckedChange: (next: boolean) => void;
+}
+
+function ChannelToggle({ id, label, checked, disabled, onCheckedChange }: ChannelToggleProps) {
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <label htmlFor={id} className="text-caption font-medium text-ink-muted">
+        {label}
+      </label>
+      <Switch
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onCheckedChange}
+        aria-label={`Toggle ${label.toLowerCase()} notifications`}
+      />
+    </div>
   );
 }

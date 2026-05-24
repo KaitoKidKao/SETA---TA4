@@ -12,9 +12,9 @@ export function AdminNotificationPrefs() {
       title="Notifications"
       subtitle="Choose which events generate notifications for everyone in this workspace."
     >
-      <div className="mx-auto max-w-3xl p-6">
+      <div className="mx-auto max-w-[880px] space-y-4 p-6">
         {error && (
-          <Alert variant="destructive" className="mb-4">
+          <Alert variant="destructive">
             <AlertDescription>
               Failed to load notification settings: {(error as Error).message}
             </AlertDescription>
@@ -24,34 +24,27 @@ export function AdminNotificationPrefs() {
         {isLoading || !data ? (
           <Skeleton className="h-72 w-full rounded-lg" />
         ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full">
-              <thead className="bg-surface-2 text-muted-foreground text-sm">
-                <tr className="border-b border-border">
-                  <th className="px-4 py-2 text-left font-medium">Event</th>
-                  <th className="px-4 py-2 text-left font-medium">In-app</th>
-                  <th className="px-4 py-2 text-left font-medium">
-                    <div className="flex items-center gap-2">
-                      Email
-                      <span className="rounded bg-surface-3 px-1.5 py-0.5 font-medium text-xs">
-                        v1.x
-                      </span>
-                    </div>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.rows.map((row) => (
-                  <NotificationPrefRow
-                    key={row.event_type}
-                    row={row}
-                    onToggle={(input) => setPref.mutate(input)}
-                    disabled={setPref.isPending}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <section className="overflow-hidden rounded-lg border border-hairline bg-canvas">
+            <header className="border-b border-hairline-tertiary px-5 py-4">
+              <h2 className="m-0 text-section-title font-semibold tracking-tight text-ink">
+                Workspace event notifications
+              </h2>
+              <p className="m-0 mt-0.5 text-body-sm text-ink-subtle">
+                Pick the delivery channel for each event.
+              </p>
+            </header>
+
+            <div className="divide-y divide-hairline-tertiary">
+              {data.rows.map((row) => (
+                <NotificationPrefRow
+                  key={row.event_type}
+                  row={row}
+                  onToggle={(input) => setPref.mutate(input)}
+                  disabled={setPref.isPending}
+                />
+              ))}
+            </div>
+          </section>
         )}
       </div>
     </PageChrome>
