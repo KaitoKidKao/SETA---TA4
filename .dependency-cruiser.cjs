@@ -183,7 +183,7 @@ module.exports = {
       from: { path: '^packages/(?!shared-|copilot/)([^/]+)/src/' },
       to: {
         path: '^packages/copilot/src/',
-        pathNot: '^packages/copilot/src/(rbac|events)\\.ts$',
+        pathNot: '^packages/copilot/src/(rbac|events)(/|\\.ts$)',
       },
     },
 

@@ -2,14 +2,18 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Mastra } from '@mastra/core';
 import { Agent } from '@mastra/core/agent';
+import type { AnyWorkflow } from '@mastra/core/workflows';
+import { CopilotRegistry, registerPendingAssignReader } from '@seta/copilot-sdk';
 import type { AgentSpec, ContributionRegistry } from '@seta/core';
 import type { Hono } from 'hono';
 import type { Pool } from 'pg';
 import * as schema from './backend/db/schema.ts';
+import { getPendingAssignRunIdForTask } from './backend/domain/get-pending-assign-run-for-task.ts';
 import { initCopilotRegistry } from './backend/init-registry.ts';
 import { type ModelTier, resolveModel } from './backend/model-registry.ts';
 import { registerCopilotRoutes } from './backend/routes.ts';
 import { buildMastra } from './backend/runtime.ts';
+import { copilotSubscribers } from './backend/subscribers/index.ts';
 import { buildSupervisorTree } from './backend/supervisor-tree.ts';
 import { registerWorkflowInputSchema } from './backend/workflows/_infra/input-schema-registry.ts';
 
@@ -20,6 +24,7 @@ export function registerCopilotContributions(reg: ContributionRegistry): void {
     name: 'copilot',
     schema,
     migrationsDir: resolve(__dirname, '../drizzle'),
+    subscribers: copilotSubscribers(),
   });
 }
 
@@ -57,9 +62,15 @@ export function registerCopilot(deps: {
       registerWorkflowInputSchema(contribution.id, contribution.inputSchema);
     }
   }
+  initCopilotRegistry();
+
+  for (const spec of CopilotRegistry.snapshot().workflows) {
+    mastra.addWorkflow(spec.workflow as AnyWorkflow, spec.id);
+    registerWorkflowInputSchema(spec.id, spec.inputSchema);
+  }
+  registerPendingAssignReader(getPendingAssignRunIdForTask);
   void mastra.startWorkers();
 
-  initCopilotRegistry();
   const supervisor = buildSupervisorTree({ mastra });
 
   return {
