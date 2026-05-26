@@ -1,0 +1,70 @@
+name: Hackathon — Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to roll back to (e.g. v1.0.0 or 68134a1b09d6)'
+        required: true
+
+concurrency:
+  group: hackathon-deploy
+  cancel-in-progress: false   # never cancel an in-flight rollback
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION:     ${{ vars.AWS_REGION }}
+  ECR_REGISTRY:   ${{ vars.ECR_REGISTRY }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+
+jobs:
+  rollback:
+    name: Rollback to ${{ github.event.inputs.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+
+    steps:
+      - name: SSH rollback to EC2
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          ECR_REGISTRY:          ${{ env.ECR_REGISTRY }}
+          ECR_REPOSITORY:        ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG:             ${{ github.event.inputs.tag }}
+          AWS_REGION:            ${{ env.AWS_REGION }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ECR_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ECR_SECRET_ACCESS_KEY }}
+        with:
+          host:     ${{ vars.EC2_HOST }}
+          username: ${{ vars.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          envs:     ECR_REGISTRY,ECR_REPOSITORY,IMAGE_TAG,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
+          script: |
+            set -euo pipefail
+            echo "=== Rolling back to tag: $IMAGE_TAG ==="
+
+            aws ecr get-login-password --region "$AWS_REGION" \
+              | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+            # Verify images exist in ECR before touching running containers
+            aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="server-$IMAGE_TAG" imageTag="web-$IMAGE_TAG" \
+              --region "$AWS_REGION" > /dev/null
+
+            SERVER_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:server-$IMAGE_TAG"
+            WEB_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:web-$IMAGE_TAG"
+
+            # Update only the image references in .env — leave all other config untouched
+            sed -i "s|^PLATFORM_IMAGE_SERVER=.*|PLATFORM_IMAGE_SERVER=$SERVER_IMAGE|" /opt/seta/.env
+            sed -i "s|^PLATFORM_IMAGE_WEB=.*|PLATFORM_IMAGE_WEB=$WEB_IMAGE|" /opt/seta/.env
+
+            cd /opt/platform
+            docker compose --env-file /opt/seta/.env pull server web worker
+            docker compose --env-file /opt/seta/.env up -d --no-deps --remove-orphans server web worker
+
+            docker image prune -f
+
+            echo "=== Rollback complete: $IMAGE_TAG ==="
