@@ -218,7 +218,6 @@ function makeAssistantMessage(authorLabel: string) {
   };
 
   return function AssistantMessage() {
-    // biome-ignore lint/correctness/useExhaustiveDependencies: groupByThought is module-level constant
     const stableGroupBy = useCallback(groupByThought, []);
     return (
       <ChatMessage variant="agent" author={authorLabel}>
