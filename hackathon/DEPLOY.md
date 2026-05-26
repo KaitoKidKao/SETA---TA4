@@ -70,7 +70,7 @@ If the stack is not yet running, contact the organizer to bootstrap the EC2.
 4. Click **Run workflow** — takes ~5–8 min for first build (cached on subsequent runs)
 
 The workflow:
-- Builds `seta-server` and `seta-web` for `linux/arm64`
+- Builds `seta-server` and `seta-web` for `linux/amd64`
 - Pushes images to your ECR repository
 - SSHs into your EC2 and restarts the app containers
 - Runs database migrations

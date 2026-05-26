@@ -22,16 +22,16 @@ variable "tags" {
 # ── Compute ───────────────────────────────────────────────────────────────────
 
 variable "instance_type" {
-  description = "EC2 instance type. t4g.small (ARM) is the cost-optimised default."
+  description = "EC2 instance type. t3.medium (x86_64) is the default."
   type        = string
-  default     = "t4g.small"
+  default     = "t3.medium"
 }
 
 variable "ami_id" {
-  description = "Ubuntu 24.04 LTS ARM64 AMI ID for ap-southeast-1. Find latest at https://cloud-images.ubuntu.com/locator/ec2/"
+  description = "Ubuntu 24.04 LTS amd64 AMI ID for ap-southeast-1. Find latest at https://cloud-images.ubuntu.com/locator/ec2/"
   type        = string
-  # ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-20250515
-  default = "ami-0497a974f8d5dcef8"
+  # ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20250515
+  default = "ami-0a56f8447277affd8"
 }
 
 variable "key_name" {

@@ -1,6 +1,6 @@
 # Hackathon Demo Infrastructure
 
-Single EC2 t4g.small (ARM64, Singapore) + S3 daily backup.  
+Single EC2 t3.medium (x86_64, Singapore) + S3 daily backup.  
 Stack managed by [OpenTofu](https://opentofu.org/) — deploy via GitHub Actions or local CLI.
 
 ## Prerequisites
