@@ -182,6 +182,7 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
       type: 'user' as const,
       user_id: session.user_id,
     });
+    requestContext.set('tenant_id', session.tenant_id);
 
     const threadId = parsed.data.id;
     const storage = getMemoryStore();
@@ -588,6 +589,7 @@ export function registerCopilotRoutes(app: Hono<CopilotRouteEnv>, deps: CopilotR
       type: 'user' as const,
       user_id: session.user_id,
     });
+    requestContext.set('tenant_id', session.tenant_id);
 
     const resourceId = session.user_id;
     const resumeOpts = {

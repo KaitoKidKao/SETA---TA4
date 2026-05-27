@@ -3,13 +3,21 @@ import { fileURLToPath } from 'node:url';
 import type { Mastra } from '@mastra/core';
 import { Agent } from '@mastra/core/agent';
 import type { AnyWorkflow } from '@mastra/core/workflows';
-import { CopilotRegistry, registerPendingAssignReader } from '@seta/copilot-sdk';
+import {
+  CopilotRegistry,
+  registerPendingAssignReader,
+  setBreakerConfig,
+  setBreakerEventEmitter,
+  setExecutionPolicy,
+} from '@seta/copilot-sdk';
 import type { AgentSpec, ContributionRegistry } from '@seta/core';
 import type { Hono } from 'hono';
 import type { Pool } from 'pg';
+import { buildBreakerEmitter } from './backend/breaker-emitter.ts';
 import * as schema from './backend/db/schema.ts';
 import { getPendingAssignRunIdForTask } from './backend/domain/get-pending-assign-run-for-task.ts';
 import { initClassifier } from './backend/domain-classifier.ts';
+import { copilotEnv } from './backend/env.ts';
 import { initCopilotRegistry } from './backend/init-registry.ts';
 import { type ModelTier, resolveModel } from './backend/model-registry.ts';
 import { registerCopilotRoutes } from './backend/routes.ts';
@@ -51,6 +59,17 @@ export function registerCopilot(deps: {
   databaseUrl: string;
   reg: ContributionRegistry;
 }): CopilotHandle {
+  setExecutionPolicy({
+    readMs: copilotEnv.COPILOT_TOOL_TIMEOUT_READ_MS,
+    writeMs: copilotEnv.COPILOT_TOOL_TIMEOUT_WRITE_MS,
+    maxMs: copilotEnv.COPILOT_TOOL_TIMEOUT_MAX_MS,
+  });
+  setBreakerConfig({
+    failureThreshold: copilotEnv.COPILOT_TOOL_BREAKER_FAILURE_THRESHOLD,
+    openMs: copilotEnv.COPILOT_TOOL_BREAKER_OPEN_MS,
+  });
+  setBreakerEventEmitter(buildBreakerEmitter());
+
   const mastra = buildMastra({ pool: deps.pool, databaseUrl: deps.databaseUrl });
 
   for (const spec of deps.reg.collected.agentSpecs) {
@@ -84,6 +103,12 @@ export function registerCopilot(deps: {
   void mastra.startWorkers();
 
   const { topSupervisor, domainAgents } = buildSupervisorTree({ mastra });
+  // Register the supervisor on Mastra so its agent instance gets the `#mastra`
+  // back-reference. Without this, `agent.resumeStream()` (called by the chat
+  // /approve route to resume a HITL-gated tool) throws
+  // AGENT_RESUME_NO_SNAPSHOT_FOUND because `this.#mastra?.getStorage()`
+  // returns undefined and the agentic-loop workflow snapshot can't be loaded.
+  mastra.addAgent(topSupervisor);
 
   return {
     attach(app) {
