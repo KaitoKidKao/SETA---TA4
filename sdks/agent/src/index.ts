@@ -23,6 +23,11 @@ export {
 export { defineCrossModuleReadAsTool } from './cross-module-read-as-tool.ts';
 export { defineAgentTool } from './define-agent-tool.ts';
 export {
+  __resetMutexesForTests,
+  type EntityPatch,
+  recordEntityExposure,
+} from './entity-recorder.ts';
+export {
   AgentToolError,
   type AgentToolErrorCode,
   ToolBreakerOpenError,
@@ -68,3 +73,15 @@ export type {
 } from './tool.ts';
 export type { WorkflowBuilder } from './workflow-builder.ts';
 export type { WorkflowContribution } from './workflow-contribution.ts';
+export {
+  EMPTY_WORKING_MEMORY,
+  parseWorkingMemory,
+  type RecentTask,
+  RecentTaskSchema,
+  serializeWorkingMemory,
+  type WorkingMemory,
+  type WorkingMemoryEntities,
+  WorkingMemoryEntitiesSchema,
+  WorkingMemorySchema,
+  WorkingMemoryUserContextSchema,
+} from './working-memory-schema.ts';

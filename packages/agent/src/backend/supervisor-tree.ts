@@ -5,12 +5,16 @@ import type { MemoryConfig, MemoryConfigInternal } from '@mastra/core/memory';
 import type { ToolAction } from '@mastra/core/tools';
 import { Memory } from '@mastra/memory';
 import { PgVector } from '@mastra/pg';
-import { AgentRegistry, type Domain, type SpecialistSpec } from '@seta/agent-sdk';
+import {
+  AgentRegistry,
+  type Domain,
+  type SpecialistSpec,
+  WorkingMemorySchema,
+} from '@seta/agent-sdk';
 import { agentEnv } from './env.ts';
 import { resolveModel } from './model-registry.ts';
 import { generateDomainPrompt, generateTopRoutingPrompt } from './prompt-templates.ts';
 import { wrapUpdateWorkingMemoryTool } from './working-memory-guard.ts';
-import { WorkingMemorySchema } from './working-memory-schema.ts';
 
 export type SupervisorTree = {
   topSupervisor: Agent;

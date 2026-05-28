@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetMutexesForTests, recordEntityExposure } from '../../src/backend/entity-recorder.ts';
+import { __resetMutexesForTests, recordEntityExposure } from '../../src/entity-recorder.ts';
 import {
   EMPTY_WORKING_MEMORY,
   serializeWorkingMemory,
   type WorkingMemory,
-} from '../../src/backend/working-memory-schema.ts';
+} from '../../src/working-memory-schema.ts';
 
 function buildCtx(initial: WorkingMemory | null) {
   let stored: string | null = initial ? serializeWorkingMemory(initial) : null;
@@ -58,7 +58,7 @@ describe('recordEntityExposure', () => {
     await recordEntityExposure(ctx, { recentTasks: [T2, T1] });
     const tasks = read()?.entities.recentTasks ?? [];
     expect(tasks.map((t) => t.taskId)).toEqual([T2.taskId, T1.taskId]);
-    expect(tasks[1].title).toBe('A'); // title refreshed
+    expect(tasks.at(1)?.title).toBe('A'); // title refreshed
   });
 
   it('truncates to 10 most recent', async () => {

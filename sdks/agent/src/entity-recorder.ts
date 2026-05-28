@@ -1,5 +1,5 @@
-import { type AgentMemoryHandle, RC_AGENT_MEMORY } from '@seta/agent-sdk';
 import { Mutex } from 'async-mutex';
+import { type AgentMemoryHandle, RC_AGENT_MEMORY } from './request-context.ts';
 import {
   parseWorkingMemory,
   type RecentTask,

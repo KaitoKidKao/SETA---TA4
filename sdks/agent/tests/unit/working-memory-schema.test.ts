@@ -4,7 +4,7 @@ import {
   parseWorkingMemory,
   serializeWorkingMemory,
   WorkingMemorySchema,
-} from '../../src/backend/working-memory-schema.ts';
+} from '../../src/working-memory-schema.ts';
 
 describe('WorkingMemorySchema', () => {
   it('accepts the empty default', () => {
