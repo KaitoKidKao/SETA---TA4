@@ -62,6 +62,7 @@ Declared via `"setaTier"` in `package.json` (informational, not a separate enfor
 
 ## Conventions worth knowing
 
+- **Inspect the DB (dev):** `docker exec seta-ap-postgres-dev psql -U seta -d seta -c '<SQL>'`. Postgres is also reachable at `localhost:5442` (mapped by `infra/docker/compose.dev.yml`). Schemas: `agent`, `core`, `identity`, `planner`, `notifications`, `staffing`, etc.
 - **HITL on every write tool.** AI SDK v6 `needsApproval: true` + assistant-ui Interactable confirmation card, wired via `registerToolPermission` from `@seta/agent-sdk`. Read tools execute directly.
 - **Subscribers must be idempotent**, keyed on `event_id`. At-least-once delivery; per-aggregate ordering only.
 - **Production-grade only, never quick hacks.** Diagnose the root cause and ship the optimized solution; "small patch now, real fix later" is rejected on review.
