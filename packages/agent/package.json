@@ -45,6 +45,7 @@
     "@seta/shared-retrieval": "workspace:^",
     "@seta/shared-storage": "workspace:^",
     "ai": "^6.0.191",
+    "async-mutex": "^0.5.0",
     "drizzle-orm": "^0.45.2",
     "graphile-worker": "^0.16.6",
     "hono": "^4.12.23",
