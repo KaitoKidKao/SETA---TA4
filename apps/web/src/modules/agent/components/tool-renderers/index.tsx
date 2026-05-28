@@ -2,7 +2,7 @@ import type { ToolCallMessagePartProps } from '@assistant-ui/react';
 import { useAssistantDataUI, useAssistantToolUI } from '@assistant-ui/react';
 import { ChatToolCall } from '@seta/shared-ui';
 import { AgentStreamPart } from '../../chat-experience/agent-stream-part';
-import { useToolCatalog } from '../../hooks/use-tool-catalog';
+import { useAgentCatalog, useToolCatalog } from '../../hooks/use-tool-catalog';
 import { ServerTimeRenderer } from './core.server-time';
 import { DelegateRenderer } from './delegate';
 import { ListMyRolesRenderer } from './identity.list-my-roles';
@@ -25,6 +25,23 @@ function toWriteState(
   return toReadState(props);
 }
 
+// Known delegate agent names — registered immediately so tool-call parts have a
+// renderer before the async /api/agent/v1/agents response arrives.
+// Includes both domain names (used by top supervisor: agent-work, agent-people …)
+// AND specialist IDs (used by domain supervisors when called directly:
+// agent-planner, agent-identity …).
+const KNOWN_DELEGATE_DOMAINS: ReadonlyArray<{ name: string; label: string }> = [
+  // Domain-level (top supervisor delegates to these)
+  { name: 'work', label: 'Work' },
+  { name: 'people', label: 'People' },
+  { name: 'self', label: 'Self' },
+  { name: 'meta', label: 'Meta' },
+  { name: 'knowledge', label: 'Knowledge' },
+  // Specialist-level (domain supervisors delegate to these)
+  { name: 'planner', label: 'Planner' },
+  { name: 'identity', label: 'Identity' },
+];
+
 const DEDICATED_TOOL_IDS = new Set([
   'core_serverTime',
   'identity_whoAmI',
@@ -32,13 +49,6 @@ const DEDICATED_TOOL_IDS = new Set([
   'identity_updateMyDisplayName',
   'planner_createTask',
 ]);
-
-const DELEGATE_TARGETS: ReadonlyArray<{ name: string; label: string }> = [
-  { name: 'work', label: 'Work' },
-  { name: 'people', label: 'People' },
-  { name: 'self', label: 'Self' },
-  { name: 'meta', label: 'Meta' },
-];
 
 function ServerTimeRegistration({ name }: { name: string }) {
   useAssistantToolUI({
@@ -174,6 +184,12 @@ function GenericToolRegistration({ id, name }: { id: string; name: string }) {
 
 export function ToolUIRegistry() {
   const { tools, nameFor } = useToolCatalog();
+  const { agents } = useAgentCatalog();
+  // Merge static fallback + dynamic API results, deduplicating by name so the
+  // dynamic label (if different) takes precedence over the hardcoded one.
+  const knownNames = new Set(KNOWN_DELEGATE_DOMAINS.map((d) => d.name));
+  const extraAgents = agents.filter((a) => !knownNames.has(a.name));
+  const allDelegates = [...KNOWN_DELEGATE_DOMAINS, ...extraAgents];
   return (
     <>
       <AgentStreamRegistration />
@@ -187,7 +203,7 @@ export function ToolUIRegistry() {
         .map((t) => (
           <GenericToolRegistration key={t.id} id={t.id} name={t.name} />
         ))}
-      {DELEGATE_TARGETS.map((a) => (
+      {allDelegates.map((a) => (
         <DelegateRegistration key={a.name} name={a.name} label={a.label} />
       ))}
     </>

@@ -640,6 +640,30 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
     return c.json({ tools });
   });
 
+  app.get('/api/agent/v1/agents', async (c) => {
+    const check = checkPerm(c.get('session') as SessionLike | undefined, 'agent.chat.use');
+    if (!check.ok) return c.json(check.denied.body, check.denied.status);
+    const snap = AgentRegistry.snapshot();
+    // Include domain names (used by top supervisor) AND specialist IDs (used by
+    // domain supervisors when called directly). Both appear as `agent-<name>`
+    // tool calls in the stream and need a renderer registered on the client.
+    const seen = new Set<string>();
+    const agents: Array<{ name: string; label: string }> = [];
+    for (const d of snap.domains) {
+      if (!seen.has(d)) {
+        seen.add(d);
+        agents.push({ name: d, label: d.charAt(0).toUpperCase() + d.slice(1) });
+      }
+    }
+    for (const s of snap.specialists) {
+      if (!seen.has(s.id)) {
+        seen.add(s.id);
+        agents.push({ name: s.id, label: s.id.charAt(0).toUpperCase() + s.id.slice(1) });
+      }
+    }
+    return c.json({ agents });
+  });
+
   app.get('/api/agent/v1/models', async (c) => {
     const check = checkPerm(c.get('session') as SessionLike | undefined, 'agent.chat.use');
     if (!check.ok) return c.json(check.denied.body, check.denied.status);
