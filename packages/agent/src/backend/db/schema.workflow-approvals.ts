@@ -14,7 +14,8 @@ export const workflowApprovals = agent.table(
     approverUserId: uuid('approver_user_id').notNull(),
     fallbackApproverUserId: uuid('fallback_approver_user_id'),
     surfaceCanvas: boolean('surface_canvas').notNull().default(true),
-    surfaceChatThreadId: uuid('surface_chat_thread_id'),
+    // text, not uuid — thread IDs are arbitrary Mastra text strings (e.g. __LOCALID_* from assistant-ui)
+    surfaceChatThreadId: text('surface_chat_thread_id'),
     status: text('status').notNull(),
     decisionPayload: jsonb('decision_payload'),
     decidedBy: uuid('decided_by'),

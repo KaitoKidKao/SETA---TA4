@@ -10,6 +10,7 @@ import { registerIdentityContributions } from '@seta/identity/register';
 import { registerIntegrationsContributions } from '@seta/integrations/register';
 import { registerKnowledgeContributions } from '@seta/knowledge/register';
 import { registerNotificationsContributions } from '@seta/notifications/register';
+import { plannerProposeAssignmentChatHitlDecider } from '@seta/planner/agent-tools';
 import { registerPlannerContributions } from '@seta/planner/register';
 import { createCrypto, createKeyProviderFromEnv, parseCryptoEnv } from '@seta/shared-crypto';
 import { closePools, getPool, initPools } from '@seta/shared-db';
@@ -87,6 +88,13 @@ const agent = registerAgent({
   databaseUrl: env.DATABASE_URL,
   reg,
   log: log.child({ subsystem: 'agent' }),
+  // Chat-flow HITL deciders: called by decide-approval when the approval was
+  // created by a chat-flow tool (workflow_id starts with '__chat_hitl:').
+  // Wired here because this is the only layer that can import from both the
+  // agent engine (packages/agent) and feature modules (packages/planner).
+  chatHitlDeciders: {
+    planner_proposeAssignment: plannerProposeAssignmentChatHitlDecider,
+  },
 });
 const agentSubscribers = reg.collected.subscriberBuilders.map(({ builder }) =>
   builder({ mastra: agent.mastra }),

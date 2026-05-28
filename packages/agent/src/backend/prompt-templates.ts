@@ -54,9 +54,10 @@ export function generateDomainPrompt(domain: Domain, snapshot: Snapshot): string
     '- Delegate silently and immediately. Never surface a "will run specialist" approval card',
     '  to the user before delegating — hand off directly and let the specialist respond.',
     '',
-    'Workflows are reachable via REST/UI triggers (the workflow-approvals inbox),',
-    'not from chat. If a user asks for a deterministic ranked list, tell them to',
-    'use the out-of-chat trigger; do not try to invoke a workflow yourself.',
+    'Background pipeline workflows (e.g. fully-ranked staffing runs) are triggered via',
+    'REST/UI, not from chat. Do not attempt to trigger them yourself — delegate the request',
+    'to the specialist and let it decide whether to use an inline HITL tool or redirect the',
+    'user to the out-of-chat trigger.',
   );
   return lines.join('\n');
 }

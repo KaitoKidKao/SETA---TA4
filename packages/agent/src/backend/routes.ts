@@ -2,7 +2,12 @@ import { toAISdkStream } from '@mastra/ai-sdk';
 import type { Mastra } from '@mastra/core';
 import type { Agent } from '@mastra/core/agent';
 import { RequestContext } from '@mastra/core/request-context';
-import { AgentRegistry } from '@seta/agent-sdk';
+import {
+  AgentRegistry,
+  type ChatHitlDecider,
+  type ChatHitlRecorder,
+  RC_CHAT_HITL_RECORDER,
+} from '@seta/agent-sdk';
 import { createUIMessageStream, createUIMessageStreamResponse, type UIMessage } from 'ai';
 import type { Context, Hono } from 'hono';
 import type { Pool } from 'pg';
@@ -11,6 +16,7 @@ import { cancelWorkflowRun } from './domain/cancel-workflow-run.ts';
 import { decideApproval } from './domain/decide-approval.ts';
 import { getWorkflowRun } from './domain/get-workflow-run.ts';
 import { getWorkflowRunSnapshot } from './domain/get-workflow-run-snapshot.ts';
+import { insertChatHitlApproval } from './domain/insert-chat-hitl-approval.ts';
 import { listMyPendingApprovals } from './domain/list-my-pending-approvals.ts';
 import { listWorkflowRuns } from './domain/list-workflow-runs.ts';
 import { replayWorkflowFromStep } from './domain/replay-workflow-from-step.ts';
@@ -67,6 +73,19 @@ export type AgentRouteDeps = {
     error: (obj: unknown, msg?: string) => void;
     warn: (obj: unknown, msg?: string) => void;
   };
+  /**
+   * Per-tool-ID handlers for chat-flow HITL decisions.
+   *
+   * When a chat-flow tool uses ChatHitlRecorder to create a workflow_approvals
+   * row (synthetic workflow_id = '__chat_hitl:<toolId>'), the decide-approval
+   * endpoint calls the matching handler here to execute the domain action
+   * directly — no Mastra workflow resume is needed or possible for chat HITL.
+   *
+   * Keyed by toolId (e.g. 'planner_proposeAssignment'). Populated by the
+   * server entry-point, which is the only layer allowed to import from both
+   * packages/agent (engine) and feature modules like packages/planner.
+   */
+  chatHitlDeciders?: Record<string, ChatHitlDecider>;
 };
 
 export type AgentRouteEnv = { Variables: { session: SessionLike } };
@@ -211,6 +230,35 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
     requestContext.set('role_summary', session.role_summary);
 
     const threadId = parsed.data.id;
+    // Propagate the chat thread ID so lifecycle events and tools can read it.
+    if (threadId) requestContext.set('thread_id', threadId);
+
+    // Inject the ChatHitlRecorder so chat-flow tools can write approval rows
+    // without importing agent internals. See sdks/agent/src/hitl/chat-hitl.ts
+    // for the full explanation of why this is needed (lifecycle hook does not
+    // fire for agentic execution — only for evented Mastra workflows).
+    const recorder: ChatHitlRecorder = (card) =>
+      insertChatHitlApproval({
+        card,
+        tenantId: session.tenant_id,
+        userId: session.user_id,
+        threadId: threadId ?? null,
+        pool: deps.pool,
+      });
+    requestContext.set(RC_CHAT_HITL_RECORDER, recorder);
+
+    deps.log?.warn(
+      {
+        subsystem: 'agent.chat',
+        event: 'chat.request',
+        threadId: threadId ?? null,
+        userId: session.user_id,
+        tenantId: session.tenant_id,
+        userText: userText.slice(0, 120),
+      },
+      'chat request received',
+    );
+
     const storage = getMemoryStore();
 
     const lookup =
@@ -225,6 +273,16 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
       domainAgents: deps.domainAgents,
       lookup,
     });
+
+    deps.log?.warn(
+      {
+        subsystem: 'agent.chat',
+        event: 'agent.selected',
+        threadId: threadId ?? null,
+        agentId: (agent as { id?: unknown }).id ?? 'unknown',
+      },
+      'agent selected for chat turn',
+    );
 
     const result = await agent.stream(
       effectiveMessages as never,
@@ -788,6 +846,7 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
         overrideUserIds: body.overrideUserIds,
         note: body.note,
         mastra: deps.mastra as Mastra,
+        chatHitlDeciders: deps.chatHitlDeciders,
         log: deps.log,
       });
       return c.json(result);

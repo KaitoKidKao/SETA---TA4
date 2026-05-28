@@ -131,7 +131,7 @@ export async function seedCommand(opts: SeedOpts): Promise<void> {
   // Phase 2 — Create users (or resolve existing when users module is skipped)
   const idMap = new Map<string, string>(); // csvId → db uuid
   if (modules.has('users')) {
-    log.info('phase 2: creating users');
+    log.info('phase 2a: creating users');
     let usersCreated = 0;
     let usersReused = 0;
     let usersSkipped = 0;
@@ -163,6 +163,42 @@ export async function seedCommand(opts: SeedOpts): Promise<void> {
       }
       idMap.set(row.user_id, user_id);
 
+      if (row.rbac_role && KNOWN_ROLES.has(row.rbac_role)) {
+        try {
+          await grantRole(
+            {
+              user_id,
+              tenant_id: tenantId,
+              role_slug: row.rbac_role,
+              scope_type: 'tenant',
+              scope_id: null,
+            },
+            { type: 'cli', user_id: null },
+          );
+        } catch {
+          // Already granted — idempotent skip
+        }
+      } else if (row.rbac_role) {
+        log.warn(
+          { csv_user_id: row.user_id, rbac_role: row.rbac_role },
+          'unknown role slug, skipping grant',
+        );
+      }
+    }
+    process.stdout.write(
+      `${JSON.stringify({ phase: 'users', created: usersCreated, reused: usersReused, skipped: usersSkipped })}\n`,
+    );
+
+    // Phase 2b — Update profiles in a separate pass so all identity.user.created
+    // events are emitted before any identity.user.profile.updated events. This
+    // prevents the planner assignee-projection subscriber from racing: if profile
+    // events arrive before the user.created subscriber has inserted the projection
+    // row, the UPDATE is a no-op and skills are silently lost.
+    log.info('phase 2b: updating user profiles');
+    for (const row of csvs.users) {
+      const user_id = idMap.get(row.user_id);
+      if (!user_id) continue;
+
       const skills = splitIds(row.skills);
       const workingHours =
         row.working_hours_start && row.working_hours_end
@@ -190,32 +226,7 @@ export async function seedCommand(opts: SeedOpts): Promise<void> {
       } catch (err) {
         log.warn({ csv_user_id: row.user_id, err }, 'updateUserProfile failed');
       }
-
-      if (row.rbac_role && KNOWN_ROLES.has(row.rbac_role)) {
-        try {
-          await grantRole(
-            {
-              user_id,
-              tenant_id: tenantId,
-              role_slug: row.rbac_role,
-              scope_type: 'tenant',
-              scope_id: null,
-            },
-            { type: 'cli', user_id: null },
-          );
-        } catch {
-          // Already granted — idempotent skip
-        }
-      } else if (row.rbac_role) {
-        log.warn(
-          { csv_user_id: row.user_id, rbac_role: row.rbac_role },
-          'unknown role slug, skipping grant',
-        );
-      }
     }
-    process.stdout.write(
-      `${JSON.stringify({ phase: 'users', created: usersCreated, reused: usersReused, skipped: usersSkipped })}\n`,
-    );
   } else {
     // Resolve existing users so later phases can map CSV IDs to DB UUIDs.
     log.info('phase 2: resolving existing users (users module skipped)');

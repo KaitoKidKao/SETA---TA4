@@ -45,6 +45,15 @@ export const AssignBySkillOutputSchema = z.discriminatedUnion('kind', [
     taskId: z.string(),
     currentAssigneeIds: z.array(z.string()),
   }),
+  // Chat-flow HITL: the tool wrote an approval card to the DB and returned
+  // immediately (no Mastra suspension). The agent should tell the user to
+  // review the card above. Decision is handled by the decide-approval endpoint
+  // which calls the registered ChatHitlDecider (no workflow resume needed).
+  z.object({
+    kind: z.literal('pending-approval'),
+    taskId: z.string(),
+    approvalId: z.string().uuid(),
+  }),
 ]);
 export type AssignBySkillOutput = z.infer<typeof AssignBySkillOutputSchema>;
 

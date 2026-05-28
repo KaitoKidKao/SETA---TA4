@@ -6,7 +6,7 @@ import type {
   IdentityUserProfileUpdated,
 } from '@seta/identity/events';
 import type { DomainEvent, SubscriberCtx } from '@seta/shared-types';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, type SQL, sql } from 'drizzle-orm';
 import { assigneeProjection, plans, taskAssignments, tasks } from '../db/schema.ts';
 
 export async function applyUserCreated(
@@ -35,21 +35,57 @@ export async function applyProfileUpdated(
 ): Promise<void> {
   const after = e.payload.after;
   if (!hasAnyProjectedField(after)) return;
-  await ctx.tx
-    .update(assigneeProjection)
-    .set({
-      ...(after.display_name !== undefined && { display_name: after.display_name }),
-      ...(after.skills !== undefined && { skills: after.skills }),
-      ...(after.availability_status !== undefined && {
-        availability_status: after.availability_status,
-      }),
-      ...(after.ooo_until !== undefined && {
-        ooo_until: after.ooo_until ? new Date(after.ooo_until) : null,
-      }),
-      ...(after.timezone !== undefined && { timezone: after.timezone }),
-      projection_built_at: new Date(),
-    })
-    .where(eq(assigneeProjection.user_id, e.payload.user_id));
+
+  const userId = e.payload.user_id;
+
+  // Upsert: if the projection row doesn't exist yet (race with user.created subscriber —
+  // both events fire within milliseconds at seed time), insert it by pulling the required
+  // identity fields from identity.user within the same transaction.
+  // ON CONFLICT applies the same partial update so the net result is identical whether
+  // the row existed or not.
+  //
+  // Arrays must be passed as a PG array-literal string ($1::text[]) because Drizzle's
+  // sql`` template expands a JS array to a row literal ($1,$2,...) which PG rejects as
+  // "expression is of type record". toPgArrayLiteral() serialises to e.g. '{aws,docker}'.
+  const skillsLiteral = after.skills !== undefined ? toPgArrayLiteral(after.skills) : null;
+
+  // Build the ON CONFLICT SET clause from whichever fields are present.
+  const conflictClauses: SQL[] = [sql`projection_built_at = NOW()`];
+  if (after.display_name !== undefined)
+    conflictClauses.push(sql`display_name = ${after.display_name}`);
+  if (skillsLiteral !== null) conflictClauses.push(sql`skills = ${skillsLiteral}::text[]`);
+  if (after.availability_status !== undefined)
+    conflictClauses.push(sql`availability_status = ${after.availability_status}`);
+  if (after.ooo_until !== undefined)
+    conflictClauses.push(sql`ooo_until = ${after.ooo_until ? new Date(after.ooo_until) : null}`);
+  if (after.timezone !== undefined) conflictClauses.push(sql`timezone = ${after.timezone}`);
+
+  await ctx.tx.execute(sql`
+    INSERT INTO planner.assignee_projection
+      (user_id, tenant_id, display_name, email, skills, availability_status, timezone, projection_built_at)
+    SELECT
+      u.id,
+      u.tenant_id,
+      ${after.display_name !== undefined ? sql`${after.display_name}` : sql`u.name`},
+      u.email,
+      ${skillsLiteral !== null ? sql`${skillsLiteral}::text[]` : sql`'{}'::text[]`},
+      ${after.availability_status !== undefined ? sql`${after.availability_status}` : sql`'available'`},
+      ${after.timezone !== undefined ? sql`${after.timezone}` : sql`'UTC'`},
+      NOW()
+    FROM identity.user u
+    WHERE u.id = ${userId}
+    ON CONFLICT (user_id) DO UPDATE SET ${sql.join(conflictClauses, sql`, `)}
+  `);
+}
+
+/**
+ * Serialise a JS string array to a PostgreSQL array literal, e.g.
+ * ['aws', 'system design'] → '{"aws","system design"}'.
+ * Elements are double-quote-escaped so the literal is safe for any string content.
+ */
+function toPgArrayLiteral(arr: string[]): string {
+  const escaped = arr.map((s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+  return `{${escaped.join(',')}}`;
 }
 
 export async function applyDeactivated(

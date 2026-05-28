@@ -77,6 +77,49 @@ function wireLifecycleHook(mastra: Mastra, pool: Pool, log?: Logger): LifecycleD
   const handle = async (raw: unknown): Promise<void> => {
     if (!raw || typeof raw !== 'object') return;
     const typed = raw as { type: string; runId: string; data?: Record<string, unknown> };
+
+    // Log every workflow-level event so we can trace the HITL suspend path.
+    if (typed.type?.startsWith('workflow.') && !typed.type.startsWith('workflow.step')) {
+      const rc = typed.data?.requestContext;
+      const hasRc = rc !== undefined;
+      const threadIdRaw =
+        hasRc && rc && typeof rc === 'object'
+          ? (rc as { get?: unknown }).get && typeof (rc as { get: unknown }).get === 'function'
+            ? (() => {
+                try {
+                  return (rc as { get: (k: string) => unknown }).get('thread_id');
+                } catch {
+                  return undefined;
+                }
+              })()
+            : (rc as Record<string, unknown>)['thread_id']
+          : undefined;
+      if (log) {
+        log.warn(
+          {
+            subsystem: 'agent.lifecycle-hook',
+            event: 'mastra.raw',
+            type: typed.type,
+            runId: typed.runId,
+            hasRc,
+            threadId: threadIdRaw ?? null,
+          },
+          'mastra lifecycle event received',
+        );
+      } else {
+        console.warn(
+          '[agent.lifecycle-hook] mastra.raw',
+          typed.type,
+          'runId:',
+          typed.runId,
+          'hasRc:',
+          hasRc,
+          'threadId:',
+          threadIdRaw ?? null,
+        );
+      }
+    }
+
     const adapted = adaptMastraEvent(typed);
     if (!adapted) {
       // Surface any lifecycle event we couldn't translate so future Mastra

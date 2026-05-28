@@ -143,6 +143,16 @@ async function insertOutboxEvent(
 }
 
 async function onRunSuspended(client: PoolClient, evt: RunSuspendedEvent): Promise<void> {
+  console.warn('[agent.lifecycle-hook] onRunSuspended', {
+    runId: evt.runId,
+    stepId: evt.stepId,
+    suspendReason: evt.suspendReason,
+    surfaceChatThreadId: evt.surfaceChatThreadId,
+    surfaceCanvas: evt.surfaceCanvas,
+    approverUserId: evt.approverUserId,
+    tenantId: evt.tenantId,
+  });
+
   await client.query(
     `UPDATE agent.workflow_runs
         SET status = 'paused', suspend_reason = $2
@@ -448,6 +458,21 @@ export function adaptMastraEvent(raw: RawMastraEvent): MastraLifecycleEvent | nu
       const firstResumeStep = resumeSteps?.find((s): s is string => typeof s === 'string') ?? null;
       const stepId =
         firstResumeStep ?? (typeof data.stepId === 'string' ? data.stepId : 'await-approval');
+
+      console.warn('[agent.lifecycle-hook] adaptMastraEvent workflow.suspend', {
+        runId: raw.runId,
+        stepId,
+        workflowId,
+        tenantId,
+        startedBy,
+        resumeSteps,
+        hasPrevResult: data.prevResult !== undefined,
+        hasProposedPayload: data.proposedPayload !== undefined,
+        rcThreadId: (() => {
+          const v = readRc(rc, 'thread_id');
+          return typeof v === 'string' ? v : null;
+        })(),
+      });
       // The actual suspend payload (the ApprovalCard the workflow passed to
       // `suspend(card)`) lands on `data.prevResult.suspendPayload` in the
       // event Mastra publishes — *not* on `data.proposedPayload` (Mastra never
@@ -475,7 +500,15 @@ export function adaptMastraEvent(raw: RawMastraEvent): MastraLifecycleEvent | nu
         typeof data.fallbackApproverUserId === 'string' ? data.fallbackApproverUserId : null;
       const surfaceCanvas = data.surfaceCanvas !== false;
       const surfaceChatThreadId =
-        typeof data.surfaceChatThreadId === 'string' ? data.surfaceChatThreadId : null;
+        typeof data.surfaceChatThreadId === 'string'
+          ? data.surfaceChatThreadId
+          : ((): string | null => {
+              // Fall back to the thread_id the chat route seeded onto the
+              // requestContext — this is the agent-tool HITL path where Mastra
+              // never populates data.surfaceChatThreadId directly.
+              const v = readRc(rc, 'thread_id');
+              return typeof v === 'string' && v.length > 0 ? v : null;
+            })();
       const expiresAt =
         typeof data.expiresAt === 'string'
           ? new Date(data.expiresAt)

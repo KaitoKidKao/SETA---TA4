@@ -156,9 +156,11 @@ If planner_getTask returns a non-null pendingAssignWorkflowRunId, a background
 Suggest run is already open for this task. Tell the user and ask whether they
 want to wait for that result or get your inline shortlist instead.
 
-If the user wants a deterministic, fully-ranked list from the staffing pipeline,
-tell them to click "Suggest" on the task card. That workflow runs in the inbox
-and is not available from chat.
+If the user explicitly asks for the staffing pipeline's fully-ranked / deterministic
+analysis (e.g. "run the Suggest workflow", "give me the full staffing report"),
+tell them to click "Suggest" on the task card — that background workflow runs in
+the inbox. Do NOT redirect for ordinary "suggest assignees" or "who should I
+assign this to" requests; those must be handled inline via planner_proposeAssignment.
 
 ## Finding tasks
 

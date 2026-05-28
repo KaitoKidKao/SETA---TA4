@@ -1,19 +1,41 @@
 import {
   type ApprovalCard,
-  ApprovalCardSchema,
   actorFromContext,
+  type ChatHitlRecorder,
   defineAgentTool,
+  RC_CHAT_HITL_RECORDER,
 } from '@seta/agent-sdk';
 import { buildActorSession } from '@seta/identity';
 import { z } from 'zod';
-import { assignTask } from '../domain/assign-task.ts';
-import { getTask } from '../domain/get-task.ts';
-import {
-  AssignBySkillOutputSchema,
-  type AssignDecision,
-  AssignDecisionSchema,
-} from '../workflows/assign-by-skill/schemas.ts';
-import { applyAssignDecision } from '../workflows/assign-by-skill/workflow.ts';
+import { AssignBySkillOutputSchema } from '../workflows/assign-by-skill/schemas.ts';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// planner_proposeAssignment — CHAT-FLOW ONLY HITL tool
+//
+// This tool is called exclusively from the agentic chat path (ctx.agent is
+// always set). The assignBySkill evented workflow has its own suspend in
+// packages/planner/src/backend/workflows/assign-by-skill/spec.ts and does NOT
+// use this tool.
+//
+// WHY NO ctx.agent.suspend()
+// ──────────────────────────
+// ctx.agent.suspend() in Mastra's agentic execution emits a `tool-call-suspended`
+// SSE chunk locally but NEVER publishes to the `'workflows'` global pubsub
+// channel. Therefore the lifecycle hook (packages/agent/…/lifecycle-hook.ts)
+// never fires, no agent.workflow_approvals row is created, and the frontend's
+// useThreadPendingApprovals poll sees nothing — the card never appears.
+//
+// CORRECT APPROACH
+// ────────────────
+// 1. Build the ApprovalCard.
+// 2. Call the ChatHitlRecorder injected into requestContext by routes.ts.
+//    It atomically writes workflow_runs + workflow_approvals in one transaction.
+// 3. Return { kind: 'pending-approval' } — the agent completes its turn and
+//    tells the user to review the card shown above.
+// 4. When the user decides, the decide-approval endpoint calls the registered
+//    ChatHitlDecider (plannerProposeAssignmentChatHitlDecider) to execute
+//    the assignment directly — no Mastra workflow resume needed.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const ProposeAssignmentInputSchema = z.object({
   taskId: z.string().uuid(),
@@ -70,12 +92,14 @@ function buildCard(
     primary: top
       ? {
           label: `Assign to ${top.displayName}`,
-          argsPatch: { action: 'assign', assigneeUserIds: [top.userId] },
+          // taskId is embedded so ChatHitlDecider can retrieve the target task
+          // without storing a separate column (it's read from proposed_payload).
+          argsPatch: { action: 'assign', assigneeUserIds: [top.userId], taskId: input.taskId },
         }
       : { label: 'No candidates' },
     alternates: rest.map((c) => ({
       label: `Assign to ${c.displayName}`,
-      argsPatch: { action: 'assign', assigneeUserIds: [c.userId] },
+      argsPatch: { action: 'assign', assigneeUserIds: [c.userId], taskId: input.taskId },
     })),
     decline: { label: 'Leave unassigned' },
     meta: {
@@ -88,58 +112,38 @@ function buildCard(
   };
 }
 
-/**
- * planner_proposeAssignment — agent surfaces 2-5 candidates it reasoned about
- * with per-candidate rationale and confidence. User picks one (assign) or
- * declines. Resumes guarded by INV-1: if the task was assigned between suspend
- * and resume, return `superseded` rather than double-writing.
- */
 export const plannerProposeAssignmentTool = defineAgentTool({
   id: 'planner_proposeAssignment',
   name: 'Propose Assignment',
   description:
     'Surface 2-5 candidate assignees with per-candidate rationale and confidence. ' +
-    'Use after gathering enough signal. User picks one (which triggers the assignment) or declines. ' +
-    'IMPORTANT: This tool suspends the agent turn and surfaces an interactive card to the user. ' +
-    'Call it as the LAST action in your turn — do not call any other tool after this in the same turn.',
+    'After gathering enough signal, call this tool to show the user an interactive ' +
+    'approval card. It records the suggestion and returns immediately — the agent ' +
+    'turn completes and the user picks an assignee from the card above.',
   input: ProposeAssignmentInputSchema,
   output: AssignBySkillOutputSchema,
-  suspendSchema: ApprovalCardSchema,
-  resumeSchema: AssignDecisionSchema,
   rbac: 'planner.task.assign',
   execute: async (input, ctx) => {
     const actor = actorFromContext(ctx);
     const session = await buildActorSession(actor);
-    const resumeData = ctx.agent?.resumeData as AssignDecision | undefined;
-
-    if (resumeData) {
-      if (resumeData.action === 'assign') {
-        const current = await getTask({ task_id: input.taskId, session });
-        const currentAssigneeIds = current.assignees.map((a) => a.user_id);
-        const requested = new Set(resumeData.assigneeUserIds);
-        const drifted =
-          currentAssigneeIds.length > 0 &&
-          (currentAssigneeIds.length !== requested.size ||
-            currentAssigneeIds.some((id) => !requested.has(id)));
-        if (drifted) {
-          return {
-            kind: 'superseded' as const,
-            taskId: input.taskId,
-            currentAssigneeIds,
-          };
-        }
-      }
-      return applyAssignDecision(
-        { taskId: input.taskId, decision: resumeData, session },
-        { assignTask },
-      );
-    }
 
     const card = buildCard(input, ctx.agent?.toolCallId ?? 'unknown', {
       tenantId: session.tenant_id,
       userId: actor.user_id,
     });
-    await ctx.agent?.suspend?.(card);
-    return undefined;
+
+    // Read the recorder injected by the chat route. Fail loudly if absent —
+    // it means this tool was called outside a properly set-up chat context.
+    const recorder = ctx.requestContext?.get(RC_CHAT_HITL_RECORDER) as ChatHitlRecorder | undefined;
+    if (!recorder) {
+      throw new Error(
+        'planner_proposeAssignment: ChatHitlRecorder not found in requestContext. ' +
+          'The chat route must set RC_CHAT_HITL_RECORDER before calling agent.stream().',
+      );
+    }
+
+    const { approvalId } = await recorder(card);
+
+    return { kind: 'pending-approval' as const, taskId: input.taskId, approvalId };
   },
 });

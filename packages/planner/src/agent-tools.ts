@@ -11,3 +11,4 @@ export {
   plannerGetOpenTaskCountTool,
   plannerGetTaskTool,
 } from './backend/agent-tools/index.ts';
+export { plannerProposeAssignmentChatHitlDecider } from './backend/agent-tools/propose-assignment-chat-hitl-decider.ts';

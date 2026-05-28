@@ -5,6 +5,7 @@ import { Agent } from '@mastra/core/agent';
 import type { AnyWorkflow } from '@mastra/core/workflows';
 import {
   AgentRegistry,
+  type ChatHitlDecider,
   registerPendingAssignReader,
   setBreakerConfig,
   setBreakerEventEmitter,
@@ -65,6 +66,13 @@ export function registerAgent(deps: {
     error: (obj: unknown, msg?: string) => void;
     warn: (obj: unknown, msg?: string) => void;
   };
+  /**
+   * Per-tool-ID handlers for chat-flow HITL decisions.
+   * Populated by the server entry-point (apps/server/src/index.ts) — the only
+   * layer that can import from both the agent engine and feature modules.
+   * See packages/agent/src/backend/routes.ts AgentRouteDeps.chatHitlDeciders.
+   */
+  chatHitlDeciders?: Record<string, ChatHitlDecider>;
 }): AgentHandle {
   setExecutionPolicy({
     readMs: agentEnv.AGENT_TOOL_TIMEOUT_READ_MS,
@@ -133,6 +141,7 @@ export function registerAgent(deps: {
         drainer,
         pool: deps.pool,
         log: deps.log,
+        chatHitlDeciders: deps.chatHitlDeciders,
       });
     },
     mastra,
