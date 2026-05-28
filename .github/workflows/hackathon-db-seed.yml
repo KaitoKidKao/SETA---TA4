@@ -14,7 +14,7 @@ on:
       admin_email:
         description: 'Admin email'
         required: false
-        default: 'thang.tran@setafutureorg.onmicrosoft.com'
+        default: 'canh.ta@setafutureorg.onmicrosoft.com'
       password:
         description: 'Default password for seeded users'
         required: false

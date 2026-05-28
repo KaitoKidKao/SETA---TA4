@@ -249,7 +249,7 @@ program
   .option(
     '--admin-email <email>',
     'Admin email — used as acting session, and created if the tenant is new',
-    'thang.tran@setafutureorg.onmicrosoft.com',
+    'canh.ta@setafutureorg.onmicrosoft.com',
   )
   .option('--admin-name <name>', 'Admin display name when bootstrapping a new tenant')
   .option('--password <password>', 'Password for created users', 'ChangeMe@2026')
