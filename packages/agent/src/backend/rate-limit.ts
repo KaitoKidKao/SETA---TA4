@@ -152,13 +152,4 @@ export async function commitActualTokens(args: {
     });
     return;
   }
-
-  console.info('[agent.rate-limit.commit]', {
-    tenantId: args.tenantId,
-    userId: args.userId,
-    estimatedIn: args.estimatedTokensIn,
-    actualIn: args.actualTokensIn,
-    actualOut: args.actualTokensOut,
-    delta,
-  });
 }
