@@ -32,7 +32,7 @@ case "${CMD}" in
     ;;
   migrate|seed|health)
     cd "${CLI_DIR}"
-    exec "${CLI_DIR}/node_modules/.bin/tsx" src/index.ts "${CMD}"
+    exec "${CLI_DIR}/node_modules/.bin/tsx" src/index.ts "$@"
     ;;
   *)
     echo "entrypoint: unknown subcommand: ${CMD}" >&2
