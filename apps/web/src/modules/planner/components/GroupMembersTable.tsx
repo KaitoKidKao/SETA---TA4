@@ -10,17 +10,17 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@seta/shared-ui';
-import type { ColumnDef } from '@tanstack/react-table';
-import { useMemo } from 'react';
+import type { ColumnDef, RowSelectionState } from '@tanstack/react-table';
+import { useMemo, useState } from 'react';
 
 interface Props {
   group: GroupRow;
   members: ReadonlyArray<GroupMemberRow>;
-  total: number;
   canManageRoles: boolean;
+  canRemoveMembers: boolean;
   onRoleChange: (input: { user_id: string; role: 'owner' | 'member' }) => void;
-  onLoadMore?: () => void;
-  isLoadingMore?: boolean;
+  onRemoveMember: (member: GroupMemberRow) => void;
+  onRemoveMembers: (userIds: string[]) => void;
 }
 
 function initials(name: string): string {
@@ -105,15 +105,27 @@ function RoleControl({ member, canEdit, isLinkedGroup, externalId, onChange }: R
 export function GroupMembersTable({
   group,
   members,
-  total,
   canManageRoles,
+  canRemoveMembers,
   onRoleChange,
-  onLoadMore,
-  isLoadingMore,
+  onRemoveMember,
+  onRemoveMembers,
 }: Props) {
   const canEditRoles = canManageRoles && group.external_source === 'native';
+  const canRemove = canRemoveMembers && group.external_source === 'native';
   const isLinkedGroup = group.external_source !== 'native';
   const externalId = group.external_id;
+
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+
+  const selectedIds = useMemo(
+    () =>
+      Object.entries(rowSelection)
+        .filter(([, selected]) => selected)
+        .map(([idx]) => members[Number(idx)]?.user_id)
+        .filter((id): id is string => !!id),
+    [rowSelection, members],
+  );
 
   const columns = useMemo<ColumnDef<GroupMemberRow>[]>(
     () => [
@@ -159,15 +171,56 @@ export function GroupMembersTable({
           </span>
         ),
       },
+      ...(canRemove
+        ? ([
+            {
+              id: 'actions',
+              header: () => null,
+              enableSorting: false,
+              enableHiding: false,
+              cell: ({ row }) => (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveMember(row.original);
+                  }}
+                >
+                  Remove
+                </Button>
+              ),
+            },
+          ] as ColumnDef<GroupMemberRow>[])
+        : []),
     ],
-    [canEditRoles, isLinkedGroup, externalId, onRoleChange],
+    [canEditRoles, canRemove, isLinkedGroup, externalId, onRoleChange, onRemoveMember],
   );
-
-  const hasMore = onLoadMore !== undefined && members.length < total;
 
   return (
     <TooltipProvider>
       <section className="rounded-lg border border-hairline bg-canvas overflow-hidden">
+        {selectedIds.length > 0 && (
+          <div className="flex items-center gap-3 border-b border-hairline bg-surface-1 px-4 py-2">
+            <span className="text-body-sm text-ink-subtle">
+              {selectedIds.length} {selectedIds.length === 1 ? 'member' : 'members'} selected
+            </span>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                onRemoveMembers(selectedIds);
+                setRowSelection({});
+              }}
+            >
+              Remove selected
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setRowSelection({})}>
+              Clear selection
+            </Button>
+          </div>
+        )}
         <div className="[&_>div]:space-y-0 [&_>div>div:first-child]:px-4 [&_>div>div:first-child]:pt-3 [&_>div>div:first-child]:pb-3 [&_>div>div:first-child]:border-b [&_>div>div:first-child]:border-hairline">
           <DataTable
             mode="client"
@@ -178,6 +231,9 @@ export function GroupMembersTable({
             enableColumnVisibility={false}
             density="comfortable"
             pagination={{ defaultPageSize: 20, pageSizeOptions: [20, 50, 100] }}
+            enableRowSelection={canRemove}
+            rowSelection={rowSelection}
+            onRowSelectionChange={setRowSelection}
             emptyState={
               <div className="px-4 py-12 text-center text-body-sm text-ink-subtle">
                 No members in this group yet.
@@ -185,19 +241,6 @@ export function GroupMembersTable({
             }
           />
         </div>
-        {hasMore && (
-          <div className="flex justify-center border-t border-hairline px-4 py-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onLoadMore}
-              disabled={isLoadingMore}
-              className="text-ink-subtle"
-            >
-              {isLoadingMore ? 'Loading…' : `Load more (${members.length} of ${total} shown)`}
-            </Button>
-          </div>
-        )}
       </section>
     </TooltipProvider>
   );

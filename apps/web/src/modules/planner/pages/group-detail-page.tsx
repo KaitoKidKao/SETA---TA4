@@ -1,3 +1,4 @@
+import type { GroupMemberRow } from '@seta/planner';
 import {
   Button,
   ComingSoon,
@@ -18,6 +19,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { SessionScopeProjection } from '@/modules/identity/api/client';
 import { listJoinRequests, resolveJoinRequest } from '../api/planner-client';
 import { AddGroupMembersDialog } from '../components/AddGroupMembersDialog';
+import { ConfirmRemoveMemberDialog } from '../components/ConfirmRemoveMemberDialog';
+import { ConfirmRemoveMembersDialog } from '../components/ConfirmRemoveMembersDialog';
 import { CreatePlanDialog } from '../components/CreatePlanDialog';
 import { DeleteGroupDialog } from '../components/DeleteGroupDialog';
 import { GroupDetailHeader } from '../components/GroupDetailHeader';
@@ -26,6 +29,8 @@ import { GroupPlansSection, THEME_HEX } from '../components/GroupPlansSection';
 import { GroupRail } from '../components/GroupRail';
 import { EditGroupDialog } from '../components/RenameGroupDialog';
 import { useDeleteGroup } from '../hooks/mutations/delete-group';
+import { useRemoveGroupMember } from '../hooks/mutations/remove-group-member';
+import { useRemoveGroupMembers } from '../hooks/mutations/remove-group-members';
 import { useRestoreGroup } from '../hooks/mutations/restore-group';
 import { useSetMemberRole } from '../hooks/mutations/set-member-role';
 import { useGroup } from '../hooks/queries/use-group';
@@ -84,6 +89,8 @@ export function GroupDetailPage({ groupId, tab, onTabChange, session }: Props) {
   const plansQuery = useGroupPlans(groupId);
   const activityQuery = useGroupActivity(groupId, 7);
   const setMemberRoleMutation = useSetMemberRole(groupId);
+  const removeGroupMemberMutation = useRemoveGroupMember(groupId);
+  const removeGroupMembersMutation = useRemoveGroupMembers(groupId);
   const navigate = useNavigate();
   const deleteGroup = useDeleteGroup(groupId);
   const restoreGroup = useRestoreGroup();
@@ -91,6 +98,8 @@ export function GroupDetailPage({ groupId, tab, onTabChange, session }: Props) {
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [addMembersOpen, setAddMembersOpen] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState<GroupMemberRow | null>(null);
+  const [membersToRemove, setMembersToRemove] = useState<string[] | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [archiveM365Open, setArchiveM365Open] = useState(false);
@@ -304,13 +313,11 @@ export function GroupDetailPage({ groupId, tab, onTabChange, session }: Props) {
             <GroupMembersTable
               group={group}
               members={members}
-              total={memberTotal}
               canManageRoles={canManageRoles}
+              canRemoveMembers={canManage}
               onRoleChange={(v) => setMemberRoleMutation.mutate(v)}
-              onLoadMore={
-                membersQuery.hasNextPage ? () => void membersQuery.fetchNextPage() : undefined
-              }
-              isLoadingMore={membersQuery.isFetchingNextPage}
+              onRemoveMember={(member) => setMemberToRemove(member)}
+              onRemoveMembers={(userIds) => setMembersToRemove(userIds)}
             />
             <GroupRail
               group={group}
@@ -416,6 +423,35 @@ export function GroupDetailPage({ groupId, tab, onTabChange, session }: Props) {
         existingMembers={members}
         open={addMembersOpen}
         onOpenChange={setAddMembersOpen}
+      />
+      <ConfirmRemoveMemberDialog
+        open={memberToRemove !== null}
+        onOpenChange={(v) => {
+          if (!v) setMemberToRemove(null);
+        }}
+        memberName={memberToRemove?.display_name ?? ''}
+        isPending={removeGroupMemberMutation.isPending}
+        onConfirm={() => {
+          if (!memberToRemove) return;
+          removeGroupMemberMutation.mutate(
+            { user_id: memberToRemove.user_id },
+            { onSuccess: () => setMemberToRemove(null) },
+          );
+        }}
+      />
+      <ConfirmRemoveMembersDialog
+        open={membersToRemove !== null}
+        onOpenChange={(v) => {
+          if (!v) setMembersToRemove(null);
+        }}
+        count={membersToRemove?.length ?? 0}
+        isPending={removeGroupMembersMutation.isPending}
+        onConfirm={() => {
+          if (!membersToRemove) return;
+          removeGroupMembersMutation.mutate(membersToRemove, {
+            onSuccess: () => setMembersToRemove(null),
+          });
+        }}
       />
     </div>
   );

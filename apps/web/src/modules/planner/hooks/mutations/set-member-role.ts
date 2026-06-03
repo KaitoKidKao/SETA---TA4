@@ -3,6 +3,11 @@ import { plannerClient } from '../../api/planner-client';
 import { plannerKeys } from '../../state/query-keys';
 import { useOptimisticMutation } from '../use-optimistic-mutation';
 
+interface PageShape {
+  members: GroupMemberRow[];
+  total: number;
+}
+
 export function useSetMemberRole(groupId: string) {
   return useOptimisticMutation<{ user_id: string; role: 'owner' | 'member' }, void>({
     mutationFn: (v) =>
@@ -14,9 +19,13 @@ export function useSetMemberRole(groupId: string) {
       },
     ],
     applyOptimistic: (v, qc) => {
-      qc.setQueryData<GroupMemberRow[]>(plannerKeys.groupMembers(groupId), (prev) =>
-        (prev ?? []).map((m) => (m.user_id === v.user_id ? { ...m, role: v.role } : m)),
-      );
+      qc.setQueryData<PageShape>(plannerKeys.groupMembers(groupId), (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          members: old.members.map((m) => (m.user_id === v.user_id ? { ...m, role: v.role } : m)),
+        };
+      });
     },
     onServerOk: () => {},
     savingId: (v) => `${groupId}:${v.user_id}:role`,

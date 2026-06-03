@@ -27,9 +27,11 @@ describe('GroupMembersTable', () => {
       <GroupMembersTable
         group={nativeGroup}
         members={[member({ display_name: 'Alice' })]}
-        total={1}
         canManageRoles
+        canRemoveMembers={false}
         onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
       />,
     );
     // Column headers — use columnheader role to avoid collision with <option> text
@@ -45,9 +47,11 @@ describe('GroupMembersTable', () => {
       <GroupMembersTable
         group={nativeGroup}
         members={[member({ user_id: 'u1' })]}
-        total={1}
         canManageRoles
+        canRemoveMembers={false}
         onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
       />,
     );
     expect(screen.getByRole('combobox', { name: /Change role/i })).toBeInTheDocument();
@@ -58,9 +62,11 @@ describe('GroupMembersTable', () => {
       <GroupMembersTable
         group={nativeGroup}
         members={[member({ role: 'owner' })]}
-        total={1}
         canManageRoles={false}
+        canRemoveMembers={false}
         onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
       />,
     );
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
@@ -72,9 +78,11 @@ describe('GroupMembersTable', () => {
       <GroupMembersTable
         group={linkedGroup}
         members={[member()]}
-        total={1}
         canManageRoles
+        canRemoveMembers={false}
         onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
       />,
     );
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
@@ -87,9 +95,11 @@ describe('GroupMembersTable', () => {
       <GroupMembersTable
         group={nativeGroup}
         members={[member({ user_id: 'u1', role: 'member' })]}
-        total={1}
         canManageRoles
+        canRemoveMembers={false}
         onRoleChange={onRoleChange}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
       />,
     );
     await user.selectOptions(
@@ -105,9 +115,11 @@ describe('GroupMembersTable', () => {
       <GroupMembersTable
         group={linkedGroup}
         members={[member()]}
-        total={1}
         canManageRoles
+        canRemoveMembers={false}
         onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
       />,
     );
     const trigger = document.querySelector('[tabindex="0"]');
@@ -120,5 +132,68 @@ describe('GroupMembersTable', () => {
     const links = await screen.findAllByRole('link', { name: /Open in Azure portal/i });
     expect(links.length).toBeGreaterThanOrEqual(1);
     expect(links[0]?.getAttribute('href')).toContain('graph-123');
+  });
+
+  it('renders a Remove button per row when canRemoveMembers is true on a native group', async () => {
+    const onRemoveMember = vi.fn();
+    const m = member({ user_id: 'u1', display_name: 'Alice' });
+    render(
+      <GroupMembersTable
+        group={nativeGroup}
+        members={[m]}
+        canManageRoles={false}
+        canRemoveMembers
+        onRoleChange={vi.fn()}
+        onRemoveMember={onRemoveMember}
+        onRemoveMembers={vi.fn()}
+      />,
+    );
+    const removeBtn = screen.getByRole('button', { name: /^Remove$/i });
+    expect(removeBtn).toBeInTheDocument();
+    await userEvent.click(removeBtn);
+    expect(onRemoveMember).toHaveBeenCalledWith(m);
+  });
+
+  it('does not render a Remove button for linked groups even when canRemoveMembers is true', () => {
+    render(
+      <GroupMembersTable
+        group={linkedGroup}
+        members={[member()]}
+        canManageRoles={false}
+        canRemoveMembers
+        onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /^Remove$/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the bulk action bar and calls onRemoveMembers when rows are selected', async () => {
+    const onRemoveMembers = vi.fn();
+    const m1 = member({ user_id: 'u1', display_name: 'Alice' });
+    const m2 = member({ user_id: 'u2', display_name: 'Bob' });
+    render(
+      <GroupMembersTable
+        group={nativeGroup}
+        members={[m1, m2]}
+        canManageRoles={false}
+        canRemoveMembers
+        onRoleChange={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRemoveMembers={onRemoveMembers}
+      />,
+    );
+    // Select first row via checkbox
+    const checkboxes = screen.getAllByRole('checkbox');
+    // First checkbox is "select all", subsequent ones are per-row
+    const rowCheckbox = checkboxes[1];
+    if (!rowCheckbox) throw new Error('No row checkbox found');
+    await userEvent.click(rowCheckbox);
+    // Bulk bar should now be visible
+    expect(screen.getByText(/1 member selected/i)).toBeInTheDocument();
+    // Click "Remove selected"
+    await userEvent.click(screen.getByRole('button', { name: /Remove selected/i }));
+    expect(onRemoveMembers).toHaveBeenCalledWith(['u1']);
   });
 });
