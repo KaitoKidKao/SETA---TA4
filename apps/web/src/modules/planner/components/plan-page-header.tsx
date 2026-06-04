@@ -2,11 +2,23 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   SyncBadge,
   type SyncState,
 } from '@seta/shared-ui';
 import { Link } from '@tanstack/react-router';
+import {
+  Archive,
+  Copy,
+  ExternalLink,
+  Link as LinkIcon,
+  Pencil,
+  RefreshCw,
+  RotateCcw,
+  Unlink,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 interface Props {
@@ -19,7 +31,11 @@ interface Props {
   canRename?: boolean;
   canManage?: boolean;
   onRename?: (name: string) => void;
+  onDuplicate?: () => void;
+  onCopyShareLink?: () => void;
+  isArchived?: boolean;
   onArchive?: () => void;
+  onRestore?: () => void;
   onDelete?: () => void;
   onExport?: () => void;
   external_source?: 'native' | 'm365';
@@ -46,7 +62,11 @@ export function PlanPageHeader({
   canRename,
   canManage,
   onRename,
+  onDuplicate,
+  onCopyShareLink,
+  isArchived,
   onArchive,
+  onRestore,
   onDelete,
   onExport,
   external_source,
@@ -60,9 +80,13 @@ export function PlanPageHeader({
 }: Props) {
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pendingRenameRef = useRef(false);
 
   useEffect(() => {
-    if (editing) inputRef.current?.select();
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
   }, [editing]);
 
   function commit() {
@@ -80,7 +104,9 @@ export function PlanPageHeader({
   const showOpenInM365 = isLinked && Boolean(linkUrl);
   const showUnlink = isLinked && canManage === true && Boolean(onUnlinkFromM365);
   const hasSyncItems = showRefresh || showResolveConflicts || showOpenInM365 || showUnlink;
-  const hasOverflow = Boolean(onArchive || onDelete || onExport) || hasSyncItems;
+  const hasOverflow =
+    Boolean(onDuplicate || onCopyShareLink || onArchive || onRestore || onDelete || onExport) ||
+    hasSyncItems;
 
   return (
     <header className="plan-page-header">
@@ -145,32 +171,79 @@ export function PlanPageHeader({
                 ⋯
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(e) => {
+                if (pendingRenameRef.current) {
+                  e.preventDefault();
+                  pendingRenameRef.current = false;
+                  inputRef.current?.focus();
+                  inputRef.current?.select();
+                }
+              }}
+            >
+              {canRename && onRename && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    pendingRenameRef.current = true;
+                    setEditing(true);
+                  }}
+                >
+                  <Pencil aria-hidden /> Rename plan
+                </DropdownMenuItem>
+              )}
+              {onDuplicate && (
+                <DropdownMenuItem onSelect={onDuplicate}>
+                  <Copy aria-hidden /> Duplicate plan
+                </DropdownMenuItem>
+              )}
+              {onCopyShareLink && (
+                <DropdownMenuItem onSelect={onCopyShareLink}>
+                  <LinkIcon aria-hidden /> Copy share link
+                </DropdownMenuItem>
+              )}
               {showRefresh && (
-                <DropdownMenuItem onSelect={onRefreshSync}>Sync now</DropdownMenuItem>
+                <DropdownMenuItem onSelect={onRefreshSync}>
+                  <RefreshCw aria-hidden /> Sync now
+                </DropdownMenuItem>
               )}
               {showResolveConflicts && (
                 <DropdownMenuItem onSelect={onOpenConflictDialog}>
+                  <RefreshCw aria-hidden />
                   {conflictCount != null ? `Review changes (${conflictCount})…` : 'Review changes…'}
                 </DropdownMenuItem>
               )}
               {showOpenInM365 && linkUrl && (
                 <DropdownMenuItem asChild>
                   <a href={linkUrl} target="_blank" rel="noopener noreferrer">
-                    Open in Microsoft Planner
+                    <ExternalLink aria-hidden /> Open in Microsoft Planner
                   </a>
                 </DropdownMenuItem>
               )}
               {showUnlink && (
                 <DropdownMenuItem onSelect={onUnlinkFromM365} className="text-semantic-danger">
-                  Unlink from Microsoft 365…
+                  <Unlink aria-hidden /> Unlink from Microsoft 365…
                 </DropdownMenuItem>
               )}
-              {onExport && <DropdownMenuItem onSelect={onExport}>Export</DropdownMenuItem>}
-              {onArchive && <DropdownMenuItem onSelect={onArchive}>Archive</DropdownMenuItem>}
+              {onExport && (
+                <DropdownMenuItem onSelect={onExport}>
+                  <ExternalLink aria-hidden /> Export
+                </DropdownMenuItem>
+              )}
+              {(onArchive || onRestore || onDelete) && <DropdownMenuSeparator />}
+              {!isArchived && onArchive && (
+                <DropdownMenuItem onSelect={onArchive}>
+                  <Archive aria-hidden /> Archive plan
+                </DropdownMenuItem>
+              )}
+              {isArchived && onRestore && (
+                <DropdownMenuItem onSelect={onRestore}>
+                  <RotateCcw aria-hidden /> Restore plan
+                </DropdownMenuItem>
+              )}
               {onDelete && (
                 <DropdownMenuItem onSelect={onDelete} className="text-semantic-danger">
-                  Delete
+                  <X aria-hidden /> Delete plan
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
