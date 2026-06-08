@@ -1,12 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import type { Mastra } from '@mastra/core';
+import type { ApprovalCard } from '@seta/agent-sdk';
+import type { OrchestrationEvent } from '@seta/shared-orchestration';
 import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
+import { insertChatHitlApproval } from '../../src/backend/domain/insert-chat-hitl-approval.ts';
 import type { AgentRouteEnv } from '../../src/backend/routes.ts';
 import { registerAgentRoutes } from '../../src/backend/routes.ts';
 import type { SessionLike } from '../../src/backend/types.ts';
 import { onLifecycleEvent } from '../../src/backend/workflows/_infra/lifecycle-hook.ts';
 import { withAgentTestDb } from '../helpers.ts';
+
+async function* stubOrchestration(): AsyncIterable<OrchestrationEvent> {
+  yield { kind: 'final', result: { message: 'ok' } };
+}
 
 function session(perms: string[], tenantId = randomUUID(), userId = randomUUID()): SessionLike {
   return {
@@ -28,7 +35,7 @@ function makeApp(
     await next();
   });
   registerAgentRoutes(app, {
-    supervisor: { stream: async () => ({}) } as never,
+    chatOrchestration: () => stubOrchestration(),
     mastra,
     pool,
     // Tests don't go through the real lifecycle wiring, so nothing is ever
@@ -452,6 +459,69 @@ describe('GET /api/agent/v1/workflows/:workflowId/input-schema', () => {
       const app = makeApp(me, makeMastra(vi.fn()), pool);
       const res = await app.request('/api/agent/v1/workflows/agent.no-such-workflow/input-schema');
       expect(res.status).toBe(404);
+    });
+  });
+});
+
+function hitlCard(tenantId: string, userId: string): ApprovalCard {
+  const taskId = randomUUID();
+  return {
+    toolCallId: `staffing-orchestrator:${taskId}`,
+    intent: 'Assign "AWS migration"',
+    riskBadge: 'write',
+    summary: 'Top match: Alice (1 skill(s) matched, available).',
+    details: [
+      {
+        kind: 'candidateList',
+        items: [{ id: 'u1', label: 'Alice', secondary: 'skills: aws · available', score: 0.9 }],
+      },
+    ],
+    primary: {
+      label: 'Assign to Alice',
+      argsPatch: { action: 'assign', assigneeUserIds: ['u1'], taskId },
+    },
+    alternates: [],
+    decline: { label: 'Leave unassigned' },
+    meta: {
+      tenantId,
+      userId,
+      agentPath: ['staffing', 'orchestrator'],
+      toolId: 'planner_proposeAssignment',
+      ts: new Date().toISOString(),
+    },
+  };
+}
+
+describe('GET /api/agent/v1/workflows/threads/:threadId/approvals', () => {
+  it('returns the thread approvals including decision fields', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const me = session(['agent.workflow.run.read.self']);
+      await insertChatHitlApproval({
+        card: hitlCard(me.tenant_id, me.user_id),
+        tenantId: me.tenant_id,
+        userId: me.user_id,
+        threadId: 'thread-1',
+        pool,
+      });
+      const app = makeApp(me, makeMastra(vi.fn()), pool);
+      const res = await app.request('/api/agent/v1/workflows/threads/thread-1/approvals');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        approvalId: string;
+        status: string;
+        decisionPayload: unknown;
+        decidedAt: string | null;
+      }[];
+      expect(body).toHaveLength(1);
+      expect(body[0]).toMatchObject({ status: 'pending', decisionPayload: null, decidedAt: null });
+    });
+  });
+
+  it('401 without session', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const app = makeApp(null, makeMastra(vi.fn()), pool);
+      const res = await app.request('/api/agent/v1/workflows/threads/thread-1/approvals');
+      expect(res.status).toBe(401);
     });
   });
 });

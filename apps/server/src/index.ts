@@ -1,11 +1,14 @@
 import './otel.ts'; // MUST be first; see otel.ts header comment.
+import { resolveModel } from '@seta/agent';
 import { registerAgent } from '@seta/agent/register';
+import { SpecializedAgentRegistry } from '@seta/agent-sdk';
 import { createContributionRegistry, requestIdStorage } from '@seta/core';
 import { coreDb } from '@seta/core/db';
 import { emit, withEmit } from '@seta/core/events';
 import { createOutboxStore } from '@seta/core/outbox';
 import { registerCoreContributions } from '@seta/core/register';
 import { buildRuntime, runMigrations, type WorkerHandle } from '@seta/core/runtime';
+import { getIdentityVectorStore } from '@seta/identity';
 import { registerIdentityContributions } from '@seta/identity/register';
 import { registerIntegrationsContributions } from '@seta/integrations/register';
 import { registerKnowledgeContributions } from '@seta/knowledge/register';
@@ -14,7 +17,17 @@ import { plannerProposeAssignmentChatHitlDecider } from '@seta/planner/agent-too
 import { registerPlannerContributions } from '@seta/planner/register';
 import { createCrypto, createKeyProviderFromEnv, parseCryptoEnv } from '@seta/shared-crypto';
 import { closePools, getPool, initPools } from '@seta/shared-db';
+import { resolveEmbeddingProvider } from '@seta/shared-embeddings';
 import { createMailer } from '@seta/shared-mailer';
+import { OrchestrationRegistry } from '@seta/shared-orchestration';
+import {
+  buildStaffingOrchestrationRuntime,
+  makeAvailability,
+  makeSkillSearch,
+  makeTaskReader,
+  makeTaskSearch,
+  StaffingRunStateRepository,
+} from '@seta/staffing';
 import { registerStaffingContributions } from '@seta/staffing/register';
 // MODULE_IMPORTS_END — generator inserts new register*Contributions imports above this comment.
 import pino from 'pino';
@@ -80,6 +93,37 @@ const getMailer = (): import('@seta/shared-mailer').Mailer => {
 };
 
 const outboxStore = createOutboxStore({ db: coreDb() });
+
+// Build the staffing orchestration runtime (specialized agents + DAG) and freeze
+// the kernel registries. apps/server is the only layer allowed to bind staffing
+// adapters (planner/identity reads + the agent model) to the engine surface.
+const identityEmbeddingProvider: ReturnType<typeof resolveEmbeddingProvider> = {
+  // Lazy proxy: defer the OPENAI_API_KEY check to the first embed call (runtime)
+  // so the server still boots without a key, matching identity's own lazy use.
+  get modelId() {
+    return resolveEmbeddingProvider().modelId;
+  },
+  get dimensions() {
+    return resolveEmbeddingProvider().dimensions;
+  },
+  embed: (...args) => resolveEmbeddingProvider().embed(...args),
+};
+const staffingOrchestration = buildStaffingOrchestrationRuntime({
+  repo: new StaffingRunStateRepository(),
+  resolveModel: () => resolveModel('auto', { tierHint: 'fast' }).model,
+  ports: {
+    taskReader: makeTaskReader(),
+    taskSearch: makeTaskSearch(),
+    skillSearch: makeSkillSearch({
+      provider: identityEmbeddingProvider,
+      pgVector: getIdentityVectorStore(env.DATABASE_URL),
+    }),
+    availability: makeAvailability(),
+  },
+});
+SpecializedAgentRegistry.freeze();
+OrchestrationRegistry.freeze();
+
 // Build the agent engine up front so subscriberBuilders contributed by
 // orchestrator modules (e.g. staffing) can be constructed against the live
 // Mastra instance before the dispatcher starts.
@@ -95,6 +139,10 @@ const agent = registerAgent({
   chatHitlDeciders: {
     planner_proposeAssignment: plannerProposeAssignmentChatHitlDecider,
   },
+  // The chat runtime: every chat turn streams through the inline staffing
+  // orchestration. apps/server is the only layer that can bind the staffing
+  // runtime to the engine surface.
+  chatOrchestration: staffingOrchestration.runInline,
 });
 const agentSubscribers = reg.collected.subscriberBuilders.map(({ builder }) =>
   builder({ mastra: agent.mastra }),
@@ -104,6 +152,11 @@ const rt = buildRuntime(env, {
   reg,
   pool: getPool('worker'),
   log: log.child({ subsystem: 'core.runtime' }),
+  // The orchestration kernel's queued runner (production async path). The chat
+  // harness uses staffingOrchestration.runInline instead; same registries.
+  extraJobs: {
+    ...staffingOrchestration.taskList,
+  },
   extraSubscribers: [
     failedLoginAlertSubscriber({
       getMailer,

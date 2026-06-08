@@ -1,4 +1,5 @@
 import { createTestTenantWithAdmin } from '@seta/identity/testing';
+import type { OrchestrationEvent } from '@seta/shared-orchestration';
 import { Hono } from 'hono';
 import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -12,16 +13,16 @@ type TestSession = {
   role_summary: { roles: string[]; cross_tenant_read: boolean };
 };
 
-const fakeSupervisor = {
-  stream: async () => ({}) as never,
-} as never;
-
 const fakeMastra = { getStorage: () => null } as never;
 const fakePool = {
   connect: async () => {
     throw new Error('no pool in unit test');
   },
 } as unknown as Pool;
+
+async function* stubOrchestration(): AsyncIterable<OrchestrationEvent> {
+  yield { kind: 'final', result: { message: 'ok' } };
+}
 
 const v6UserMessage = (text: string) => ({
   id: 'm-1',
@@ -32,7 +33,11 @@ const v6UserMessage = (text: string) => ({
 describe('POST /api/agent/v1/chat', () => {
   it('returns 401 when no session', async () => {
     const app = new Hono<{ Variables: { session: TestSession } }>();
-    registerAgentRoutes(app, { supervisor: fakeSupervisor, mastra: fakeMastra, pool: fakePool });
+    registerAgentRoutes(app, {
+      mastra: fakeMastra,
+      pool: fakePool,
+      chatOrchestration: () => stubOrchestration(),
+    });
     const res = await app.request('/api/agent/v1/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -52,7 +57,11 @@ describe('POST /api/agent/v1/chat', () => {
       });
       await next();
     });
-    registerAgentRoutes(app, { supervisor: fakeSupervisor, mastra: fakeMastra, pool: fakePool });
+    registerAgentRoutes(app, {
+      mastra: fakeMastra,
+      pool: fakePool,
+      chatOrchestration: () => stubOrchestration(),
+    });
     const res = await app.request('/api/agent/v1/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -75,9 +84,9 @@ describe('POST /api/agent/v1/chat', () => {
         await next();
       });
       registerAgentRoutes(app, {
-        supervisor: fakeSupervisor,
         mastra: fakeMastra,
         pool: fakePool,
+        chatOrchestration: () => stubOrchestration(),
       });
       const res = await app.request('/api/agent/v1/chat', {
         method: 'POST',
@@ -124,13 +133,13 @@ describe('POST /api/agent/v1/chat', () => {
         },
       });
 
-      // The supervisor should never be called — failure mode is leaking
-      // another user's thread. Surface that loudly if the guard regresses.
-      const trippedSupervisor = {
-        stream: async () => {
-          throw new Error('supervisor.stream should not be reached when ownership check fires');
-        },
-      } as never;
+      // The orchestration must never run — failure mode is leaking another
+      // user's thread. Surface that loudly if the guard regresses.
+      let orchestrationCalled = false;
+      async function* trippedOrchestration(): AsyncIterable<OrchestrationEvent> {
+        orchestrationCalled = true;
+        yield { kind: 'final', result: { message: 'should not happen' } };
+      }
 
       const app = new Hono<{ Variables: { session: TestSession } }>();
       app.use('*', async (c, next) => {
@@ -143,9 +152,9 @@ describe('POST /api/agent/v1/chat', () => {
         await next();
       });
       registerAgentRoutes(app, {
-        supervisor: trippedSupervisor,
         mastra: mastra as never,
         pool,
+        chatOrchestration: () => trippedOrchestration(),
       });
 
       const res = await app.request('/api/agent/v1/chat', {
@@ -154,20 +163,22 @@ describe('POST /api/agent/v1/chat', () => {
         body: JSON.stringify({ id: foreignThreadId, messages: [v6UserMessage('hijack')] }),
       });
       expect(res.status).toBe(404);
+      expect(orchestrationCalled).toBe(false);
     });
   });
 
-  it('injects a [Context: ...] prefix into the last user message when a data-page-context part is present', async () => {
+  it('injects a [Context: ...] prefix into the orchestration userText and extracts taskId', async () => {
     await withAgentTestDb(async ({ pool }) => {
       const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
 
-      const captured: { messages?: unknown[] } = {};
-      const recordingSupervisor = {
-        stream: async (messages: unknown[]) => {
-          captured.messages = messages;
-          return {} as never;
-        },
-      } as never;
+      let capturedInput: { userText: string; taskId: string | null } | undefined;
+      async function* captureOrchestration(runInput: {
+        userText: string;
+        taskId: string | null;
+      }): AsyncIterable<OrchestrationEvent> {
+        capturedInput = runInput;
+        yield { kind: 'final', result: { message: 'ok' } };
+      }
 
       const app = new Hono<{ Variables: { session: TestSession } }>();
       app.use('*', async (c, next) => {
@@ -180,9 +191,9 @@ describe('POST /api/agent/v1/chat', () => {
         await next();
       });
       registerAgentRoutes(app, {
-        supervisor: recordingSupervisor,
         mastra: fakeMastra,
         pool: fakePool,
+        chatOrchestration: (runInput) => captureOrchestration(runInput),
       });
 
       const res = await app.request('/api/agent/v1/chat', {
@@ -211,15 +222,235 @@ describe('POST /api/agent/v1/chat', () => {
         }),
       });
       expect(res.status).toBe(200);
-      const last = (captured.messages ?? []).at(-1) as
-        | { parts: Array<{ type: string; text?: string }> }
-        | undefined;
-      const text = (last?.parts ?? []).find((p) => p.type === 'text') as
-        | { text: string }
-        | undefined;
-      expect(text?.text).toBe(
+      await res.text();
+      expect(capturedInput?.userText).toBe(
         '[Context: planner.task#task-8f3e — "Q3 launch"\nSummary: Marketing checklist.]\n\nhelp me reorder this',
       );
+      expect(capturedInput?.taskId).toBe('task-8f3e');
+    });
+  });
+});
+
+describe('POST /api/agent/v1/chat (orchestration runtime persistence)', () => {
+  // The orchestration chat harness streams trust-trace cards + a final answer
+  // but must ALSO persist the turn to Mastra memory — otherwise the AUI
+  // remote-thread-list reconciles against an empty server and the conversation
+  // "reloads and disappears". See routes.ts chatOrchestration branch.
+  async function* fakeOrchestration(): AsyncIterable<OrchestrationEvent> {
+    yield { kind: 'step-start', stepId: 'analyze', agentId: 'staffing.analyzer' };
+    yield {
+      kind: 'step-done',
+      stepId: 'analyze',
+      trust: { reasoningTrace: [], evidenceCitations: [], confidenceScore: 0.8 },
+    };
+    yield { kind: 'step-start', stepId: 'match', agentId: 'staffing.skillMatcher' };
+    yield {
+      kind: 'step-done',
+      stepId: 'match',
+      trust: {
+        reasoningTrace: [{ step: 'rank', detail: '1 candidate', at: '2026-01-01T00:00:00Z' }],
+        evidenceCitations: [{ kind: 'user', id: 'u1', label: 'Alice' }],
+        confidenceScore: 0.9,
+      },
+    };
+    yield {
+      kind: 'final',
+      result: {
+        recommendations: [
+          {
+            userId: 'u1',
+            name: 'Alice',
+            skillMatch: ['stripe'],
+            skillMatchCount: 1,
+            status: 'busy',
+          },
+        ],
+      },
+    };
+  }
+
+  it('persists the user turn + assistant trace timeline so it survives reload', async () => {
+    await withAgentTestDb(async ({ pool, databaseUrl }) => {
+      const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
+      const { buildMastra } = await import('../../src/backend/runtime.ts');
+      const mastra = buildMastra({ pool, databaseUrl });
+      await (mastra.getStorage() as unknown as { init: () => Promise<void> }).init();
+
+      const app = new Hono<{ Variables: { session: TestSession } }>();
+      app.use('*', async (c, next) => {
+        c.set('session', {
+          tenant_id,
+          user_id: admin_user_id,
+          effective_permissions: new Set(['agent.chat.use', 'agent.thread.read.self']),
+          role_summary: { roles: ['org.admin'], cross_tenant_read: false },
+        });
+        await next();
+      });
+      registerAgentRoutes(app, {
+        mastra: mastra as never,
+        pool,
+        chatOrchestration: () => fakeOrchestration(),
+      });
+
+      const threadId = 'orch-thread-1';
+      const res = await app.request('/api/agent/v1/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: threadId,
+          messages: [v6UserMessage('Who should take this task')],
+        }),
+      });
+      expect(res.status).toBe(200);
+      // Drive the stream to completion so the in-`execute` persistence runs.
+      await res.text();
+
+      // The thread row now exists and is listable.
+      const list = await app.request('/api/agent/v1/threads');
+      expect(list.status).toBe(200);
+      const listed = (await list.json()) as { threads: Array<{ id: string }> };
+      expect(listed.threads.some((t) => t.id === threadId)).toBe(true);
+
+      // The persisted messages reconstruct the user turn + the assistant
+      // timeline (data-orchestration-step parts) + the final answer text.
+      const got = await app.request(`/api/agent/v1/threads/${threadId}`);
+      expect(got.status).toBe(200);
+      const body = (await got.json()) as {
+        messages: Array<{
+          role: string;
+          parts: Array<{ type: string; data?: unknown; text?: string }>;
+        }>;
+      };
+      const user = body.messages.find((m) => m.role === 'user');
+      expect(
+        user?.parts.some((p) => p.type === 'text' && p.text === 'Who should take this task'),
+      ).toBe(true);
+      const assistant = body.messages.find((m) => m.role === 'assistant');
+      expect(assistant).toBeDefined();
+      const stepParts = assistant?.parts.filter((p) => p.type === 'data-orchestration-step') ?? [];
+      expect(stepParts.map((p) => (p.data as { stepId: string }).stepId)).toEqual([
+        'analyze',
+        'match',
+      ]);
+      const text = assistant?.parts.find((p) => p.type === 'text')?.text ?? '';
+      expect(text).toContain('Alice');
+    });
+  });
+
+  it('passes a recordHitlApproval recorder in the orchestration ctx', async () => {
+    await withAgentTestDb(async ({ pool, databaseUrl }) => {
+      const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
+      const { buildMastra } = await import('../../src/backend/runtime.ts');
+      const mastra = buildMastra({ pool, databaseUrl });
+      await (mastra.getStorage() as unknown as { init: () => Promise<void> }).init();
+
+      let capturedCtx: Record<string, unknown> | undefined;
+      async function* captureOrchestration(
+        _runInput: unknown,
+        ctx: unknown,
+      ): AsyncIterable<OrchestrationEvent> {
+        capturedCtx = ctx as Record<string, unknown>;
+        yield { kind: 'final', result: { message: 'ok' } };
+      }
+
+      const app = new Hono<{ Variables: { session: TestSession } }>();
+      app.use('*', async (c, next) => {
+        c.set('session', {
+          tenant_id,
+          user_id: admin_user_id,
+          effective_permissions: new Set(['agent.chat.use', 'agent.thread.read.self']),
+          role_summary: { roles: ['org.admin'], cross_tenant_read: false },
+        });
+        await next();
+      });
+      registerAgentRoutes(app, {
+        mastra: mastra as never,
+        pool,
+        chatOrchestration: (runInput, ctx) => captureOrchestration(runInput, ctx),
+      });
+
+      const res = await app.request('/api/agent/v1/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'orch-hitl-thread-1',
+          messages: [v6UserMessage('Who should take this task')],
+        }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      expect(typeof capturedCtx?.recordHitlApproval).toBe('function');
+    });
+  });
+
+  it('passes threadId + memory handles in the orchestration ctx', async () => {
+    await withAgentTestDb(async ({ pool, databaseUrl }) => {
+      const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
+      const { buildMastra } = await import('../../src/backend/runtime.ts');
+      const mastra = buildMastra({ pool, databaseUrl });
+      await (mastra.getStorage() as unknown as { init: () => Promise<void> }).init();
+
+      let capturedCtx: Record<string, unknown> | undefined;
+      async function* captureOrchestration(
+        _runInput: unknown,
+        ctx: unknown,
+      ): AsyncIterable<OrchestrationEvent> {
+        capturedCtx = ctx as Record<string, unknown>;
+        yield { kind: 'final', result: { message: 'ok' } };
+      }
+
+      // Identity-checkable stand-ins: the route must wrap THESE instances in
+      // { memory, memoryConfig } handles — it never calls into them here.
+      const fakeEntitiesMemory = { tag: 'entities' };
+      const fakeEntitiesConfig = { tag: 'entities-config' };
+      const fakeUserMemory = { tag: 'user' };
+      const fakeUserConfig = { tag: 'user-config' };
+
+      const app = new Hono<{ Variables: { session: TestSession } }>();
+      app.use('*', async (c, next) => {
+        c.set('session', {
+          tenant_id,
+          user_id: admin_user_id,
+          effective_permissions: new Set(['agent.chat.use', 'agent.thread.read.self']),
+          role_summary: { roles: ['org.admin'], cross_tenant_read: false },
+        });
+        await next();
+      });
+      registerAgentRoutes(app, {
+        mastra: mastra as never,
+        pool,
+        chatOrchestration: (runInput, ctx) => captureOrchestration(runInput, ctx),
+        entitiesMemory: fakeEntitiesMemory as never,
+        entitiesMemoryConfig: fakeEntitiesConfig as never,
+        userMemory: fakeUserMemory as never,
+        userMemoryConfig: fakeUserConfig as never,
+      });
+
+      const res = await app.request('/api/agent/v1/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'orch-mem-thread-1',
+          messages: [v6UserMessage('find infrastructure tasks')],
+        }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+
+      expect(capturedCtx?.threadId).toBe('orch-mem-thread-1');
+      expect(
+        (capturedCtx?.entitiesMemory as { memory: unknown; memoryConfig: unknown }).memory,
+      ).toBe(fakeEntitiesMemory);
+      expect(
+        (capturedCtx?.entitiesMemory as { memory: unknown; memoryConfig: unknown }).memoryConfig,
+      ).toBe(fakeEntitiesConfig);
+      expect((capturedCtx?.userMemory as { memory: unknown; memoryConfig: unknown }).memory).toBe(
+        fakeUserMemory,
+      );
+      expect(
+        (capturedCtx?.userMemory as { memory: unknown; memoryConfig: unknown }).memoryConfig,
+      ).toBe(fakeUserConfig);
     });
   });
 });
@@ -300,9 +531,9 @@ describe('GET /api/agent/v1/threads/:id (data-page-context round-trip)', () => {
         await next();
       });
       registerAgentRoutes(app, {
-        supervisor: fakeSupervisor,
         mastra: mastra as never,
         pool,
+        chatOrchestration: () => stubOrchestration(),
       });
 
       const res = await app.request(`/api/agent/v1/threads/${threadId}`);
@@ -406,9 +637,9 @@ describe('GET /api/agent/v1/threads/:id (sub-agent leaf tool calls)', () => {
         await next();
       });
       registerAgentRoutes(app, {
-        supervisor: fakeSupervisor,
         mastra: mastra as never,
         pool,
+        chatOrchestration: () => stubOrchestration(),
       });
 
       const res = await app.request(`/api/agent/v1/threads/${threadId}`);
@@ -436,6 +667,96 @@ describe('GET /api/agent/v1/threads/:id (sub-agent leaf tool calls)', () => {
         'identity_whoAmI',
       ]);
       expect(leaf?.data?.toolResults.every((r) => r.isError === false)).toBe(true);
+    });
+  });
+});
+
+describe('POST /api/agent/v1/chat (model override)', () => {
+  function appWithCapture(opts: { userId: string; tenantId: string }) {
+    let capturedCtx: Record<string, unknown> | undefined;
+    async function* captureOrchestration(
+      _runInput: unknown,
+      ctx: unknown,
+    ): AsyncIterable<OrchestrationEvent> {
+      capturedCtx = ctx as Record<string, unknown>;
+      yield { kind: 'final', result: { message: 'ok' } };
+    }
+    const app = new Hono<{ Variables: { session: TestSession } }>();
+    app.use('*', async (c, next) => {
+      c.set('session', {
+        tenant_id: opts.tenantId,
+        user_id: opts.userId,
+        effective_permissions: new Set(['agent.chat.use']),
+        role_summary: { roles: ['org.admin'], cross_tenant_read: false },
+      });
+      await next();
+    });
+    registerAgentRoutes(app, {
+      mastra: fakeMastra,
+      pool: fakePool,
+      chatOrchestration: (runInput, ctx) => captureOrchestration(runInput, ctx),
+    });
+    return { app, capturedCtx: () => capturedCtx };
+  }
+
+  it('rejects an unknown model key with 400 unknown_model', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
+      const { app } = appWithCapture({ userId: admin_user_id, tenantId: tenant_id });
+      const res = await app.request('/api/agent/v1/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          messages: [v6UserMessage('hi')],
+          model: 'openai/no-such-model-key',
+        }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe('unknown_model');
+    });
+  });
+
+  it('passes the resolved model in ctx for an explicit pick', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
+      const { app, capturedCtx } = appWithCapture({
+        userId: admin_user_id,
+        tenantId: tenant_id,
+      });
+      // global-setup pins AGENT_MODEL=mock/echo, so the test catalog is that
+      // single entry (AGENT_MODEL preempts the built-in fallback catalog).
+      const res = await app.request('/api/agent/v1/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [v6UserMessage('hi')], model: 'mock/echo' }),
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(capturedCtx()?.model).toBeDefined();
+    });
+  });
+
+  it('leaves ctx.model undefined for auto and for no pick', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const { admin_user_id, tenant_id } = await createTestTenantWithAdmin({ pool });
+      for (const body of [
+        { messages: [v6UserMessage('hi')], model: 'auto' },
+        { messages: [v6UserMessage('hi')] },
+      ]) {
+        const { app, capturedCtx } = appWithCapture({
+          userId: admin_user_id,
+          tenantId: tenant_id,
+        });
+        const res = await app.request('/api/agent/v1/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(res.status).toBe(200);
+        await res.text();
+        expect(capturedCtx()?.model).toBeUndefined();
+      }
     });
   });
 });

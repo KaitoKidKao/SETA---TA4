@@ -8,8 +8,7 @@
     ".": "./src/index.ts",
     "./register": "./src/register.ts",
     "./events": "./src/events.ts",
-    "./rbac": "./src/rbac.ts",
-    "./agent-tools": "./src/agent-tools.ts"
+    "./rbac": "./src/rbac.ts"
   },
   "scripts": {
     "lint": "eslint . --no-error-on-unmatched-pattern",
@@ -36,9 +35,11 @@
     "@seta/planner": "workspace:^",
     "@seta/shared-db": "workspace:^",
     "@seta/shared-embeddings": "workspace:^",
+    "@seta/shared-orchestration": "workspace:*",
     "@seta/shared-rbac": "workspace:^",
     "@seta/shared-retrieval": "workspace:^",
     "@seta/shared-types": "workspace:^",
+    "ai": "^6.0.191",
     "drizzle-orm": "^0.45.2",
     "graphile-worker": "^0.16.6",
     "pg": "^8.21.0",

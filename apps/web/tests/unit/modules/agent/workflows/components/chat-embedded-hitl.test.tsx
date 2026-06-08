@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowApprovalRow } from '@/modules/agent/workflows/api/schemas.ts';
 import { workflowsApi } from '@/modules/agent/workflows/api/workflows.ts';
 import { ChatEmbeddedHitl } from '@/modules/agent/workflows/components/chat-embedded-hitl.tsx';
 
-const APPROVAL_FOR_THREAD: WorkflowApprovalRow = {
+const PENDING_APPROVAL: WorkflowApprovalRow = {
   approvalId: 'a1',
   runId: 'r1',
   stepId: 'await-approval',
@@ -21,19 +22,25 @@ const APPROVAL_FOR_THREAD: WorkflowApprovalRow = {
         items: [{ id: 'u-9', label: 'Jane', secondary: 'top match', score: 0.9 }],
       },
     ],
+    meta: { toolId: 'planner_proposeAssignment' },
   },
   approverUserId: 'u-1',
   surfaceCanvas: true,
   surfaceChatThreadId: 'thread-x',
+  status: 'pending',
+  decisionPayload: null,
+  decidedAt: null,
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
   createdAt: new Date().toISOString(),
 };
 
-const APPROVAL_OTHER_THREAD: WorkflowApprovalRow = {
-  ...APPROVAL_FOR_THREAD,
+const APPROVED_APPROVAL: WorkflowApprovalRow = {
+  ...PENDING_APPROVAL,
   approvalId: 'a2',
   runId: 'r2',
-  surfaceChatThreadId: 'thread-other',
+  status: 'approved',
+  decisionPayload: { decision: 'approve' },
+  decidedAt: new Date().toISOString(),
 };
 
 function withQuery(children: React.ReactNode) {
@@ -42,31 +49,70 @@ function withQuery(children: React.ReactNode) {
 }
 
 describe('ChatEmbeddedHitl', () => {
-  it('renders only approvals for the current thread', async () => {
-    vi.spyOn(workflowsApi, 'listMyPendingApprovals').mockResolvedValue([
-      APPROVAL_FOR_THREAD,
-      APPROVAL_OTHER_THREAD,
-    ]);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders an interactive card for pending approvals', async () => {
+    vi.spyOn(workflowsApi, 'listThreadApprovals').mockResolvedValue([PENDING_APPROVAL]);
 
     render(withQuery(<ChatEmbeddedHitl threadId="thread-x" />));
 
     await waitFor(() => expect(screen.getAllByText('Jane').length).toBeGreaterThan(0));
     expect(screen.getAllByRole('region', { name: /your input needed/i })).toHaveLength(1);
+    expect(workflowsApi.listThreadApprovals).toHaveBeenCalledWith('thread-x');
   });
 
-  it('renders nothing when no approvals match the thread', async () => {
-    vi.spyOn(workflowsApi, 'listMyPendingApprovals').mockResolvedValue([APPROVAL_OTHER_THREAD]);
+  it('renders decided approvals as a persistent outcome row', async () => {
+    vi.spyOn(workflowsApi, 'listThreadApprovals').mockResolvedValue([APPROVED_APPROVAL]);
+
+    render(withQuery(<ChatEmbeddedHitl threadId="thread-x" />));
+
+    await waitFor(() => expect(screen.getByText('Approved.')).toBeInTheDocument());
+    expect(screen.getByText('Task assigned to Jane.')).toBeInTheDocument();
+    // No interactive card for a decided approval.
+    expect(screen.queryByRole('region', { name: /your input needed/i })).not.toBeInTheDocument();
+  });
+
+  it('renders nothing when the thread has no approvals', async () => {
+    vi.spyOn(workflowsApi, 'listThreadApprovals').mockResolvedValue([]);
     render(withQuery(<ChatEmbeddedHitl threadId="thread-x" />));
     await waitFor(() =>
-      expect(screen.queryByRole('region', { name: /your input needed/i })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole('region', { name: /in-thread approvals/i }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("invalidates the deciding tool's module queries after a decision", async () => {
+    vi.spyOn(workflowsApi, 'listThreadApprovals').mockResolvedValue([PENDING_APPROVAL]);
+    vi.spyOn(workflowsApi, 'decideApproval').mockResolvedValue({ runId: 'r1' });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={qc}>
+        <ChatEmbeddedHitl threadId="thread-x" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    await waitFor(() => expect(workflowsApi.decideApproval).toHaveBeenCalled());
+    // The chat-HITL decider already executed the planner write server-side, so
+    // the planner read models (task detail assignees, boards) are stale.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['planner'] })),
     );
   });
 
   it('renders nothing when threadId is undefined', async () => {
-    vi.spyOn(workflowsApi, 'listMyPendingApprovals').mockResolvedValue([APPROVAL_FOR_THREAD]);
+    const spy = vi.spyOn(workflowsApi, 'listThreadApprovals').mockResolvedValue([PENDING_APPROVAL]);
     render(withQuery(<ChatEmbeddedHitl threadId={undefined} />));
-    // Allow the query to settle, then assert nothing renders
+    // The query is disabled without a threadId, so the API is never called.
     await new Promise((r) => setTimeout(r, 30));
+    expect(spy).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: /your input needed/i })).not.toBeInTheDocument();
   });
 });
