@@ -31,6 +31,7 @@ const make = (
     skillMatcher: stub('staffing.skillMatcher'),
     avaiChecker: stub('staffing.avaiChecker'),
     recommender: stub('staffing.recommender'),
+    generalAnswer: stub('staffing.generalAnswer'),
     resolveModel: () => ({}) as never,
     runAgent: async () => ({ toolCalls, toolResults, text }),
   });
@@ -241,6 +242,34 @@ describe('orchestrator assembly', () => {
       "I couldn't complete the recommendation for this task. Please try again.",
     );
   });
+
+  it('document question: callGeneralAnswer answer → { message } at 0.6 confidence', async () => {
+    const agent = make([
+      {
+        payload: {
+          toolName: 'callGeneralAnswer',
+          result: { answer: 'It is a Q3 budget report.' },
+        },
+      },
+    ]);
+    const res = await agent.run(
+      {
+        userText: 'Context:\n<<<FILE: a.pdf>>>\n...\n<<<END a.pdf>>>\n\nwhat is this?',
+        taskId: null,
+      },
+      ctx,
+    );
+    expect(res.result.message).toBe('It is a Q3 budget report.');
+    expect(res.result.skills).toBeUndefined();
+    expect(res.result.candidates).toBeUndefined();
+    expect(res.trust.confidenceScore).toBe(0.6);
+  });
+
+  it('empty general answer → falls through to the generic capability message', async () => {
+    const agent = make([{ payload: { toolName: 'callGeneralAnswer', result: { answer: '   ' } } }]);
+    const res = await agent.run({ userText: 'hmm', taskId: null }, ctx);
+    expect(res.result.message).toContain('I can describe');
+  });
 });
 
 describe('orchestrator HITL approval post-step', () => {
@@ -428,6 +457,7 @@ describe('orchestrator request-context wiring', () => {
       skillMatcher: stub('staffing.skillMatcher'),
       avaiChecker: stub('staffing.avaiChecker'),
       recommender: stub('staffing.recommender'),
+      generalAnswer: stub('staffing.generalAnswer'),
       resolveModel: () => ({}) as never,
       runAgent: async ({ requestContext }) => {
         rcSeen = requestContext;
@@ -449,6 +479,7 @@ describe('orchestrator request-context wiring', () => {
       skillMatcher: stub('staffing.skillMatcher'),
       avaiChecker: stub('staffing.avaiChecker'),
       recommender: stub('staffing.recommender'),
+      generalAnswer: stub('staffing.generalAnswer'),
       resolveModel: () => ({}) as never,
       runAgent: async ({ requestContext }) => {
         rcSeen = requestContext;
@@ -469,6 +500,7 @@ describe('orchestrator resource working memory', () => {
       skillMatcher: stub('staffing.skillMatcher'),
       avaiChecker: stub('staffing.avaiChecker'),
       recommender: stub('staffing.recommender'),
+      generalAnswer: stub('staffing.generalAnswer'),
       resolveModel: () => ({}) as never,
       runAgent: async (args) => {
         seen = { instructions: args.instructions, tools: args.tools };
@@ -498,5 +530,11 @@ describe('orchestrator resource working memory', () => {
     expect(seen()?.instructions).not.toContain('WM-SECTION');
     expect(Object.keys(seen()?.tools ?? {})).not.toContain('updateWorkingMemory');
     expect(Object.keys(seen()?.tools ?? {})).toContain('callTaskAnalyzer');
+  });
+
+  it('base instructions mention the callGeneralAnswer document/general route', async () => {
+    const { agent, seen } = capture();
+    await agent.run({ userText: 'hello', taskId: null }, ctx);
+    expect(seen()?.instructions).toContain('callGeneralAnswer');
   });
 });

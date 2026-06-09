@@ -1,7 +1,25 @@
 export {
+  assertChatAttachmentReadable,
+  ChatAttachmentError,
+  type DeleteChatAttachmentInput,
+  deleteChatAttachment,
+  listPendingThreadAttachments,
+  markAttachmentsConsumed,
+  markAttachmentsFailed,
+  markChatAttachmentUploaded,
+  type PendingThreadAttachment,
+  type RequestChatAttachmentUploadDeps,
+  type RequestChatAttachmentUploadInput,
+  type RequestChatAttachmentUploadResult,
+  requestChatAttachmentUpload,
+  threadPendingBytes,
+} from './backend/domain/chat-attachment.ts';
+export {
   type DeleteKnowledgeFileDeps,
   type DeleteKnowledgeFileInput,
   deleteKnowledgeFile,
+  type PurgeKnowledgeFileDeps,
+  purgeKnowledgeFile,
 } from './backend/domain/delete-file.ts';
 export {
   type KnowledgeFileSummary,
@@ -35,6 +53,11 @@ export {
   resetKnowledgeVectorStore,
 } from './backend/embeddings/vector-store.ts';
 export { KnowledgeError, requirePermission as requireKnowledgePermission } from './backend/rbac.ts';
+export {
+  type ConsumedAttachment,
+  ContextOverflowError,
+  consumeThreadAttachmentsAsText,
+} from './backend/retrieval/consume-thread-attachments.ts';
 export {
   type KnowledgeHit,
   type SearchTenantKnowledgeDeps,

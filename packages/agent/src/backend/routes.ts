@@ -22,6 +22,7 @@ import { listModels, ModelNotFoundError, resolveModel } from './model-registry.t
 import { ORCHESTRATION_STEP_PART, streamOrchestrationToUI } from './orchestration-chat-stream.ts';
 import { RateLimitError, reserveTurn } from './rate-limit.ts';
 import type { LifecycleDrainer } from './runtime.ts';
+import { generateThreadTitle } from './thread-title.ts';
 import type { SessionLike } from './types.ts';
 import { issueSseToken } from './workflows/_infra/auth-token.ts';
 import { getWorkflowInputSchema } from './workflows/_infra/input-schema-registry.ts';
@@ -106,6 +107,22 @@ export type AgentRouteDeps = {
     runInput: { userText: string; taskId: string | null },
     ctx: import('@seta/shared-orchestration').RunCtx,
   ) => AsyncIterable<import('@seta/shared-orchestration').OrchestrationEvent>;
+  /** Injected by apps/server from @seta/knowledge (the agent package may not
+   *  import feature modules). Reads + parses the thread's pending attachments,
+   *  enforcing the context budget. Returns a discriminated result. */
+  consumeThreadAttachments?: (input: {
+    tenantId: string;
+    threadId: string;
+    query: string;
+  }) => Promise<
+    | { kind: 'ok'; contextBlock: string; consumedFileIds: string[]; failedFileIds: string[] }
+    | { kind: 'overflow'; requiredTokens: number; budgetTokens: number }
+    | { kind: 'error'; message: string }
+  >;
+  /** Marks files consumed after a successful turn. */
+  markAttachmentsConsumed?: (fileIds: string[]) => Promise<void>;
+  /** Marks files failed (unreadable) so they drop out of the pending list. */
+  markAttachmentsFailed?: (fileIds: string[]) => Promise<void>;
 };
 
 export type AgentRouteEnv = { Variables: { session: SessionLike } };
@@ -304,22 +321,67 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
     // AUI remote-thread-list reconciles against an empty server and evicts the
     // in-flight conversation — it "reloads and disappears" mid-stream. The
     // ownership guard: never write onto another user's thread.
+    // Only the first turn of a thread creates the row; we LLM-title it after
+    // persisting (see the persist block below) only when we created it here.
+    let createdNewThread = false;
     if (orchThreadId && orchStore) {
       const existing = await orchStore.getThreadById({ threadId: orchThreadId });
       if (existing && existing.resourceId !== session.user_id) {
         return c.json({ error: 'not_found', message: 'thread not found' }, 404);
       }
       if (!existing) {
+        createdNewThread = true;
         await orchStore.saveThread({
           thread: {
             id: orchThreadId,
             resourceId: session.user_id,
-            title: orchThreadTitle,
+            // With memory attached we run the orchestrator readOnly (no Mastra
+            // auto-persist over our curated trace) — which also disables
+            // Mastra's generateTitle. So we seed an empty title here and fill
+            // it ourselves via generateThreadTitle after the turn persists. The
+            // non-memory path keeps the synchronous fallback title.
+            title: deps.userMemory ? '' : orchThreadTitle,
             createdAt: userCreatedAt,
             updatedAt: userCreatedAt,
             metadata: {},
           },
         });
+      }
+    }
+
+    let effectiveUserText = userText;
+    let consumedFileIds: string[] = [];
+    let contextParts: Array<{ type: 'text'; text: string }> = [];
+    if (orchThreadId && deps.consumeThreadAttachments) {
+      const r = await deps.consumeThreadAttachments({
+        tenantId: session.tenant_id,
+        threadId: orchThreadId,
+        query: userText,
+      });
+      if (r.kind === 'overflow') {
+        return c.json(
+          {
+            error: 'context_overflow',
+            message: `Attached file(s) need ~${r.requiredTokens} tokens but only ${r.budgetTokens} fit the model context. Remove a file or use a smaller one.`,
+          },
+          413,
+        );
+      }
+      if (r.kind === 'error') {
+        return c.json({ error: 'attachment_error', message: r.message }, 400);
+      }
+      // Mark unreadable files 'failed' right away (before streaming) so a broken
+      // file never re-poisons later turns even if this turn errors downstream.
+      if (r.failedFileIds.length > 0 && deps.markAttachmentsFailed) {
+        await deps.markAttachmentsFailed(r.failedFileIds);
+      }
+      if (r.contextBlock) {
+        effectiveUserText = `${r.contextBlock}\n\n${userText}`;
+        consumedFileIds = r.consumedFileIds;
+        // Persisted as a TEXT part so Mastra lastMessages/semanticRecall replay
+        // it on follow-ups; the web renderer collapses the `<<<FILE:` sentinel
+        // into a chip. (Plan 00 persists via userMemory.saveMessages.)
+        contextParts = [{ type: 'text', text: r.contextBlock }];
       }
     }
 
@@ -329,7 +391,7 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
         const { assistantParts } = await streamOrchestrationToUI(
           writer as unknown as import('./orchestration-chat-stream.ts').UiStreamWriter,
           orchestrate(
-            { userText, taskId },
+            { userText: effectiveUserText, taskId },
             {
               tenantId: session.tenant_id,
               actorUserId: session.user_id,
@@ -356,29 +418,42 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
         if (!orchThreadId || !orchStore) return;
         try {
           const assistantCreatedAt = new Date(Math.max(Date.now(), userCreatedAt.getTime() + 1));
-          await orchStore.saveMessages({
-            messages: [
-              {
-                id: lastUserMessage?.id ?? crypto.randomUUID(),
-                threadId: orchThreadId,
-                resourceId: session.user_id,
-                role: 'user',
-                createdAt: userCreatedAt,
-                content: {
-                  format: 2,
-                  parts: lastUserMessage?.parts ?? [{ type: 'text', text: userText }],
-                },
-              },
-              {
-                id: crypto.randomUUID(),
-                threadId: orchThreadId,
-                resourceId: session.user_id,
-                role: 'assistant',
-                createdAt: assistantCreatedAt,
-                content: { format: 2, parts: assistantParts },
-              },
-            ],
-          });
+          const userMsg = {
+            id: lastUserMessage?.id ?? crypto.randomUUID(),
+            threadId: orchThreadId,
+            resourceId: session.user_id,
+            role: 'user' as const,
+            createdAt: userCreatedAt,
+            content: {
+              format: 2 as const,
+              parts: [
+                ...(lastUserMessage?.parts ?? [{ type: 'text', text: userText }]),
+                ...contextParts,
+              ],
+            },
+          };
+          const assistantMsg = {
+            id: crypto.randomUUID(),
+            threadId: orchThreadId,
+            resourceId: session.user_id,
+            role: 'assistant' as const,
+            createdAt: assistantCreatedAt,
+            content: { format: 2 as const, parts: assistantParts },
+          };
+          // Persist via the Memory when present: it embeds + upserts the
+          // semanticRecall vectors so future turns can recall this exchange.
+          // The raw-store fallback covers runtimes without userMemory.
+          if (deps.userMemory) {
+            await deps.userMemory.saveMessages({
+              messages: [userMsg, assistantMsg] as never,
+              memoryConfig: deps.userMemoryConfig as never,
+            });
+          } else {
+            await orchStore.saveMessages({ messages: [userMsg, assistantMsg] });
+          }
+          if (consumedFileIds.length > 0 && deps.markAttachmentsConsumed) {
+            await deps.markAttachmentsConsumed(consumedFileIds);
+          }
         } catch (err) {
           (deps.log?.error ?? console.error)(
             {
@@ -389,6 +464,30 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
             },
             'failed to persist orchestration chat turn',
           );
+        }
+        // Supervisor-parity auto-title: on the first turn of a memory-backed
+        // thread (seeded with an empty title above), generate an LLM title from
+        // the user's message and write it back. Best-effort — a failure leaves
+        // the deterministic fallback so the rail still shows a real label.
+        if (createdNewThread && deps.userMemory && orchStore) {
+          try {
+            const title = await generateThreadTitle({
+              userText: cleanUserText || userText,
+              model: modelOverride ?? resolveModel('auto', { tierHint: 'fast' }).model,
+              fallback: orchThreadTitle,
+            });
+            await orchStore.updateThread({ id: orchThreadId, title, metadata: {} });
+          } catch (err) {
+            (deps.log?.error ?? console.error)(
+              {
+                subsystem: 'agent.chat',
+                event: 'orchestration.title.failed',
+                threadId: orchThreadId,
+                err,
+              },
+              'failed to generate orchestration thread title',
+            );
+          }
         }
       },
     });

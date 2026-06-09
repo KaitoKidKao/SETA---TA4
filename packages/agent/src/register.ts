@@ -82,6 +82,14 @@ export function registerAgent(deps: {
     runInput: { userText: string; taskId: string | null },
     ctx: import('@seta/shared-orchestration').RunCtx,
   ) => AsyncIterable<import('@seta/shared-orchestration').OrchestrationEvent>;
+  /**
+   * Chat-attachment consume/mark functions, injected by the server entry-point
+   * from @seta/knowledge (the only layer that can import a feature module into
+   * the engine). See AgentRouteDeps.consumeThreadAttachments / markAttachmentsConsumed.
+   */
+  consumeThreadAttachments?: import('./backend/routes.ts').AgentRouteDeps['consumeThreadAttachments'];
+  markAttachmentsConsumed?: import('./backend/routes.ts').AgentRouteDeps['markAttachmentsConsumed'];
+  markAttachmentsFailed?: import('./backend/routes.ts').AgentRouteDeps['markAttachmentsFailed'];
 }): AgentHandle {
   validateModelEnv(process.env);
   setExecutionPolicy({
@@ -145,6 +153,9 @@ export function registerAgent(deps: {
         log: deps.log,
         chatHitlDeciders: deps.chatHitlDeciders,
         chatOrchestration: deps.chatOrchestration,
+        consumeThreadAttachments: deps.consumeThreadAttachments,
+        markAttachmentsConsumed: deps.markAttachmentsConsumed,
+        markAttachmentsFailed: deps.markAttachmentsFailed,
         entitiesMemory: entitiesMem?.memory,
         entitiesMemoryConfig: entitiesMem?.memoryConfig,
         userMemory: userMem?.memory,

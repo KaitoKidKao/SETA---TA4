@@ -6,6 +6,7 @@ import { deleteKnowledgeFile } from '../domain/delete-file.ts';
 import { listKnowledgeFiles } from '../domain/list-files.ts';
 import { markKnowledgeFileProcessed } from '../domain/mark-processed.ts';
 import { requestKnowledgeUpload } from '../domain/upload-url.ts';
+import { registerChatAttachmentRoutes } from './chat-attachments.ts';
 
 interface JobEnqueuer {
   addJob: (taskName: string, payload: unknown) => Promise<void> | Promise<unknown>;
@@ -33,6 +34,12 @@ export type KnowledgeRouteDeps = {
     contentType: string;
     expiresInSeconds: number;
   }) => Promise<string>;
+  /** Override the chat-attachment readability gate for testing (skips S3). */
+  assertReadable?: (input: {
+    tenant_id: string;
+    file_id: string;
+    uploaded_by: string;
+  }) => Promise<void>;
 };
 
 export function registerKnowledgeRoutes(app: Hono<SessionEnv>, deps: KnowledgeRouteDeps): void {
@@ -90,6 +97,11 @@ export function registerKnowledgeRoutes(app: Hono<SessionEnv>, deps: KnowledgeRo
     await deleteKnowledgeFile({ tenant_id: scope.tenant_id, file_id }, { session: scope });
     return c.json({ ok: true });
   });
+
+  // Chat attachments share the worker enqueuer + presign override; they gate on
+  // session.effective_permissions (set by the agent bridge on /api/agent/*),
+  // not org.admin. Cast: this Hono app also carries the agent `session` var.
+  registerChatAttachmentRoutes(app as never, deps);
 }
 
 export { registerKnowledgeStreamRoutes } from './stream.ts';

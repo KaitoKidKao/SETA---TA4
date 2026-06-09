@@ -52,12 +52,14 @@ type RecommenderSpec = SpecializedAgentSpec<
   },
   { taskId: string | null; recommendations: Recommendation[] }
 >;
+type GeneralAnswerSpec = SpecializedAgentSpec<{ query: string }, { answer: string }>;
 
 export interface OrchestratorDeps {
   taskAnalyzer: TaskAnalyzerSpec;
   skillMatcher: SkillMatcherSpec;
   avaiChecker: AvaiCheckerSpec;
   recommender: RecommenderSpec;
+  generalAnswer: GeneralAnswerSpec;
   resolveModel: () => MastraModelConfig;
   /** Cap on how many found tasks the orchestrator recommends people for. */
   recommendTaskCap?: number;
@@ -84,6 +86,13 @@ function instructions(cap: number): string {
     '  "who has aws and k8s skills" / "find someone who knows terraform". This returns those',
     '  skills — it does NOT search tasks. Do not use find_tasks for a people question.',
     '- intent=find_tasks: when the user wants to list TASKS by area/skill, e.g. "find infra tasks".',
+    '',
+    'DOCUMENT / GENERAL QUESTION — when the user asks a general question, a',
+    'conversational follow-up, or anything about an attached document (its text is',
+    'inlined in this message under a `Context:` block delimited by `<<<FILE: ...>>>`,',
+    'or appeared in an earlier turn), call callGeneralAnswer and STOP. Do NOT use the',
+    'staffing tools (callTaskAnalyzer / find_tasks / skill / people tools) for a',
+    'document or general question.',
     '',
     'callTaskAnalyzer takes taskRef: a task UUID, or an ordinal reference into tasks already',
     'listed in this conversation — "first"/"#1", "second"/"#2", "last". When the user refers',
@@ -135,14 +144,18 @@ export function makeOrchestratorAgent(deps: OrchestratorDeps): SpecializedAgentS
         skillMatcher: deps.skillMatcher,
         avaiChecker: deps.avaiChecker,
         recommender: deps.recommender,
+        generalAnswer: deps.generalAnswer,
+        userText: input.userText,
         ctx,
       });
       const wmTool = makeUpdateWorkingMemoryTool(ctx);
       if (wmTool) tools.updateWorkingMemory = wmTool;
+
       const wmSection = await loadUserContextSection(ctx);
-      const agentInstructions = wmSection
+      const baseInstructions = wmSection
         ? `${instructions(cap)}\n\n${wmSection}`
         : instructions(cap);
+      const agentInstructions = baseInstructions;
 
       const res: MastraToolSignals = deps.runAgent
         ? await deps.runAgent({ input, requestContext: rc, instructions: agentInstructions, tools })
@@ -153,13 +166,33 @@ export function makeOrchestratorAgent(deps: OrchestratorDeps): SpecializedAgentS
               instructions: agentInstructions,
               model: pickModel(ctx, deps.resolveModel),
               tools: tools as never,
+              ...(ctx.userMemory ? { memory: ctx.userMemory.memory } : {}),
             });
             const r = await agent.generate(
               [
                 `User message: ${input.userText}`,
                 `Current taskId: ${input.taskId ?? '(none)'}`,
               ].join('\n'),
-              { requestContext: rc, maxSteps: 12, abortSignal: ctx.abortSignal },
+              {
+                requestContext: rc,
+                maxSteps: 12,
+                abortSignal: ctx.abortSignal,
+                // Restore supervisor parity: Mastra injects lastMessages history
+                // + semanticRecall and fires generateTitle. readOnly => it does
+                // NOT persist messages (our chat route persists via
+                // userMemory.saveMessages). workingMemory disabled here because
+                // the orchestrator still injects userContext manually via
+                // loadUserContextSection (no double handling).
+                ...(ctx.userMemory && ctx.threadId
+                  ? {
+                      memory: {
+                        thread: ctx.threadId,
+                        resource: ctx.actorUserId,
+                        options: { readOnly: true, workingMemory: { enabled: false } },
+                      },
+                    }
+                  : {}),
+              },
             );
             return {
               toolCalls: r.toolCalls as MastraToolSignals['toolCalls'],
@@ -171,7 +204,7 @@ export function makeOrchestratorAgent(deps: OrchestratorDeps): SpecializedAgentS
       const result = await recordApprovalIfRecommended(assemble(res), res, ctx);
       const trust = trustFromMastraResult(res, {
         citations: (tr) => citationsFor(tr, result),
-        confidence: confidenceFor(result),
+        confidence: confidenceFor(result, res),
       });
       return { result, trust };
     },
@@ -228,6 +261,15 @@ function assemble(res: MastraToolSignals): OrchestratorResult {
     const skills = ta.find((o) => o.skills)?.skills;
     if (skills) return { skills };
   }
+
+  // A document / general question routes here: the general-answer sub-agent's
+  // prose IS the terminal answer. It runs only when the LLM called NO staffing
+  // tools, so the structured branches above never fire alongside it. An empty
+  // answer falls through to the honest capability message below.
+  const generalAnswer = (results(res, 'callGeneralAnswer') as { answer?: string }[]).find((g) =>
+    g.answer?.trim(),
+  )?.answer;
+  if (generalAnswer) return { message: generalAnswer.trim() };
 
   // A turn where the LLM called no tools at all is conversational — e.g. the
   // "Approved"/"Declined" follow-up ChatEmbeddedHitl appends after a card
@@ -328,10 +370,18 @@ function citationsFor(
   return [];
 }
 
-function confidenceFor(result: OrchestratorResult): number {
+function confidenceFor(result: OrchestratorResult, res?: MastraToolSignals): number {
   if (result.recommendations?.length) return 0.8;
   if (result.tasks?.length) return 0.8;
   if (result.candidates?.length) return 0.8;
   if (result.skills?.length) return 0.8;
+  // A surfaced general answer is a real (if unsourced) answer — rank it above the
+  // 0.2 honest-failure floor that bare `message` results carry.
+  if (
+    res &&
+    (results(res, 'callGeneralAnswer') as { answer?: string }[]).some((g) => g.answer?.trim())
+  ) {
+    return 0.6;
+  }
   return 0.2;
 }
