@@ -69,3 +69,5 @@ infra/traefik/jaeger-auth
 .playwright-mcp/
 docs/design/
 .worktrees/
+
+AWS-CREDENTIALS.txt

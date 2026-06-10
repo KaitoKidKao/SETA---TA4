@@ -1,3 +1,8 @@
+// biome-ignore-all lint/suspicious/noExplicitAny: ignore explicit any type check
+// biome-ignore-all lint/a11y/noLabelWithoutControl: ignore form label validation
+// biome-ignore-all lint/a11y/noStaticElementInteractions: ignore static div onClick interactions
+// biome-ignore-all lint/a11y/useKeyWithClickEvents: ignore keyboard event warnings on click
+// biome-ignore-all lint/suspicious/noArrayIndexKey: ignore array index as key in loop
 import {
   Badge,
   Button,
@@ -29,7 +34,7 @@ import {
   User,
   XCircle,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 interface UploadedCv {
   id: string;
@@ -113,6 +118,14 @@ export function SmartrecruitPage() {
   // Workflow run poll states
   const [activeApproval, setActiveApproval] = useState<any | null>(null);
 
+  const isGate1Active =
+    activeApproval?.stepId === 'smartrecruit.parseJd' ||
+    activeApproval?.proposedPayload?.meta?.toolId === 'smartrecruit_parseJd';
+
+  const isGate2Active =
+    activeApproval?.stepId === 'smartrecruit.draftOutreach' ||
+    activeApproval?.proposedPayload?.meta?.toolId === 'smartrecruit_draftOutreach';
+
   // Gate 1: Criteria State
   const [activeCriteria, setActiveCriteria] = useState<CriteriaState | null>(null);
   const [newMustHave, setNewMustHave] = useState('');
@@ -127,31 +140,22 @@ export function SmartrecruitPage() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
 
-  const fetchCriteriaList = async () => {
+  const fetchCriteriaList = useCallback(async () => {
     try {
       const res = await fetch('/api/smartrecruit/v1/criteria');
       await res.json();
     } catch (_err) {}
-  };
+  }, []);
 
-  const fetchPendingRuns = async () => {
+  const fetchCriteriaDetails = useCallback(async (criteriaId: string) => {
     try {
-      const res = await fetch(
-        '/api/agent/v1/workflows/runs?workflowId=smartrecruit.workflow&scope=self',
-      );
+      const res = await fetch(`/api/smartrecruit/v1/criteria/${criteriaId}`);
       const data = await res.json();
-      if (data.rows && data.rows.length > 0) {
-        const running = data.rows.find((r: any) => r.status === 'paused' || r.status === 'running');
-        if (running) {
-          setActiveRunId(running.runId);
-          setRunStatus(running.status);
-          setActiveTab('active');
-        }
-      }
+      setActiveCriteria(data);
     } catch (_err) {}
-  };
+  }, []);
 
-  const fetchCandidatesAndDrafts = async () => {
+  const fetchCandidatesAndDrafts = useCallback(async () => {
     try {
       const resCand = await fetch('/api/smartrecruit/v1/candidates');
       const dataCand = await resCand.json();
@@ -169,9 +173,26 @@ export function SmartrecruitPage() {
         setEditingDraft(matchedDraft || null);
       }
     } catch (_err) {}
-  };
+  }, [selectedCandidate]);
 
-  const pollRunStatus = async () => {
+  const fetchPendingRuns = useCallback(async () => {
+    try {
+      const res = await fetch(
+        '/api/agent/v1/workflows/runs?workflowId=smartrecruit.workflow&scope=self',
+      );
+      const data = await res.json();
+      if (data.rows && data.rows.length > 0) {
+        const running = data.rows.find((r: any) => r.status === 'paused' || r.status === 'running');
+        if (running) {
+          setActiveRunId(running.runId);
+          setRunStatus(running.status);
+          setActiveTab('active');
+        }
+      }
+    } catch (_err) {}
+  }, []);
+
+  const pollRunStatus = useCallback(async () => {
     if (!activeRunId) return;
     try {
       const res = await fetch(`/api/agent/v1/workflows/runs/${activeRunId}`);
@@ -188,24 +209,16 @@ export function SmartrecruitPage() {
         setRunError(data.errorSummary ?? 'Run failed.');
       }
     } catch (_err) {}
-  };
+  }, [activeRunId, fetchCandidatesAndDrafts]);
 
-  const fetchPendingApprovals = async () => {
+  const fetchPendingApprovals = useCallback(async () => {
     try {
       const res = await fetch('/api/agent/v1/workflows/my-pending-approvals');
       const data = await res.json();
       const app = data.find((a: any) => a.runId === activeRunId);
       setActiveApproval(app || null);
     } catch (_err) {}
-  };
-
-  const fetchCriteriaDetails = async (criteriaId: string) => {
-    try {
-      const res = await fetch(`/api/smartrecruit/v1/criteria/${criteriaId}`);
-      const data = await res.json();
-      setActiveCriteria(data);
-    } catch (_err) {}
-  };
+  }, [activeRunId]);
 
   // Fetch pending runs and criteria list on mount
   useEffect(() => {
@@ -232,15 +245,21 @@ export function SmartrecruitPage() {
       return;
     }
 
-    if (activeApproval.stepId === 'smartrecruit.parseJd') {
+    if (isGate1Active) {
       const criteriaId = activeApproval.proposedPayload?.primary?.argsPatch?.criteriaId;
       if (criteriaId) {
         fetchCriteriaDetails(criteriaId);
       }
-    } else if (activeApproval.stepId === 'smartrecruit.draftOutreach') {
+    } else if (isGate2Active) {
       fetchCandidatesAndDrafts();
     }
-  }, [activeApproval, fetchCriteriaDetails, fetchCandidatesAndDrafts]);
+  }, [
+    activeApproval,
+    isGate1Active,
+    isGate2Active,
+    fetchCriteriaDetails,
+    fetchCandidatesAndDrafts,
+  ]);
 
   // --- CV Upload Handler ---
   const handleCvUpload = async (file: File) => {
@@ -780,8 +799,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          runStatus === 'paused' &&
-                            activeApproval?.stepId === 'smartrecruit.parseJd'
+                          runStatus === 'paused' && isGate1Active
                             ? 'bg-amber-500 border-amber-600 text-white'
                             : runStatus === 'running'
                               ? 'bg-primary border-primary text-white'
@@ -813,8 +831,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          runStatus === 'paused' &&
-                            activeApproval?.stepId === 'smartrecruit.draftOutreach'
+                          runStatus === 'paused' && isGate2Active
                             ? 'bg-amber-500 border-amber-600 text-white'
                             : 'bg-surface-1 border-hairline-strong text-ink-subtle',
                         )}
@@ -863,214 +880,212 @@ export function SmartrecruitPage() {
             )}
 
             {/* GATE 1 PANEL: CRITERIA CONFIRMATION */}
-            {runStatus === 'paused' &&
-              activeApproval?.stepId === 'smartrecruit.parseJd' &&
-              activeCriteria && (
-                <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <Card className="shadow-md border-hairline-strong bg-surface">
-                    <CardHeader className="border-b border-hairline">
-                      <div className="flex items-center justify-between">
-                        <div className="flex flex-col gap-0.5">
-                          <CardTitle className="text-body-xl font-bold text-ink">
-                            Gate 1: Confirm Screening Criteria
-                          </CardTitle>
-                          <CardDescription className="text-body-sm text-ink-subtle">
-                            Edit the technical skills and experience levels parsed by the AI before
-                            screening profiles.
-                          </CardDescription>
+            {runStatus === 'paused' && isGate1Active && activeCriteria && (
+              <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <Card className="shadow-md border-hairline-strong bg-surface">
+                  <CardHeader className="border-b border-hairline">
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col gap-0.5">
+                        <CardTitle className="text-body-xl font-bold text-ink">
+                          Gate 1: Confirm Screening Criteria
+                        </CardTitle>
+                        <CardDescription className="text-body-sm text-ink-subtle">
+                          Edit the technical skills and experience levels parsed by the AI before
+                          screening profiles.
+                        </CardDescription>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleDeclineWorkflow}
+                          className="text-ink-subtle hover:text-rose-500"
+                        >
+                          Decline Campaign
+                        </Button>
+                        <Button
+                          onClick={handleConfirmCriteria}
+                          disabled={isSavingCriteria}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 font-medium shadow"
+                        >
+                          <CheckCircle className="size-4" />
+                          Confirm & Run Screener
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-6">
+                    {/* Left: General Criteria */}
+                    <div className="md:col-span-5 flex flex-col gap-4">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-body-sm font-semibold text-ink">
+                          Job Position Title
+                        </label>
+                        <Input
+                          value={activeCriteria.job_title}
+                          onChange={(e) =>
+                            setActiveCriteria({ ...activeCriteria, job_title: e.target.value })
+                          }
+                          className="border-hairline"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-body-sm font-semibold text-ink">
+                          Minimum Years of Experience
+                        </label>
+                        <Input
+                          type="number"
+                          value={activeCriteria.min_yoe}
+                          onChange={(e) =>
+                            setActiveCriteria({
+                              ...activeCriteria,
+                              min_yoe: parseInt(e.target.value, 10) || 0,
+                            })
+                          }
+                          className="border-hairline"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-body-sm font-semibold text-ink">
+                          Required Education Level
+                        </label>
+                        <Input
+                          value={activeCriteria.education_level || ''}
+                          onChange={(e) =>
+                            setActiveCriteria({
+                              ...activeCriteria,
+                              education_level: e.target.value,
+                            })
+                          }
+                          placeholder="e.g. Bachelor in Computer Science"
+                          className="border-hairline"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-body-sm font-semibold text-ink">
+                          Additional Requirements / Notes
+                        </label>
+                        <Textarea
+                          value={activeCriteria.additional_requirements || ''}
+                          onChange={(e) =>
+                            setActiveCriteria({
+                              ...activeCriteria,
+                              additional_requirements: e.target.value,
+                            })
+                          }
+                          rows={4}
+                          className="border-hairline resize-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Right: Technical Skills Lists */}
+                    <div className="md:col-span-7 flex flex-col gap-6">
+                      {/* Must-have */}
+                      <div className="flex flex-col gap-2 bg-canvas/30 p-4 rounded-xl border border-hairline">
+                        <label className="text-body-sm font-bold text-ink flex items-center gap-1.5">
+                          <span className="size-2 rounded-full bg-rose-500" />
+                          Must-Have Technical Skills
+                        </label>
+                        <p className="text-eyebrow text-ink-subtle">
+                          Candidates without these skills are heavily penalized.
+                        </p>
+
+                        <div className="flex flex-wrap gap-2.5 py-2">
+                          {activeCriteria.must_have_skills.map((skill, idx) => (
+                            <Badge
+                              key={idx}
+                              variant="secondary"
+                              className="pl-3.5 pr-2 py-1 gap-1 border-hairline font-medium text-body-sm bg-surface"
+                            >
+                              {skill}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-5 w-5 p-0 text-ink-subtle hover:text-rose-500 hover:bg-canvas rounded-full"
+                                onClick={() => removeMustHave(idx)}
+                              >
+                                &times;
+                              </Button>
+                            </Badge>
+                          ))}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
+
+                        <div className="flex gap-2">
+                          <Input
+                            value={newMustHave}
+                            onChange={(e) => setNewMustHave(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && addMustHave()}
+                            placeholder="Add must-have skill..."
                             size="sm"
-                            onClick={handleDeclineWorkflow}
-                            className="text-ink-subtle hover:text-rose-500"
-                          >
-                            Decline Campaign
-                          </Button>
+                            className="bg-surface border-hairline"
+                          />
                           <Button
-                            onClick={handleConfirmCriteria}
-                            disabled={isSavingCriteria}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 font-medium shadow"
+                            onClick={addMustHave}
+                            size="sm"
+                            variant="secondary"
+                            className="flex items-center gap-1 shrink-0"
                           >
-                            <CheckCircle className="size-4" />
-                            Confirm & Run Screener
+                            <Plus className="size-4" /> Add
                           </Button>
                         </div>
                       </div>
-                    </CardHeader>
 
-                    <CardContent className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-6">
-                      {/* Left: General Criteria */}
-                      <div className="md:col-span-5 flex flex-col gap-4">
-                        <div className="flex flex-col gap-1">
-                          <label className="text-body-sm font-semibold text-ink">
-                            Job Position Title
-                          </label>
-                          <Input
-                            value={activeCriteria.job_title}
-                            onChange={(e) =>
-                              setActiveCriteria({ ...activeCriteria, job_title: e.target.value })
-                            }
-                            className="border-hairline"
-                          />
+                      {/* Nice-to-have */}
+                      <div className="flex flex-col gap-2 bg-canvas/30 p-4 rounded-xl border border-hairline">
+                        <label className="text-body-sm font-bold text-ink flex items-center gap-1.5">
+                          <span className="size-2 rounded-full bg-blue-500" />
+                          Nice-To-Have Skills
+                        </label>
+                        <p className="text-eyebrow text-ink-subtle">
+                          Preferred skills that boost candidate scorecard.
+                        </p>
+
+                        <div className="flex flex-wrap gap-2.5 py-2">
+                          {activeCriteria.nice_to_have_skills.map((skill, idx) => (
+                            <Badge
+                              key={idx}
+                              variant="secondary"
+                              className="pl-3.5 pr-2 py-1 gap-1 border-hairline font-medium text-body-sm bg-surface"
+                            >
+                              {skill}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-5 w-5 p-0 text-ink-subtle hover:text-rose-500 hover:bg-canvas rounded-full"
+                                onClick={() => removeNiceToHave(idx)}
+                              >
+                                &times;
+                              </Button>
+                            </Badge>
+                          ))}
                         </div>
-                        <div className="flex flex-col gap-1">
-                          <label className="text-body-sm font-semibold text-ink">
-                            Minimum Years of Experience
-                          </label>
+
+                        <div className="flex gap-2">
                           <Input
-                            type="number"
-                            value={activeCriteria.min_yoe}
-                            onChange={(e) =>
-                              setActiveCriteria({
-                                ...activeCriteria,
-                                min_yoe: parseInt(e.target.value, 10) || 0,
-                              })
-                            }
-                            className="border-hairline"
+                            value={newNiceToHave}
+                            onChange={(e) => setNewNiceToHave(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && addNiceToHave()}
+                            placeholder="Add nice-to-have skill..."
+                            size="sm"
+                            className="bg-surface border-hairline"
                           />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <label className="text-body-sm font-semibold text-ink">
-                            Required Education Level
-                          </label>
-                          <Input
-                            value={activeCriteria.education_level || ''}
-                            onChange={(e) =>
-                              setActiveCriteria({
-                                ...activeCriteria,
-                                education_level: e.target.value,
-                              })
-                            }
-                            placeholder="e.g. Bachelor in Computer Science"
-                            className="border-hairline"
-                          />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <label className="text-body-sm font-semibold text-ink">
-                            Additional Requirements / Notes
-                          </label>
-                          <Textarea
-                            value={activeCriteria.additional_requirements || ''}
-                            onChange={(e) =>
-                              setActiveCriteria({
-                                ...activeCriteria,
-                                additional_requirements: e.target.value,
-                              })
-                            }
-                            rows={4}
-                            className="border-hairline resize-none"
-                          />
+                          <Button
+                            onClick={addNiceToHave}
+                            size="sm"
+                            variant="secondary"
+                            className="flex items-center gap-1 shrink-0"
+                          >
+                            <Plus className="size-4" /> Add
+                          </Button>
                         </div>
                       </div>
-
-                      {/* Right: Technical Skills Lists */}
-                      <div className="md:col-span-7 flex flex-col gap-6">
-                        {/* Must-have */}
-                        <div className="flex flex-col gap-2 bg-canvas/30 p-4 rounded-xl border border-hairline">
-                          <label className="text-body-sm font-bold text-ink flex items-center gap-1.5">
-                            <span className="size-2 rounded-full bg-rose-500" />
-                            Must-Have Technical Skills
-                          </label>
-                          <p className="text-eyebrow text-ink-subtle">
-                            Candidates without these skills are heavily penalized.
-                          </p>
-
-                          <div className="flex flex-wrap gap-2.5 py-2">
-                            {activeCriteria.must_have_skills.map((skill, idx) => (
-                              <Badge
-                                key={idx}
-                                variant="secondary"
-                                className="pl-3.5 pr-2 py-1 gap-1 border-hairline font-medium text-body-sm bg-surface"
-                              >
-                                {skill}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  className="h-5 w-5 p-0 text-ink-subtle hover:text-rose-500 hover:bg-canvas rounded-full"
-                                  onClick={() => removeMustHave(idx)}
-                                >
-                                  &times;
-                                </Button>
-                              </Badge>
-                            ))}
-                          </div>
-
-                          <div className="flex gap-2">
-                            <Input
-                              value={newMustHave}
-                              onChange={(e) => setNewMustHave(e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && addMustHave()}
-                              placeholder="Add must-have skill..."
-                              size="sm"
-                              className="bg-surface border-hairline"
-                            />
-                            <Button
-                              onClick={addMustHave}
-                              size="sm"
-                              variant="secondary"
-                              className="flex items-center gap-1 shrink-0"
-                            >
-                              <Plus className="size-4" /> Add
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Nice-to-have */}
-                        <div className="flex flex-col gap-2 bg-canvas/30 p-4 rounded-xl border border-hairline">
-                          <label className="text-body-sm font-bold text-ink flex items-center gap-1.5">
-                            <span className="size-2 rounded-full bg-blue-500" />
-                            Nice-To-Have Skills
-                          </label>
-                          <p className="text-eyebrow text-ink-subtle">
-                            Preferred skills that boost candidate scorecard.
-                          </p>
-
-                          <div className="flex flex-wrap gap-2.5 py-2">
-                            {activeCriteria.nice_to_have_skills.map((skill, idx) => (
-                              <Badge
-                                key={idx}
-                                variant="secondary"
-                                className="pl-3.5 pr-2 py-1 gap-1 border-hairline font-medium text-body-sm bg-surface"
-                              >
-                                {skill}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  className="h-5 w-5 p-0 text-ink-subtle hover:text-rose-500 hover:bg-canvas rounded-full"
-                                  onClick={() => removeNiceToHave(idx)}
-                                >
-                                  &times;
-                                </Button>
-                              </Badge>
-                            ))}
-                          </div>
-
-                          <div className="flex gap-2">
-                            <Input
-                              value={newNiceToHave}
-                              onChange={(e) => setNewNiceToHave(e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && addNiceToHave()}
-                              placeholder="Add nice-to-have skill..."
-                              size="sm"
-                              className="bg-surface border-hairline"
-                            />
-                            <Button
-                              onClick={addNiceToHave}
-                              size="sm"
-                              variant="secondary"
-                              className="flex items-center gap-1 shrink-0"
-                            >
-                              <Plus className="size-4" /> Add
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
 
             {/* PIPELINE SCANNING STATE */}
             {runStatus === 'running' && !activeApproval && (
@@ -1090,7 +1105,7 @@ export function SmartrecruitPage() {
             )}
 
             {/* GATE 2 PANEL: SCORECARD & EMAIL WORKSPACE */}
-            {runStatus === 'paused' && activeApproval?.stepId === 'smartrecruit.draftOutreach' && (
+            {runStatus === 'paused' && isGate2Active && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-300">
                 {/* Left Side: Candidates list */}
                 <div className="lg:col-span-5 flex flex-col gap-4">
