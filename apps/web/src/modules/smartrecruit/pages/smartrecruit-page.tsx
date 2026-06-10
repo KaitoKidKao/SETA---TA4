@@ -127,41 +127,6 @@ export function SmartrecruitPage() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
 
-  // Fetch pending runs and criteria list on mount
-  useEffect(() => {
-    fetchCriteriaList();
-    fetchPendingRuns();
-  }, [fetchPendingRuns, fetchCriteriaList]);
-
-  // Poll active run and pending approvals if a run is running
-  useEffect(() => {
-    if (!activeRunId) return;
-
-    const interval = setInterval(() => {
-      pollRunStatus();
-      fetchPendingApprovals();
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [activeRunId, pollRunStatus, fetchPendingApprovals]);
-
-  // Trigger loading details when Gate 1 or Gate 2 is active
-  useEffect(() => {
-    if (!activeApproval) {
-      setActiveCriteria(null);
-      return;
-    }
-
-    if (activeApproval.stepId === 'smartrecruit.parseJd') {
-      const criteriaId = activeApproval.proposedPayload?.primary?.argsPatch?.criteriaId;
-      if (criteriaId) {
-        fetchCriteriaDetails(criteriaId);
-      }
-    } else if (activeApproval.stepId === 'smartrecruit.draftOutreach') {
-      fetchCandidatesAndDrafts();
-    }
-  }, [activeApproval, fetchCriteriaDetails, fetchCandidatesAndDrafts]);
-
   const fetchCriteriaList = async () => {
     try {
       const res = await fetch('/api/smartrecruit/v1/criteria');
@@ -182,6 +147,26 @@ export function SmartrecruitPage() {
           setRunStatus(running.status);
           setActiveTab('active');
         }
+      }
+    } catch (_err) {}
+  };
+
+  const fetchCandidatesAndDrafts = async () => {
+    try {
+      const resCand = await fetch('/api/smartrecruit/v1/candidates');
+      const dataCand = await resCand.json();
+      setCandidatesList(dataCand.candidates);
+
+      const resDraft = await fetch('/api/smartrecruit/v1/outreach/drafts');
+      const dataDraft = await resDraft.json();
+      setDraftsList(dataDraft.drafts);
+
+      if (dataCand.candidates.length > 0 && !selectedCandidate) {
+        setSelectedCandidate(dataCand.candidates[0]);
+        const matchedDraft = dataDraft.drafts.find(
+          (d: any) => d.candidate_id === dataCand.candidates[0].id,
+        );
+        setEditingDraft(matchedDraft || null);
       }
     } catch (_err) {}
   };
@@ -222,25 +207,40 @@ export function SmartrecruitPage() {
     } catch (_err) {}
   };
 
-  const fetchCandidatesAndDrafts = async () => {
-    try {
-      const resCand = await fetch('/api/smartrecruit/v1/candidates');
-      const dataCand = await resCand.json();
-      setCandidatesList(dataCand.candidates);
+  // Fetch pending runs and criteria list on mount
+  useEffect(() => {
+    fetchCriteriaList();
+    fetchPendingRuns();
+  }, [fetchPendingRuns, fetchCriteriaList]);
 
-      const resDraft = await fetch('/api/smartrecruit/v1/outreach/drafts');
-      const dataDraft = await resDraft.json();
-      setDraftsList(dataDraft.drafts);
+  // Poll active run and pending approvals if a run is running
+  useEffect(() => {
+    if (!activeRunId) return;
 
-      if (dataCand.candidates.length > 0 && !selectedCandidate) {
-        setSelectedCandidate(dataCand.candidates[0]);
-        const matchedDraft = dataDraft.drafts.find(
-          (d: any) => d.candidate_id === dataCand.candidates[0].id,
-        );
-        setEditingDraft(matchedDraft || null);
+    const interval = setInterval(() => {
+      pollRunStatus();
+      fetchPendingApprovals();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeRunId, pollRunStatus, fetchPendingApprovals]);
+
+  // Trigger loading details when Gate 1 or Gate 2 is active
+  useEffect(() => {
+    if (!activeApproval) {
+      setActiveCriteria(null);
+      return;
+    }
+
+    if (activeApproval.stepId === 'smartrecruit.parseJd') {
+      const criteriaId = activeApproval.proposedPayload?.primary?.argsPatch?.criteriaId;
+      if (criteriaId) {
+        fetchCriteriaDetails(criteriaId);
       }
-    } catch (_err) {}
-  };
+    } else if (activeApproval.stepId === 'smartrecruit.draftOutreach') {
+      fetchCandidatesAndDrafts();
+    }
+  }, [activeApproval, fetchCriteriaDetails, fetchCandidatesAndDrafts]);
 
   // --- CV Upload Handler ---
   const handleCvUpload = async (file: File) => {
