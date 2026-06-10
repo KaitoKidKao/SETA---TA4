@@ -194,6 +194,10 @@ ${body}`,
     ? null
     : `Failed anti-hallucination check: ${verification?.reason}`;
 
+  if (!draftResult) {
+    throw new Error('LLM failed to generate email draft.');
+  }
+
   let savedId!: string;
   await withEmit(
     {
@@ -203,26 +207,30 @@ ${body}`,
       },
     },
     async (tx) => {
-      const id = crypto.randomUUID();
-      await tx.insert(outreachDrafts).values({
-        id,
-        tenant_id: input.session.tenant_id,
-        candidate_id: cand.id,
-        subject: draftResult?.subject,
-        body: draftResult?.body,
-        status: 'draft',
-        hallucination_check_status: checkStatus,
-        error_reason: errorReason,
-      });
-      savedId = id;
+      const [inserted] = await tx
+        .insert(outreachDrafts)
+        .values({
+          tenant_id: input.session.tenant_id,
+          candidate_id: cand.id,
+          subject: draftResult.subject,
+          body: draftResult.body,
+          status: 'draft',
+          hallucination_check_status: checkStatus,
+          error_reason: errorReason,
+        })
+        .returning();
+      if (!inserted) {
+        throw new Error('Failed to save outreach draft.');
+      }
+      savedId = inserted.id;
     },
   );
 
   return {
     id: savedId,
     candidateId: cand.id,
-    subject: draftResult?.subject,
-    body: draftResult?.body,
+    subject: draftResult.subject,
+    body: draftResult.body,
     hallucinationCheckStatus: checkStatus as 'passed' | 'failed',
     errorReason,
   };
