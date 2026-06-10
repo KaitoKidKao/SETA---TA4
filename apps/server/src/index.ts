@@ -26,6 +26,7 @@ import { closePools, getPool, initPools } from '@seta/shared-db';
 import { resolveEmbeddingProvider } from '@seta/shared-embeddings';
 import { createMailer } from '@seta/shared-mailer';
 import { OrchestrationRegistry } from '@seta/shared-orchestration';
+import { registerSmartrecruitContributions } from '@seta/smartrecruit/register';
 import {
   buildStaffingOrchestrationRuntime,
   makeAvailability,
@@ -80,6 +81,7 @@ registerKnowledgeContributions(reg);
 registerNotificationsContributions(reg);
 registerPlannerContributions(reg);
 registerStaffingContributions(reg);
+registerSmartrecruitContributions(reg);
 // MODULE_REGISTRATIONS_END — generator inserts new register*Contributions(reg) calls above this comment.
 registerAppContributions(reg);
 
