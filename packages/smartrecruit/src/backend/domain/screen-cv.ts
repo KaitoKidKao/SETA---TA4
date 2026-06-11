@@ -9,6 +9,7 @@ import { candidates, criteria } from '../db/schema.ts';
 import { getModelConfig } from './model.ts';
 
 export interface ScreenCvInput {
+  existingCandidateId?: string;
   candidateName: string;
   candidateEmail: string;
   candidatePhone?: string;
@@ -112,6 +113,12 @@ Analyze the candidate's CV and:
 Must-Have Skills: ${crit.must_have_skills.join(', ')}
 Nice-To-Have Skills: ${crit.nice_to_have_skills.join(', ')}
 Minimum YOE Required: ${crit.min_yoe}
+Maximum YOE Preferred: ${crit.max_yoe ?? 'Not specified'}
+English Level Required: ${crit.english_level_required ?? 'Not specified'}
+Domain Preferred: ${crit.domain_preferred ?? 'Not specified'}
+Scoring Weights: must-have=${crit.weight_must_have_skills}, yoe=${crit.weight_yoe}, english=${crit.weight_english}, nice-to-have=${crit.weight_nice_to_have}
+Auto-flag if missing: ${crit.auto_flag_if_missing ?? 'None'}
+Guardrail Notes: ${crit.guardrail_notes ?? 'None'}
 
 Candidate Name: ${input.candidateName}
 Candidate CV Content:
@@ -192,20 +199,43 @@ ${input.cvText}`,
       },
     },
     async (tx) => {
-      const id = crypto.randomUUID();
-      await tx.insert(candidates).values({
-        id,
-        tenant_id: input.session.tenant_id,
-        display_name: input.candidateName,
-        email: input.candidateEmail,
-        phone: input.candidatePhone ?? null,
-        cv_path: input.cvPath ?? null,
-        cv_text: input.cvText,
-        status,
-        fit_score: parsed.fitAnalysis.fitScore,
-        screening_report: screeningReport,
-      });
-      savedId = id;
+      if (input.existingCandidateId) {
+        await tx
+          .update(candidates)
+          .set({
+            display_name: input.candidateName,
+            email: input.candidateEmail,
+            phone: input.candidatePhone ?? null,
+            cv_path: input.cvPath ?? null,
+            cv_text: input.cvText,
+            status,
+            fit_score: parsed.fitAnalysis.fitScore,
+            screening_report: screeningReport,
+            updated_at: new Date(),
+          })
+          .where(
+            and(
+              eq(candidates.id, input.existingCandidateId),
+              eq(candidates.tenant_id, input.session.tenant_id),
+            ),
+          );
+        savedId = input.existingCandidateId;
+      } else {
+        const id = crypto.randomUUID();
+        await tx.insert(candidates).values({
+          id,
+          tenant_id: input.session.tenant_id,
+          display_name: input.candidateName,
+          email: input.candidateEmail,
+          phone: input.candidatePhone ?? null,
+          cv_path: input.cvPath ?? null,
+          cv_text: input.cvText,
+          status,
+          fit_score: parsed.fitAnalysis.fitScore,
+          screening_report: screeningReport,
+        });
+        savedId = id;
+      }
     },
   );
 

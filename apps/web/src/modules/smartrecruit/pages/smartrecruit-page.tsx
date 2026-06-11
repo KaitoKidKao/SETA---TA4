@@ -3,6 +3,7 @@
 // biome-ignore-all lint/a11y/noStaticElementInteractions: ignore static div onClick interactions
 // biome-ignore-all lint/a11y/useKeyWithClickEvents: ignore keyboard event warnings on click
 // biome-ignore-all lint/suspicious/noArrayIndexKey: ignore array index as key in loop
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, no-empty */
 import {
   Badge,
   Button,
@@ -49,6 +50,7 @@ interface UploadedCv {
 
 interface CriteriaState {
   id: string;
+  external_criteria_id?: string | null;
   job_title: string;
   jd_text: string;
   must_have_skills: string[];
@@ -114,6 +116,11 @@ export function SmartrecruitPage() {
   const [uploadedCvs, setUploadedCvs] = useState<UploadedCv[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [criteriaOptions, setCriteriaOptions] = useState<CriteriaState[]>([]);
+  const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
+  const [isImportingMockData, setIsImportingMockData] = useState(false);
+  const [isScreeningMockPool, setIsScreeningMockPool] = useState(false);
+  const [mockDataSummary, setMockDataSummary] = useState<string | null>(null);
 
   // Workflow run poll states
   const [activeApproval, setActiveApproval] = useState<any | null>(null);
@@ -143,7 +150,11 @@ export function SmartrecruitPage() {
   const fetchCriteriaList = useCallback(async () => {
     try {
       const res = await fetch('/api/smartrecruit/v1/criteria');
-      await res.json();
+      if (!res.ok) return;
+      const data = await res.json();
+      const rows = data.criteria ?? [];
+      setCriteriaOptions(rows);
+      setSelectedCriteriaId((current) => current || rows[0]?.id || '');
     } catch (_err) {}
   }, []);
 
@@ -375,6 +386,69 @@ export function SmartrecruitPage() {
       setActiveTab('active');
     } catch (err) {
       setErrorMsg((err as Error).message);
+    }
+  };
+
+  const handleImportMockData = async () => {
+    setIsImportingMockData(true);
+    setErrorMsg(null);
+    setMockDataSummary(null);
+    try {
+      const res = await fetch('/api/smartrecruit/v1/mock-data/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to import mock dataset.');
+      }
+
+      setMockDataSummary(
+        `Imported ${data.candidates.created} new and ${data.candidates.updated} updated candidates, ${data.criteria.created} new and ${data.criteria.updated} updated criteria, ${data.templates.created} new and ${data.templates.updated} updated templates.`,
+      );
+      await fetchCriteriaList();
+      await fetchCandidatesAndDrafts();
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setIsImportingMockData(false);
+    }
+  };
+
+  const handleScreenMockPool = async () => {
+    if (!selectedCriteriaId) {
+      setErrorMsg('Please import mock data and select screening criteria first.');
+      return;
+    }
+
+    setIsScreeningMockPool(true);
+    setErrorMsg(null);
+    setMockDataSummary(null);
+    try {
+      const res = await fetch(
+        `/api/smartrecruit/v1/criteria/${selectedCriteriaId}/screen-candidates`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 25, includeAlreadyScreened: true }),
+        },
+      );
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to screen candidate pool.');
+      }
+
+      setMockDataSummary(
+        `Screened ${data.screened} candidates from the mock pool. ${data.skipped} candidates were skipped.`,
+      );
+      await fetchCandidatesAndDrafts();
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setIsScreeningMockPool(false);
     }
   };
 
@@ -627,6 +701,64 @@ export function SmartrecruitPage() {
                       className="border-hairline resize-none"
                     />
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm border-hairline bg-canvas/40">
+                <CardHeader>
+                  <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                    <RefreshCw className="size-4 text-primary" />
+                    Mock Dataset Mode
+                  </CardTitle>
+                  <CardDescription className="text-eyebrow">
+                    Import DS-06 candidates, DS-07 criteria, and DS-08 outreach templates from the
+                    assignment workbook.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      onClick={handleImportMockData}
+                      disabled={isImportingMockData || isScreeningMockPool}
+                      variant="secondary"
+                      className="w-full justify-center gap-2"
+                    >
+                      <Upload className="size-4" />
+                      {isImportingMockData ? 'Importing dataset...' : 'Import Mock Dataset'}
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-body-sm font-medium text-ink">Screening Criteria</label>
+                    <select
+                      value={selectedCriteriaId}
+                      onChange={(e) => setSelectedCriteriaId(e.target.value)}
+                      className="h-10 rounded-md border border-hairline bg-surface px-3 text-body-sm text-ink"
+                    >
+                      <option value="">Select criteria</option>
+                      {criteriaOptions.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.external_criteria_id ? `${item.external_criteria_id} - ` : ''}
+                          {item.job_title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <Button
+                    onClick={handleScreenMockPool}
+                    disabled={!selectedCriteriaId || isImportingMockData || isScreeningMockPool}
+                    className="w-full justify-center gap-2"
+                  >
+                    <Play className="size-4 fill-current" />
+                    {isScreeningMockPool ? 'Screening candidate pool...' : 'Run Pool Screening'}
+                  </Button>
+
+                  {mockDataSummary && (
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
+                      {mockDataSummary}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 

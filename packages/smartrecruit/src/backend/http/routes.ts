@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv } from '@seta/core';
 import { and, desc, eq } from 'drizzle-orm';
@@ -9,8 +10,10 @@ import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria, outreachDrafts, outreachTemplates } from '../db/schema.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
+import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
+import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
 
 const parseJdSchema = z.object({
@@ -25,6 +28,15 @@ const screenCvSchema = z.object({
   cvPath: z.string().optional(),
   cvText: z.string().min(1),
   criteriaId: z.string().uuid(),
+});
+
+const importMockDataSchema = z.object({
+  filePath: z.string().min(1).optional(),
+});
+
+const screenCandidatePoolSchema = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  includeAlreadyScreened: z.boolean().optional(),
 });
 
 const draftOutreachSchema = z.object({
@@ -51,6 +63,28 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     const session = c.get('user');
     requirePermission(session, SMARTRECRUIT_ACCESS);
     await next();
+  });
+
+  // --- Mock Dataset Import ---
+  app.post('/api/smartrecruit/v1/mock-data/import', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = importMockDataSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const filePath = resolve(
+      process.cwd(),
+      parsed.data.filePath ?? 'mock-data/04_ta_cv_screening.xlsx',
+    );
+    const result = await importSmartrecruitMockData({
+      filePath,
+      session,
+    });
+
+    return c.json({ filePath, ...result });
   });
 
   // --- File Upload & PDF Extraction (OCR Fallback) ---
@@ -228,6 +262,23 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       .returning();
 
     return c.json(updated);
+  });
+
+  app.post('/api/smartrecruit/v1/criteria/:id/screen-candidates', async (c) => {
+    const session = c.get('user');
+    const parsed = screenCandidatePoolSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const result = await screenCandidatePool({
+      criteriaId: c.req.param('id'),
+      limit: parsed.data.limit,
+      includeAlreadyScreened: parsed.data.includeAlreadyScreened,
+      session,
+    });
+
+    return c.json(result);
   });
 
   // --- Candidates & Scorecard Endpoints ---

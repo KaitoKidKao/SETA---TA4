@@ -8,6 +8,13 @@
       "when": 1781083092848,
       "tag": "0000_magenta_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781193110321,
+      "tag": "0001_chubby_nekra",
+      "breakpoints": true
     }
   ]
 }
