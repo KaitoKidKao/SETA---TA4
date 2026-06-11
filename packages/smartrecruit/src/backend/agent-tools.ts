@@ -84,7 +84,7 @@ export const smartrecruitScreenCvTool = defineAgentTool({
     }),
   }),
   rbac: SMARTRECRUIT_WRITE,
-  needsApproval: false,
+  needsApproval: true,
   execute: async (input, ctx) => {
     const actor = actorFromContext(ctx);
     const session = await buildActorSession({ user_id: actor.user_id });

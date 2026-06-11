@@ -75,3 +75,5 @@ AWS-CREDENTIALS.txt
 team-4
 
 mock-data/*
+
+* text=auto eol=lf

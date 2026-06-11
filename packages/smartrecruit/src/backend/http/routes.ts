@@ -32,6 +32,14 @@ const draftOutreachSchema = z.object({
   templateId: z.string().uuid().optional(),
 });
 
+const updateCriteriaSchema = z.object({
+  mustHaveSkills: z.array(z.string()),
+  niceToHaveSkills: z.array(z.string()),
+  minYoe: z.number().int().min(0),
+  educationLevel: z.string().nullable(),
+  additionalRequirements: z.string().nullable(),
+});
+
 const updateDraftSchema = z.object({
   subject: z.string().min(1),
   body: z.string().min(1),
@@ -71,14 +79,24 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
           .filter(Boolean)
           .join('\n');
       } catch (err) {
-        // Fallback OCR Simulator
-        text = `[OCR FALLBACK RESULT - PARSE ERROR: ${(err as Error).message}]\n`;
-        // Add fallback content placeholder based on file name
-        text += `Candidate: ${file.name.replace(/\.[^/.]+$/, '')}\nSkills: JavaScript, Node.js, React, SQL\nExperience: Senior Software Engineer at TechCorp (2020-present).\n`;
+        return c.json(
+          {
+            error: 'CV_TEXT_EXTRACTION_FAILED',
+            message: 'Unable to extract text from the uploaded CV file.',
+            details: (err as Error).message,
+          },
+          422,
+        );
       }
 
       if (!text.trim()) {
-        text = `[OCR FALLBACK RESULT - EMPTY PDF]\nCandidate Profile\nSkills: Python, Django, PostgreSQL\nExperience: Backend Developer at WebSoft (2022-2025).\n`;
+        return c.json(
+          {
+            error: 'CV_TEXT_EMPTY',
+            message: 'The uploaded CV file did not contain extractable text.',
+          },
+          422,
+        );
       }
 
       return c.json({
@@ -174,6 +192,42 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       return c.json({ error: 'NOT_FOUND', message: 'Criteria not found' }, 404);
     }
     return c.json(row);
+  });
+
+  app.patch('/api/smartrecruit/v1/criteria/:id', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = updateCriteriaSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const [existing] = await db
+      .select()
+      .from(criteria)
+      .where(and(eq(criteria.id, c.req.param('id')), eq(criteria.tenant_id, session.tenant_id)))
+      .limit(1);
+
+    if (!existing) {
+      return c.json({ error: 'NOT_FOUND', message: 'Criteria not found' }, 404);
+    }
+
+    const [updated] = await db
+      .update(criteria)
+      .set({
+        must_have_skills: parsed.data.mustHaveSkills,
+        nice_to_have_skills: parsed.data.niceToHaveSkills,
+        min_yoe: parsed.data.minYoe,
+        education_level: parsed.data.educationLevel,
+        additional_requirements: parsed.data.additionalRequirements,
+        updated_at: new Date(),
+      })
+      .where(and(eq(criteria.id, existing.id), eq(criteria.tenant_id, session.tenant_id)))
+      .returning();
+
+    return c.json(updated);
   });
 
   // --- Candidates & Scorecard Endpoints ---

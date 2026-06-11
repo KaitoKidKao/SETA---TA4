@@ -1,0 +1,745 @@
+==================================================
+FILE: 03_ta_hire_request_jd_generation.xlsx
+==================================================
+
+--- Sheet: LEGEND & SUMMARY (Total rows: 130) ---
+Columns: TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset | TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset | TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset | TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset | TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset
+
+Row 2:
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+Row 3:
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: 
+Row 4:
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: Sheet
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: Grain (1 row =)
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: Field
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: Type
+  - TA 03 – JD Creation & Shortlist Review Agent  |  Mock Dataset: Example
+
+--- Sheet: DS01_Business_Context (Total rows: 24) ---
+Columns: context_id | project_name | business_unit | business_roadmap_summary | strategic_priority | project_stage | requested_by | request_date | team_size_current | hiring_urgency | budget_approved | additional_context
+
+Row 2:
+  - context_id: CTX-001
+  - project_name: Project Alpha
+  - business_unit: Engineering
+  - business_roadmap_summary: Scale Backend team to support new microservices migration in Q3 2025
+  - strategic_priority: High
+  - project_stage: Scale-up
+  - requested_by: Mr. Duc Nguyen (VP Eng)
+  - request_date: "2025-03-01T00:00:00.000Z"
+  - team_size_current: 12
+  - hiring_urgency: Immediate
+  - budget_approved: Y
+  - additional_context: Current monolith causes 40% latency on peak hours. Need 3 BE devs with distribut...
+Row 3:
+  - context_id: CTX-002
+  - project_name: Project Beta
+  - business_unit: Product – Mobile
+  - business_roadmap_summary: Build mobile engineering team for cross-platform app launch Q4 2025
+  - strategic_priority: High
+  - project_stage: Active
+  - requested_by: Ms. Trang Le (Product Director)
+  - request_date: "2025-03-10T00:00:00.000Z"
+  - team_size_current: 5
+  - hiring_urgency: Q-target
+  - budget_approved: Y
+  - additional_context: App launch locked to Nov 2025. iOS and Android scope confirmed. Need RN devs fam...
+Row 4:
+  - context_id: CTX-003
+  - project_name: Project Gamma
+  - business_unit: Engineering – QA
+  - business_roadmap_summary: Strengthen QA automation capabilities for CI/CD pipeline improvement
+  - strategic_priority: Medium
+  - project_stage: Active
+  - requested_by: Mr. Nam Pham (QA Lead)
+  - request_date: "2025-03-15T00:00:00.000Z"
+  - team_size_current: 8
+  - hiring_urgency: Q-target
+  - budget_approved: Y
+  - additional_context: Current manual QA coverage at 35%. Target 80% automation coverage by Q4. 2 QA en...
+
+--- Sheet: DS02_Headcount_Plan (Total rows: 31) ---
+Columns: hc_plan_id | context_id | position | seniority_level | headcount | filled_count | salary_range | approval_status | approved_by | priority | target_start_date | jd_status | linked_jd_id
+
+Row 2:
+  - hc_plan_id: HC-2025-Q2-001
+  - context_id: CTX-001
+  - position: Senior Backend Developer
+  - seniority_level: Senior
+  - headcount: 3
+  - filled_count: 0
+  - salary_range: $1500–$2500/month
+  - approval_status: Approved
+  - approved_by: Mr. Hung Nguyen
+  - priority: P1-Critical
+  - target_start_date: "2026-07-01T00:00:00.000Z"
+  - jd_status: In Draft
+  - linked_jd_id: JD-BE-SR-001
+Row 3:
+  - hc_plan_id: HC-2025-Q2-002
+  - context_id: CTX-002
+  - position: Mobile Developer (React Native)
+  - seniority_level: Mid
+  - headcount: 2
+  - filled_count: 0
+  - salary_range: $1200–$2000/month
+  - approval_status: Approved
+  - approved_by: Ms. Trang Le
+  - priority: P2-High
+  - target_start_date: "2026-08-01T00:00:00.000Z"
+  - jd_status: Ready
+  - linked_jd_id: JD-MOB-MID-001
+Row 4:
+  - hc_plan_id: HC-2025-Q2-008
+  - context_id: CTX-008
+  - position: Backend Developer
+  - seniority_level: Mid
+  - headcount: 2
+  - filled_count: 0
+  - salary_range: $1800–$2500/month
+  - approval_status: Approved
+  - approved_by: Mr. Minh Nguyen
+  - priority: P1-Critical
+  - target_start_date: "2025-07-01T00:00:00.000Z"
+  - jd_status: Ready
+  - linked_jd_id: JD-BE-MID-001
+
+--- Sheet: DS03_JD_Template (Total rows: 17) ---
+Columns: jd_id | hc_plan_id | context_id | position | jd_type | jd_version | status | last_updated | min_yoe | max_yoe | seniority_level | must_have_skills | nice_to_have_skills | english_level_required | work_mode | salary_range | key_responsibilities | jd_full_text
+
+Row 2:
+  - jd_id: JD-AI-SR-001
+  - hc_plan_id: HC-2025-Q4-001
+  - context_id: CTX-006
+  - position: AI/ML Engineer
+  - jd_type: Template
+  - jd_version: v1.1
+  - status: In Draft
+  - last_updated: "2025-03-25T00:00:00.000Z"
+  - min_yoe: 3
+  - max_yoe: 
+  - seniority_level: Senior
+  - must_have_skills: Python, PyTorch or TensorFlow, Model training & evaluation end-to-end, Statistic...
+  - nice_to_have_skills: MLOps (MLflow/Kubeflow/W&B), LLM fine-tuning (LoRA/QLoRA), HuggingFace Transform...
+  - english_level_required: B2
+  - work_mode: Hybrid
+  - salary_range: $2000–$3500/month
+  - key_responsibilities: • Train, fine-tune and evaluate LLMs and task-specific models • Build model serv...
+  - jd_full_text: ## AI/ML Engineer – SETA International ### About the Team SETA's AI team is buil...
+Row 3:
+  - jd_id: JD-BE-SR-001
+  - hc_plan_id: HC-2025-Q2-001
+  - context_id: CTX-001
+  - position: Senior Backend Developer
+  - jd_type: Template
+  - jd_version: v2.1
+  - status: In Draft
+  - last_updated: "2025-03-20T00:00:00.000Z"
+  - min_yoe: 4
+  - max_yoe: 
+  - seniority_level: Senior
+  - must_have_skills: Python (3+ yrs production), PostgreSQL/SQL (advanced), RESTful API design, Micro...
+  - nice_to_have_skills: Docker, Redis, Apache Kafka, Cloud (AWS or GCP), System design, Kubernetes
+  - english_level_required: B2
+  - work_mode: Hybrid
+  - salary_range: $1500–$2500/month
+  - key_responsibilities: • Design & own scalable BE microservices (Python/FastAPI) • PostgreSQL schema de...
+  - jd_full_text: ## Senior Backend Developer – SETA International ### About the Role We are scali...
+Row 4:
+  - jd_id: JD-DE-SR-001
+  - hc_plan_id: HC-2025-Q3-002
+  - context_id: CTX-004
+  - position: Data Engineer
+  - jd_type: Template
+  - jd_version: v3.1
+  - status: Ready
+  - last_updated: "2025-03-18T00:00:00.000Z"
+  - min_yoe: 3
+  - max_yoe: 
+  - seniority_level: Senior
+  - must_have_skills: Python, SQL (advanced: window functions, CTEs, query optimization), ETL/ELT pipe...
+  - nice_to_have_skills: Apache Spark (PySpark), Apache Airflow, dbt, Kafka/Pub-Sub, GCP stack (Dataflow,...
+  - english_level_required: B1
+  - work_mode: Remote
+  - salary_range: $1800–$3000/month
+  - key_responsibilities: • Design & own ETL/ELT pipelines ingesting 100GB+/day • Build dbt transformation...
+  - jd_full_text: ## Senior Data Engineer – SETA International ### About the Role SETA's Data Plat...
+
+--- Sheet: DS04_Team_Skills_Matrix (Total rows: 105) ---
+Columns: member_id | member_role | team_name | seniority_level | skill | proficiency_level | last_assessed
+
+Row 2:
+  - member_id: EMP-011
+  - member_role: Backend Engineer
+  - team_name: Platform Team
+  - seniority_level: Senior
+  - skill: Docker
+  - proficiency_level: Intermediate
+  - last_assessed: "2025-01-15T00:00:00.000Z"
+Row 3:
+  - member_id: EMP-011
+  - member_role: Backend Engineer
+  - team_name: Platform Team
+  - seniority_level: Senior
+  - skill: FastAPI
+  - proficiency_level: Advanced
+  - last_assessed: "2025-01-15T00:00:00.000Z"
+Row 4:
+  - member_id: EMP-011
+  - member_role: Backend Engineer
+  - team_name: Platform Team
+  - seniority_level: Senior
+  - skill: PostgreSQL
+  - proficiency_level: Advanced
+  - last_assessed: "2025-01-15T00:00:00.000Z"
+
+--- Sheet: DS05_Scorecard (Total rows: 36) ---
+Columns: scorecard_id | role | scorecard_version | interview_stage | criteria | weight | description | passing_threshold | sample_questions
+
+Row 2:
+  - scorecard_id: SC-BE-SR-001
+  - role: Senior Backend Developer
+  - scorecard_version: v2.0
+  - interview_stage: System Design Round
+  - criteria: System Design
+  - weight: 0.3
+  - description: Evaluate ability to design scalable distributed systems: service decomposition, ...
+  - passing_threshold: Score ≥ 3/5 required
+  - sample_questions: 1. Design a URL shortener handling 1M req/day. Walk through data model, API, cac...
+Row 3:
+  - scorecard_id: SC-BE-SR-001
+  - role: Senior Backend Developer
+  - scorecard_version: v2.0
+  - interview_stage: Technical Test (Live)
+  - criteria: Coding Test (Live)
+  - weight: 0.25
+  - description: Live coding: algorithms + Python proficiency + clean code practices
+  - passing_threshold: Score ≥ 3/5 required
+  - sample_questions: 1. Write a Python function to flatten a nested dict. 2. Implement a rate limiter...
+Row 4:
+  - scorecard_id: SC-BE-SR-001
+  - role: Senior Backend Developer
+  - scorecard_version: v2.0
+  - interview_stage: 
+  - criteria: Technical Knowledge (Python/FastAPI)
+  - weight: 0.2
+  - description: 
+  - passing_threshold: 
+  - sample_questions: 
+
+--- Sheet: DS06_Hire_Request (Total rows: 28) ---
+Columns: request_id | context_id | hc_plan_id | request_date | requesting_manager | position_title | urgency_level | headcount_requested | business_justification | team_skill_gap_summary | key_deliverables | approval_status | approved_by | approval_date | hr_owner | target_jd_id | request_status | notes
+
+Row 2:
+  - request_id: REQ-001
+  - context_id: CTX-001
+  - hc_plan_id: HC-2025-Q2-001
+  - request_date: "2025-03-01T00:00:00.000Z"
+  - requesting_manager: Mr. Duc Nguyen (VP Eng)
+  - position_title: Senior Backend Developer
+  - urgency_level: Immediate
+  - headcount_requested: 3
+  - business_justification: Monolith-to-microservices migration locked to Q3 2025. Current team of 3 BE devs...
+  - team_skill_gap_summary: No Kafka experience in team. No Redis production experience. Only 1 engineer (EM...
+  - key_deliverables: Own microservices rewrite of payment and order modules; define API contracts; se...
+  - approval_status: Approved
+  - approved_by: CHRO office
+  - approval_date: "2025-03-03T00:00:00.000Z"
+  - hr_owner: Nguyen Thi Lan (TA Lead)
+  - target_jd_id: JD-BE-SR-001
+  - request_status: JD Draft
+  - notes: Shortlist of 6 CVs sent to HM on 2025-04-01. Awaiting feedback.
+Row 3:
+  - request_id: REQ-002
+  - context_id: CTX-002
+  - hc_plan_id: HC-2025-Q2-002
+  - request_date: "2025-03-10T00:00:00.000Z"
+  - requesting_manager: Ms. Trang Le (Product Director)
+  - position_title: Mobile Developer (React Native)
+  - urgency_level: High
+  - headcount_requested: 2
+  - business_justification: App launch deadline Nov 2025 is board-level commitment. Current mobile team is i...
+  - team_skill_gap_summary: No React Native in team. No TypeScript mobile experience. Need cross-platform ex...
+  - key_deliverables: Build cross-platform app from scratch (React Native); own release pipeline (Fast...
+  - approval_status: Approved
+  - approved_by: Ms. Trang Le
+  - approval_date: "2025-03-12T00:00:00.000Z"
+  - hr_owner: Tran Van Minh
+  - target_jd_id: JD-MOB-MID-001
+  - request_status: Active Sourcing
+  - notes: JD approved. Sourcing in progress via LinkedIn + TopCV.
+Row 4:
+  - request_id: REQ-003
+  - context_id: CTX-003
+  - hc_plan_id: HC-2025-Q3-001
+  - request_date: "2025-03-15T00:00:00.000Z"
+  - requesting_manager: Mr. Nam Pham (QA Lead)
+  - position_title: QA Automation Engineer
+  - urgency_level: High
+  - headcount_requested: 2
+  - business_justification: Current manual QA coverage is 35%. Regression cycle takes 5 days. Target: 80% au...
+  - team_skill_gap_summary: No Playwright expertise. Only 1 junior QA engineer with basic Selenium. No CI/CD...
+  - key_deliverables: Build automation framework from scratch (Playwright + Python); integrate with Gi...
+  - approval_status: Approved
+  - approved_by: Mr. Nam Pham
+  - approval_date: "2025-03-17T00:00:00.000Z"
+  - hr_owner: Le Thi Hoa
+  - target_jd_id: JD-QA-MID-001
+  - request_status: Not Started
+  - notes: JD draft pending. TA to start sourcing in April.
+
+--- Sheet: DS07_Shortlist_CVs (Total rows: 34) ---
+Columns: cv_id | request_id | hc_plan_id | jd_id | candidate_id | full_name | current_title | current_company | past_companies | years_of_experience | cv_skills | english_level | salary_expectation | shortlisted_by | shortlisted_date | cv_summary_by_ta | agent_recommendation | agent_fit_score | agent_fit_summary | agent_gap_summary | agent_suggested_questions | agent_shortlist_rank
+
+Row 2:
+  - cv_id: CV-001
+  - request_id: REQ-001
+  - hc_plan_id: HC-2025-Q2-001
+  - jd_id: JD-BE-SR-001
+  - candidate_id: CAND-1001
+  - full_name: Candidate A
+  - current_title: Senior Backend Engineer
+  - current_company: Techcombank
+  - past_companies: VNG, TikiNow
+  - years_of_experience: 6
+  - cv_skills: Python, FastAPI, PostgreSQL, Redis, Kafka, Docker, AWS
+  - english_level: C1
+  - salary_expectation: $1800–$2500
+  - shortlisted_by: Nguyen Thi Lan
+  - shortlisted_date: "2025-04-01T00:00:00.000Z"
+  - cv_summary_by_ta: Strong fit. 6yr Python, Fintech background (Techcombank). Has Kafka production e...
+  - agent_recommendation: 
+  - agent_fit_score: 
+  - agent_fit_summary: 
+  - agent_gap_summary: 
+  - agent_suggested_questions: 
+  - agent_shortlist_rank: 
+Row 3:
+  - cv_id: CV-002
+  - request_id: REQ-001
+  - hc_plan_id: HC-2025-Q2-001
+  - jd_id: JD-BE-SR-001
+  - candidate_id: CAND-1002
+  - full_name: Candidate B
+  - current_title: Backend Tech Lead
+  - current_company: MoMo
+  - past_companies: Viettel Digital, SePay
+  - years_of_experience: 8
+  - cv_skills: Python, Django, FastAPI, PostgreSQL, Kafka, Redis, Kubernetes
+  - english_level: B2
+  - salary_expectation: $2200–$3000
+  - shortlisted_by: Nguyen Thi Lan
+  - shortlisted_date: "2025-04-01T00:00:00.000Z"
+  - cv_summary_by_ta: Very strong. Lead-level, 8yr exp. Kafka + Kubernetes are big plusses. Salary at ...
+  - agent_recommendation: 
+  - agent_fit_score: 
+  - agent_fit_summary: 
+  - agent_gap_summary: 
+  - agent_suggested_questions: 
+  - agent_shortlist_rank: 
+Row 4:
+  - cv_id: CV-003
+  - request_id: REQ-001
+  - hc_plan_id: HC-2025-Q2-001
+  - jd_id: JD-BE-SR-001
+  - candidate_id: CAND-1003
+  - full_name: Candidate C
+  - current_title: Backend Engineer
+  - current_company: KMS Technology
+  - past_companies: Nashtech, Global CyberSoft
+  - years_of_experience: 5
+  - cv_skills: Python, Flask, FastAPI, PostgreSQL, SQLAlchemy, Docker
+  - english_level: B2
+  - salary_expectation: $1600–$2200
+  - shortlisted_by: Tran Van Minh
+  - shortlisted_date: "2025-04-01T00:00:00.000Z"
+  - cv_summary_by_ta: Good Python/Postgres. 5yr exp. No Kafka/Redis in skills. Works in outsourcing – ...
+  - agent_recommendation: 
+  - agent_fit_score: 
+  - agent_fit_summary: 
+  - agent_gap_summary: 
+  - agent_suggested_questions: 
+  - agent_shortlist_rank: 
+
+--- Sheet: DS08_HM_Feedback_Tracker (Total rows: 33) ---
+Columns: feedback_id | cv_id | request_id | jd_id | candidate_name | position | hiring_manager | shortlisted_datetime | feedback_deadline_48h | sla_breach | reminder_24h_sent | reminder_36h_sent | escalation_48h_sent | feedback_status | hm_decision | feedback_submitted_datetime | hm_feedback_text
+
+Row 2:
+  - feedback_id: FB-001
+  - cv_id: CV-001
+  - request_id: REQ-001
+  - jd_id: JD-BE-SR-001
+  - candidate_name: Candidate A
+  - position: Senior Backend Developer
+  - hiring_manager: Mr. Duc Nguyen
+  - shortlisted_datetime: "2025-04-01T14:30:00.000Z"
+  - feedback_deadline_48h: "2025-04-03T14:30:00.000Z"
+  - sla_breach: N
+  - reminder_24h_sent: 2025-04-02 14:30:00
+  - reminder_36h_sent: 
+  - escalation_48h_sent: 
+  - feedback_status: Submitted
+  - hm_decision: Pass
+  - feedback_submitted_datetime: "2025-04-02T10:15:00.000Z"
+  - hm_feedback_text: Strong system design answers. Kafka migration project directly relevant. Approve...
+Row 3:
+  - feedback_id: FB-002
+  - cv_id: CV-002
+  - request_id: REQ-001
+  - jd_id: JD-BE-SR-001
+  - candidate_name: Candidate B
+  - position: Senior Backend Developer
+  - hiring_manager: Mr. Duc Nguyen
+  - shortlisted_datetime: "2025-04-01T14:30:00.000Z"
+  - feedback_deadline_48h: "2025-04-03T14:30:00.000Z"
+  - sla_breach: N
+  - reminder_24h_sent: 2025-04-02 14:30:00
+  - reminder_36h_sent: 
+  - escalation_48h_sent: 
+  - feedback_status: Submitted
+  - hm_decision: Pass
+  - feedback_submitted_datetime: "2025-04-02T11:00:00.000Z"
+  - hm_feedback_text: Lead-level background impressive. Kubernetes experience is a bonus. Salary at ma...
+Row 4:
+  - feedback_id: FB-003
+  - cv_id: CV-003
+  - request_id: REQ-001
+  - jd_id: JD-BE-SR-001
+  - candidate_name: Candidate C
+  - position: Senior Backend Developer
+  - hiring_manager: Mr. Duc Nguyen
+  - shortlisted_datetime: "2025-04-01T14:30:00.000Z"
+  - feedback_deadline_48h: "2025-04-03T14:30:00.000Z"
+  - sla_breach: N
+  - reminder_24h_sent: 2025-04-02 14:30:00
+  - reminder_36h_sent: 
+  - escalation_48h_sent: 
+  - feedback_status: Submitted
+  - hm_decision: Need More Info
+  - feedback_submitted_datetime: "2025-04-02T16:45:00.000Z"
+  - hm_feedback_text: Unclear about Kafka/Redis ownership. Healthcare domain only. Ask: has he designe...
+
+
+==================================================
+FILE: 04_ta_cv_screening.xlsx
+==================================================
+
+--- Sheet: LEGEND & SUMMARY (Total rows: 110) ---
+Columns: 
+
+Row 2:
+  - 
+Row 3:
+  - 
+Row 4:
+  - 
+
+--- Sheet: DS-06_Candidate_Database (Total rows: 91) ---
+Columns: candidate_id | full_name | email | phone | location | applied_position | current_title | current_company | past_companies | years_of_experience | seniority_level | domain_experience | employment_history | notable_projects | salary_expectation | cv_skills | english_level | highest_education | education_major | certifications | github_url | status | pipeline_stage | source | received_cv_date | last_contact_date | result_release_date | recruiter_owner | rejection_reason | re_engagement_eligible | re_engagement_notes
+
+Row 2:
+  - candidate_id: CAND-1001
+  - full_name: Candidate A
+  - email: cand_1001@mock.com
+  - phone: 09x-xxx-x001
+  - location: Ho Chi Minh City
+  - applied_position: Senior Backend Developer
+  - current_title: Senior Backend Engineer
+  - current_company: Techcombank
+  - past_companies: VNG, TikiNow
+  - years_of_experience: 6
+  - seniority_level: Senior
+  - domain_experience: Fintech, E-commerce
+  - employment_history: Techcombank (2022–present), VNG (2019–2022), TikiNow (2017–2019)
+  - notable_projects: Core Banking API serving 2M txn/day; Microservices migration from monolith reduc...
+  - salary_expectation: $1800–$2500
+  - cv_skills: Python, FastAPI, PostgreSQL, Redis, Docker, Kafka, RabbitMQ, AWS
+  - english_level: C1
+  - highest_education: Bachelor
+  - education_major: Computer Science
+  - certifications: AWS Solutions Architect, CKAD
+  - github_url: github.com/cand_1001
+  - status: In-pool
+  - pipeline_stage: CV Review
+  - source: LinkedIn
+  - received_cv_date: "2025-01-10T00:00:00.000Z"
+  - last_contact_date: "2025-01-15T00:00:00.000Z"
+  - result_release_date: 
+  - recruiter_owner: Nguyen Thi Lan
+  - rejection_reason: 
+  - re_engagement_eligible: Y
+  - re_engagement_notes: Strong Python + Fintech background. Re-engage for JD-001.
+Row 3:
+  - candidate_id: CAND-1002
+  - full_name: Candidate B
+  - email: cand_1002@mock.com
+  - phone: 09x-xxx-x002
+  - location: Hanoi
+  - applied_position: Senior Backend Developer
+  - current_title: Backend Tech Lead
+  - current_company: MoMo
+  - past_companies: Viettel Digital, SePay
+  - years_of_experience: 8
+  - seniority_level: Lead
+  - domain_experience: Fintech, Payment
+  - employment_history: MoMo (2021–present), Viettel Digital (2018–2021), SePay (2016–2018)
+  - notable_projects: E-wallet payment flow handling peak 800K req/min; Led 5-person backend squad for...
+  - salary_expectation: $2200–$3000
+  - cv_skills: Python, Django, FastAPI, PostgreSQL, MySQL, Celery, Redis, Kafka, Docker, Kubern...
+  - english_level: B2
+  - highest_education: Master
+  - education_major: Software Engineering
+  - certifications: GCP Professional Data Engineer
+  - github_url: github.com/cand_1002
+  - status: Passed
+  - pipeline_stage: Phone Screen
+  - source: LinkedIn
+  - received_cv_date: "2025-02-03T00:00:00.000Z"
+  - last_contact_date: "2025-02-10T00:00:00.000Z"
+  - result_release_date: "2025-02-20T00:00:00.000Z"
+  - recruiter_owner: Nguyen Thi Lan
+  - rejection_reason: 
+  - re_engagement_eligible: N
+  - re_engagement_notes: Already passed – in active pipeline
+Row 4:
+  - candidate_id: CAND-1003
+  - full_name: Candidate C
+  - email: cand_1003@mock.com
+  - phone: 09x-xxx-x003
+  - location: Ho Chi Minh City
+  - applied_position: Senior Backend Developer
+  - current_title: Backend Engineer
+  - current_company: KMS Technology
+  - past_companies: Nashtech, Global CyberSoft
+  - years_of_experience: 5
+  - seniority_level: Senior
+  - domain_experience: Healthcare, SaaS
+  - employment_history: KMS Technology (2022–present), Nashtech (2019–2022), Global CyberSoft (2018–2019...
+  - notable_projects: HIPAA-compliant REST API for telehealth platform; Reduced DB query time 60% via ...
+  - salary_expectation: $1600–$2200
+  - cv_skills: Python, Flask, FastAPI, PostgreSQL, SQLAlchemy, Docker, Jenkins, Elasticsearch
+  - english_level: B2
+  - highest_education: Bachelor
+  - education_major: Information Technology
+  - certifications: 
+  - github_url: github.com/cand_1003
+  - status: Applied
+  - pipeline_stage: CV Review
+  - source: TopCV
+  - received_cv_date: "2025-03-01T00:00:00.000Z"
+  - last_contact_date: "2025-03-05T00:00:00.000Z"
+  - result_release_date: 
+  - recruiter_owner: Tran Van Minh
+  - rejection_reason: 
+  - re_engagement_eligible: Y
+  - re_engagement_notes: Good YOE and Python, lacks Kafka/cloud experience
+
+--- Sheet: DS-06b_Candidate_Skills (Total rows: 387) ---
+Columns: candidate_code | skill_code | skill_name | category_name
+
+Row 2:
+  - candidate_code: CAND-1001
+  - skill_code: aws
+  - skill_name: AWS
+  - category_name: Technical
+Row 3:
+  - candidate_code: CAND-1001
+  - skill_code: docker
+  - skill_name: Docker
+  - category_name: Technical
+Row 4:
+  - candidate_code: CAND-1001
+  - skill_code: fastapi
+  - skill_name: FastAPI
+  - category_name: Technical
+
+--- Sheet: DS-07_Screening_Criteria (Total rows: 28) ---
+Columns: criteria_id | jd_id | position | must_have_skills | nice_to_have_skills | tech_stack_preferred | seniority_required | min_yoe | max_yoe | english_level_required | domain_preferred | work_mode | salary_budget_max | employment_type | weight_must_have_skills | weight_yoe | weight_english | weight_nice_to_have | scoring_note | auto_flag_if_missing | guardrail_notes
+
+Row 2:
+  - criteria_id: SCR-AI-001
+  - jd_id: JD-002
+  - position: AI/ML Engineer
+  - must_have_skills: Python, ML framework (PyTorch or TensorFlow), Model training & evaluation, Stati...
+  - nice_to_have_skills: MLOps (MLflow/Kubeflow), LLM fine-tuning, Cloud ML services (Vertex AI/SageMaker...
+  - tech_stack_preferred: Python + PyTorch + HuggingFace + FastAPI (for serving)
+  - seniority_required: Senior
+  - min_yoe: 3
+  - max_yoe: —
+  - english_level_required: B2
+  - domain_preferred: NLP, Computer Vision, Conversational AI, HealthTech
+  - work_mode: Hybrid or Remote
+  - salary_budget_max: $3500
+  - employment_type: Full-time
+  - weight_must_have_skills: 50
+  - weight_yoe: 15
+  - weight_english: 15
+  - weight_nice_to_have: 20
+  - scoring_note: Must-have: 50pt. YOE 3yr=10pt, 5yr+=15pt. MLOps=10pt, LLM fine-tuning=8pt, Resea...
+  - auto_flag_if_missing: Python, PyTorch or TensorFlow
+  - guardrail_notes: Purely research profile with no deployment experience → flag Medium, not High.
+Row 3:
+  - criteria_id: SCR-AI-002
+  - jd_id: JD-021
+  - position: AI Agent Engineer
+  - must_have_skills: Python, LLM, Prompt Engineering
+  - nice_to_have_skills: LangChain, Vector DB
+  - tech_stack_preferred: Python + LangChain + OpenAI API
+  - seniority_required: Senior
+  - min_yoe: 4
+  - max_yoe: 8
+  - english_level_required: B2
+  - domain_preferred: AI Product, SaaS
+  - work_mode: Hybrid
+  - salary_budget_max: 3500
+  - employment_type: Full-time
+  - weight_must_have_skills: 50
+  - weight_yoe: 20
+  - weight_english: 15
+  - weight_nice_to_have: 15
+  - scoring_note: Must-have: LLM/Python/Prompting
+  - auto_flag_if_missing: Python, LLM
+  - guardrail_notes: No deployed AI use case → flag
+Row 4:
+  - criteria_id: SCR-AIL-001
+  - jd_id: JD-022
+  - position: AI Lead
+  - must_have_skills: Python, System Design, Leadership
+  - nice_to_have_skills: MLOps, AWS
+  - tech_stack_preferred: Python + MLflow + AWS
+  - seniority_required: Senior
+  - min_yoe: 7
+  - max_yoe: -
+  - english_level_required: B2
+  - domain_preferred: AI Product
+  - work_mode: Hybrid
+  - salary_budget_max: 4500
+  - employment_type: Full-time
+  - weight_must_have_skills: 50
+  - weight_yoe: 20
+  - weight_english: 15
+  - weight_nice_to_have: 15
+  - scoring_note: Must-have: Leadership/AI Architecture
+  - auto_flag_if_missing: Python, Leadership
+  - guardrail_notes: Individual contributor only → high risk
+
+--- Sheet: DS-07b_Screening_Criteria_Skill (Total rows: 28) ---
+Columns: criteria_code | skill_code | skill_name | skill_type
+
+Row 2:
+  - criteria_code: SCR-AI-001
+  - skill_code: mlops
+  - skill_name: MLOps
+  - skill_type: must_have
+Row 3:
+  - criteria_code: SCR-AI-001
+  - skill_code: python
+  - skill_name: Python
+  - skill_type: must_have
+Row 4:
+  - criteria_code: SCR-AI-001
+  - skill_code: aws
+  - skill_name: AWS
+  - skill_type: nice_to_have
+
+--- Sheet: DS-08_Outreach_Template (Total rows: 11) ---
+Columns: template_id | channel | use_case | target_status | language | template_content
+
+Row 2:
+  - template_id: OUT-001
+  - channel: LinkedIn
+  - use_case: Initial Outreach
+  - target_status: Applied / In-pool
+  - language: EN
+  - template_content: Hi {name}, I came across your profile and was genuinely impressed by the work yo...
+Row 3:
+  - template_id: OUT-002
+  - channel: Email
+  - use_case: Initial Outreach
+  - target_status: Applied / In-pool
+  - language: EN
+  - template_content: Subject: {jd_title} Opportunity at {company} – Your {skill} Background Caught Ou...
+Row 4:
+  - template_id: OUT-003
+  - channel: LinkedIn
+  - use_case: Re-engagement (In-pool)
+  - target_status: In-pool
+  - language: EN
+  - template_content: Hey {name}! We spoke earlier about a {position} role and I wanted to reconnect. ...
+
+--- Sheet: DS-09_Job_Descriptions (Total rows: 18) ---
+Columns: jd_code | position | role_code | jd_version | jd_status | seniority_level | english_level_required | work_mode | salary_min_scaled | salary_max_scaled | must_have_skills | nice_to_have_skills | key_responsibilities | jd_full_text
+
+Row 2:
+  - jd_code: JD-AI-SR-001
+  - position: AI/ML Engineer
+  - role_code: ML
+  - jd_version: v1.1
+  - jd_status: In Draft
+  - seniority_level: Senior
+  - english_level_required: B2
+  - work_mode: Hybrid
+  - salary_min_scaled: 2
+  - salary_max_scaled: 3.5
+  - must_have_skills: Python, PyTorch or TensorFlow, Model training & evaluation end-to-end, Statistic...
+  - nice_to_have_skills: MLOps (MLflow/Kubeflow/W&B), LLM fine-tuning (LoRA/QLoRA), HuggingFace Transform...
+  - key_responsibilities: • Train, fine-tune and evaluate LLMs and task-specific models • Build model serv...
+  - jd_full_text: ## AI/ML Engineer – SETA International ### About the Team SETA's AI team is buil...
+Row 3:
+  - jd_code: JD-BE-SR-001
+  - position: Senior Backend Developer
+  - role_code: BE
+  - jd_version: v2.1
+  - jd_status: In Draft
+  - seniority_level: Senior
+  - english_level_required: B2
+  - work_mode: Hybrid
+  - salary_min_scaled: 1.5
+  - salary_max_scaled: 2.5
+  - must_have_skills: Python (3+ yrs production), PostgreSQL/SQL (advanced), RESTful API design, Micro...
+  - nice_to_have_skills: Docker, Redis, Apache Kafka, Cloud (AWS or GCP), System design, Kubernetes
+  - key_responsibilities: • Design & own scalable BE microservices (Python/FastAPI) • PostgreSQL schema de...
+  - jd_full_text: ## Senior Backend Developer – SETA International ### About the Role We are scali...
+Row 4:
+  - jd_code: JD-BE-SR-002
+  - position: Senior Backend Developer
+  - role_code: BE
+  - jd_version: v3.0
+  - jd_status: Approved
+  - seniority_level: Senior
+  - english_level_required: B2
+  - work_mode: Hybrid
+  - salary_min_scaled: 1.5
+  - salary_max_scaled: 2.5
+  - must_have_skills: Python (3+ yrs production), PostgreSQL/SQL (advanced), RESTful API design, Micro...
+  - nice_to_have_skills: Docker, Redis, Apache Kafka, Cloud (AWS or GCP), System design, Kubernetes
+  - key_responsibilities: • Design & own scalable BE microservices (Python/FastAPI) • PostgreSQL schema de...
+  - jd_full_text: ## Senior Backend Developer – SETA International ### About the Role We are scali...
+
+--- Sheet: DS-10_Candidate_Fit_View (Total rows: 631) ---
+Columns: candidate_code | criteria_code | must_have_overlap | must_have_total
+
+Row 2:
+  - candidate_code: CAND-1001
+  - criteria_code: SCR-AI-001
+  - must_have_overlap: 1
+  - must_have_total: 2
+Row 3:
+  - candidate_code: CAND-1001
+  - criteria_code: SCR-BE-001
+  - must_have_overlap: 2
+  - must_have_total: 2
+Row 4:
+  - candidate_code: CAND-1001
+  - criteria_code: SCR-DE-001
+  - must_have_overlap: 1
+  - must_have_total: 2

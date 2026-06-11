@@ -114,6 +114,7 @@ ${cand.cv_text}`,
         },
         temperature: temp,
         abortSignal: input.abortSignal,
+        // biome-ignore lint/suspicious/noExplicitAny: Mastra options cast
       } as any,
     );
 
@@ -194,6 +195,10 @@ ${body}`,
     ? null
     : `Failed anti-hallucination check: ${verification?.reason}`;
 
+  if (!draftResult) {
+    throw new Error('LLM failed to generate a usable outreach draft after all retry attempts.');
+  }
+
   let savedId!: string;
   await withEmit(
     {
@@ -208,8 +213,8 @@ ${body}`,
         id,
         tenant_id: input.session.tenant_id,
         candidate_id: cand.id,
-        subject: draftResult?.subject,
-        body: draftResult?.body,
+        subject: draftResult.subject,
+        body: draftResult.body,
         status: 'draft',
         hallucination_check_status: checkStatus,
         error_reason: errorReason,
@@ -221,8 +226,8 @@ ${body}`,
   return {
     id: savedId,
     candidateId: cand.id,
-    subject: draftResult?.subject,
-    body: draftResult?.body,
+    subject: draftResult.subject,
+    body: draftResult.body,
     hallucinationCheckStatus: checkStatus as 'passed' | 'failed',
     errorReason,
   };
