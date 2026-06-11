@@ -1,6 +1,6 @@
 import type { SessionScope } from '@seta/core';
 import { and, eq } from 'drizzle-orm';
-import { readFile, utils } from 'xlsx';
+import xlsx from 'xlsx';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria, outreachTemplates } from '../db/schema.ts';
@@ -19,12 +19,12 @@ export interface ImportSmartrecruitMockDataOutput {
 }
 
 function readSheetRows(filePath: string, sheetName: string): SheetRow[] {
-  const workbook = readFile(filePath, { cellDates: false });
+  const workbook = xlsx.readFile(filePath, { cellDates: false });
   const sheet = workbook.Sheets[sheetName];
   if (!sheet) {
     throw new Error(`Sheet "${sheetName}" not found in ${filePath}`);
   }
-  return utils.sheet_to_json<SheetRow>(sheet, { defval: '' });
+  return xlsx.utils.sheet_to_json<SheetRow>(sheet, { defval: '' });
 }
 
 function stringValue(row: SheetRow, key: string): string {
