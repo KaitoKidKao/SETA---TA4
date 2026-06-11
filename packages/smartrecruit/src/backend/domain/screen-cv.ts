@@ -1,12 +1,15 @@
+import * as fs from 'node:fs/promises';
 import { Agent } from '@mastra/core/agent';
 import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
 import { and, eq } from 'drizzle-orm';
+import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria } from '../db/schema.ts';
 import { getModelConfig } from './model.ts';
+import { performOcr } from './ocr.ts';
 
 export interface ScreenCvInput {
   existingCandidateId?: string;
@@ -80,6 +83,36 @@ function calculateDurationInMonths(startStr: string, endStr: string): number {
 export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
   requirePermission(input.session, SMARTRECRUIT_WRITE);
 
+  let cvContentText = input.cvText || '';
+
+  if ((!cvContentText || cvContentText.trim().length === 0) && input.cvPath) {
+    const isPdf = input.cvPath.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      try {
+        const buffer = await fs.readFile(input.cvPath);
+        const doc = await getDocumentProxy(new Uint8Array(buffer));
+        const { text } = await extractText(doc, { mergePages: true });
+        cvContentText = Array.isArray(text) ? text.join('\n') : text;
+      } catch (pdfErr) {
+        console.warn(`Direct PDF parsing failed for ${input.cvPath}, trying OCR fallback:`, pdfErr);
+      }
+    }
+
+    // Fallback to OCR if direct parsing yielded no text or if it's an image
+    if (!cvContentText || cvContentText.trim().length === 0) {
+      try {
+        cvContentText = await performOcr(input.cvPath);
+      } catch (ocrErr) {
+        console.error(`OCR fallback failed for ${input.cvPath}:`, ocrErr);
+        throw new Error(`Failed to extract text from CV file. ${String(ocrErr)}`);
+      }
+    }
+  }
+
+  if (!cvContentText || cvContentText.trim().length === 0) {
+    throw new Error('CV text content is empty and no file path was provided for extraction.');
+  }
+
   const db = smartrecruitDb();
 
   // Load criteria
@@ -122,7 +155,7 @@ Guardrail Notes: ${crit.guardrail_notes ?? 'None'}
 
 Candidate Name: ${input.candidateName}
 Candidate CV Content:
-${input.cvText}`,
+${cvContentText}`,
     {
       structuredOutput: {
         schema: z.object({
@@ -207,7 +240,7 @@ ${input.cvText}`,
             email: input.candidateEmail,
             phone: input.candidatePhone ?? null,
             cv_path: input.cvPath ?? null,
-            cv_text: input.cvText,
+            cv_text: cvContentText,
             status,
             fit_score: parsed.fitAnalysis.fitScore,
             screening_report: screeningReport,
@@ -229,7 +262,7 @@ ${input.cvText}`,
           email: input.candidateEmail,
           phone: input.candidatePhone ?? null,
           cv_path: input.cvPath ?? null,
-          cv_text: input.cvText,
+          cv_text: cvContentText,
           status,
           fit_score: parsed.fitAnalysis.fitScore,
           screening_report: screeningReport,
