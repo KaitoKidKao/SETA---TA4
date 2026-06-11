@@ -71,3 +71,7 @@ docs/design/
 .worktrees/
 
 AWS-CREDENTIALS.txt
+
+team-4
+
+mock-data/*
