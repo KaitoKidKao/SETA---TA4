@@ -77,6 +77,11 @@ We reviewed your impressive background and your experience with {{skills}}. We w
 Looking forward to your reply.
 Best regards,
 SETA Recruitment Team`;
+  const templateContext = `Template Name: ${templ?.name ?? 'Default SETA outreach template'}
+Template Channel: ${templ?.source_channel ?? 'Email'}
+Template Use Case: ${templ?.use_case ?? 'General outreach'}
+Template Target Status: ${templ?.target_status ?? 'Any'}
+Template Language: ${templ?.language ?? 'English'}`;
 
   const model = getModelConfig();
 
@@ -85,14 +90,19 @@ SETA Recruitment Team`;
     const agent = new Agent({
       id: 'smartrecruit.outreachDrafter',
       name: 'Outreach Drafter',
-      instructions: `You are an expert recruitment outreach coordinator.
-You need to draft a professional, engaging outreach email to a candidate based on an email template and the candidate's CV.
-Customize the email:
-1. Ground it in the candidate's actual experience.
-2. Reference prominent projects or former employers from their CV.
-3. Reference their technical skills.
-4. Keep the tone warm, professional, and personalized.
+      instructions: `You are an expert recruitment outreach coordinator drafting a candidate email for a human approval gate.
 
+Use the template as the source of structure and intent. Personalize only with facts present in the candidate profile or CV.
+
+Drafting rules:
+1. Ground every personalized claim in the candidate CV/profile. Mention only skills, employers, projects, domains, titles, or education that are present in the provided candidate context.
+2. Do not invent years of experience, seniority, interview availability, salary, offer details, client names, project names, or company names.
+3. Do not mention rejection reasons, internal recruiter notes, fit score, screening flags, or private evaluation details.
+4. Match the template target status/use case. For re-engagement or in-pool candidates, use a light exploratory tone. For shortlisted candidates, use a clearer next-step tone. Do not promise an interview or offer.
+5. Keep the subject concise and specific. Keep the body professional, warm, and under 180 words unless the template is longer.
+6. Preserve placeholders only if the needed value is unknown; otherwise replace them with grounded candidate facts.
+
+${templateContext}
 Template Subject: ${subjectTemplate}
 Template Body: ${bodyTemplate}
 
@@ -103,6 +113,20 @@ ${warning ? `CRITICAL WARNING: ${warning}` : ''}
 
     const res = await agent.generate(
       `Candidate Name: ${cand.display_name}
+Candidate Email: ${cand.email}
+Candidate Current Status: ${cand.status}
+Candidate Source Status: ${cand.source_status ?? 'Unknown'}
+Candidate Pipeline Stage: ${cand.pipeline_stage ?? 'Unknown'}
+Candidate Applied Position: ${cand.applied_position ?? 'Unknown'}
+Candidate Current Title: ${cand.current_title ?? 'Unknown'}
+Candidate Current Company: ${cand.current_company ?? 'Unknown'}
+Candidate Past Companies: ${cand.past_companies ?? 'Unknown'}
+Candidate Notable Projects: ${cand.notable_projects ?? 'Unknown'}
+Candidate Skills: ${cand.cv_skills ?? 'Unknown'}
+Candidate English Level: ${cand.english_level ?? 'Unknown'}
+Candidate Education: ${[cand.highest_education, cand.education_major].filter(Boolean).join(' - ') || 'Unknown'}
+Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
+Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
 Candidate CV Content:
 ${cand.cv_text}`,
       {
@@ -126,18 +150,38 @@ ${cand.cv_text}`,
     const verificationAgent = new Agent({
       id: 'smartrecruit.hallucinationVerifier',
       name: 'Hallucination Verifier',
-      instructions: `You are an anti-hallucination verification agent.
-Your task is to verify if the drafted email outreach contains any hallucinated information not present in the candidate's CV.
-Analyze the email draft and compare it against the candidate's raw CV:
-1. Extract any client names, projects, or company names mentioned in the email draft.
-2. For each extracted entity, check if it is clearly mentioned in the candidate's CV.
-3. If it is NOT in the CV, it is a hallucination.
-Return passed=false and the list of hallucinated entities if any mismatch is found.`,
+      instructions: `You are an anti-hallucination and compliance verification agent for recruitment outreach.
+
+Compare the drafted email against the candidate context and template.
+
+Fail the draft when it contains:
+1. Any project, client, employer, skill, certification, education, title, domain, English level, or years-of-experience claim not supported by the candidate context.
+2. Any promise of interview, offer, salary, job guarantee, or guaranteed next step.
+3. Any mention of internal screening score, rejection reason, recruiter notes, hallucination checks, or private evaluation flags.
+4. Any personalization that conflicts with the template target status/use case.
+
+Return passed=false and list every unsupported or disallowed claim. If all claims are grounded and compliant, return passed=true.`,
       model,
     });
 
     const ver = await verificationAgent.generate(
-      `Candidate CV Content:
+      `${templateContext}
+
+Candidate Name: ${cand.display_name}
+Candidate Current Status: ${cand.status}
+Candidate Source Status: ${cand.source_status ?? 'Unknown'}
+Candidate Pipeline Stage: ${cand.pipeline_stage ?? 'Unknown'}
+Candidate Applied Position: ${cand.applied_position ?? 'Unknown'}
+Candidate Current Title: ${cand.current_title ?? 'Unknown'}
+Candidate Current Company: ${cand.current_company ?? 'Unknown'}
+Candidate Past Companies: ${cand.past_companies ?? 'Unknown'}
+Candidate Notable Projects: ${cand.notable_projects ?? 'Unknown'}
+Candidate Skills: ${cand.cv_skills ?? 'Unknown'}
+Candidate English Level: ${cand.english_level ?? 'Unknown'}
+Candidate Education: ${[cand.highest_education, cand.education_major].filter(Boolean).join(' - ') || 'Unknown'}
+Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
+Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
+Candidate CV Content:
 ${cand.cv_text}
 
 Email Subject: ${subject}
@@ -149,11 +193,11 @@ ${body}`,
             passed: z
               .boolean()
               .describe(
-                'True if all mentioned projects, client names, and company names exist in the CV',
+                'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
               ),
             hallucinatedEntities: z
               .array(z.string())
-              .describe('List of entities mentioned in the email but not found in the CV'),
+              .describe('List of unsupported or disallowed claims found in the email'),
             reason: z.string().describe('Reason for the pass/fail decision'),
           }),
         },
@@ -187,7 +231,7 @@ ${body}`,
     // Hallucination detected! Run self-correction
     attempt++;
     temp = 0.0; // Lower temperature to 0
-    warning = `In the previous attempt, you hallucinated details: [${verification?.hallucinatedEntities.join(', ')}]. These do NOT exist in the candidate CV. Do NOT invent projects, clients, or employers that are not in the CV. Stick strictly to the CV text.`;
+    warning = `In the previous attempt, you used unsupported or disallowed claims: [${verification?.hallucinatedEntities.join(', ')}]. Remove them. Do not invent facts, scores, salary, interview promises, offers, projects, clients, employers, titles, skills, education, English level, or years of experience. Stick strictly to the candidate context and template.`;
   }
 
   const checkStatus = verification?.passed ? 'passed' : 'failed';

@@ -40,13 +40,22 @@ export interface ScreenCvOutput {
       cvSkill: string | null;
       matched: boolean;
       justification: string;
+      evidenceSnippet?: string | null;
     }>;
     niceToHaveMatches: Array<{
       jdSkill: string;
       cvSkill: string | null;
       matched: boolean;
       justification: string;
+      evidenceSnippet?: string | null;
     }>;
+    scoreBreakdown?: {
+      mustHaveSkills: number;
+      yoe: number;
+      english: number;
+      niceToHave: number;
+    };
+    flags?: string[];
   };
 }
 
@@ -130,14 +139,23 @@ export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
   const agent = new Agent({
     id: 'smartrecruit.cvScreener',
     name: 'CV Screener',
-    instructions: `You are an expert technical recruiter matching candidate profiles (CVs) with recruitment criteria.
-Analyze the candidate's CV and:
-1. Extract candidate's work history periods. For each period, identify company, role, startDate (YYYY-MM), and endDate (YYYY-MM or "present").
-2. List all technical skills mentioned in the CV.
-3. Compare the candidate's skills against the must-have and nice-to-have skills required in the job criteria. Perform semantic mapping (e.g. Next.js matches React, Postgres matches SQL, etc.).
-4. Justify each match or missing skill clearly.
-5. Provide list of candidate Pros, Gaps, and an overall suitability justification.
-6. Calculate a suitability Fit Score from 0 to 100 based on how well they meet both must-have and nice-to-have criteria.`,
+    instructions: `You are an expert technical recruiter matching candidate profiles with approved recruitment criteria.
+
+Your task is to produce an auditable screening report, not a sales summary.
+
+Screening rules:
+1. Extract work history periods from the CV only. Use YYYY-MM when available. Use "present" only when the CV indicates an ongoing role.
+2. Extract technical skills from the CV only. Do not infer a skill unless there is a clear semantic equivalent. Example: PostgreSQL can support SQL; Next.js can support React. Do not treat unrelated adjacent tools as a match.
+3. For every must-have and nice-to-have criterion, return one match row. Each row must include an evidence snippet copied or tightly paraphrased from the CV. If there is no evidence, matched=false, cvSkill=null, and evidenceSnippet=null.
+4. Apply the provided scoring weights exactly:
+   - must-have skills weight: proportion of matched must-have requirements.
+   - YOE weight: full credit when total YOE >= minimum; partial credit if close; zero if clearly below.
+   - English weight: full credit only when CV evidence meets or exceeds the required level; zero if no English evidence and English is required.
+   - nice-to-have weight: proportion of matched nice-to-have requirements.
+5. fitScore must equal the rounded sum of the four score breakdown numbers and must be between 0 and 100.
+6. Apply auto-flag rules and guardrail notes. If a critical missing item is present, include it in flags and gaps.
+7. Do not reward missing information. If the CV does not mention a fact, mark it as unknown or missing.
+8. Keep pros and gaps specific, evidence-based, and useful for a recruiter reviewing Gate 2.`,
     model,
   });
 
@@ -152,6 +170,7 @@ Domain Preferred: ${crit.domain_preferred ?? 'Not specified'}
 Scoring Weights: must-have=${crit.weight_must_have_skills}, yoe=${crit.weight_yoe}, english=${crit.weight_english}, nice-to-have=${crit.weight_nice_to_have}
 Auto-flag if missing: ${crit.auto_flag_if_missing ?? 'None'}
 Guardrail Notes: ${crit.guardrail_notes ?? 'None'}
+Scoring Note: ${crit.scoring_note ?? 'None'}
 
 Candidate Name: ${input.candidateName}
 Candidate CV Content:
@@ -176,6 +195,10 @@ ${cvContentText}`,
                 cvSkill: z.string().nullable(),
                 matched: z.boolean(),
                 justification: z.string(),
+                evidenceSnippet: z
+                  .string()
+                  .nullable()
+                  .describe('Direct supporting evidence from CV, or null when missing'),
               }),
             ),
             niceToHaveMatches: z.array(
@@ -184,11 +207,40 @@ ${cvContentText}`,
                 cvSkill: z.string().nullable(),
                 matched: z.boolean(),
                 justification: z.string(),
+                evidenceSnippet: z
+                  .string()
+                  .nullable()
+                  .describe('Direct supporting evidence from CV, or null when missing'),
               }),
             ),
+            scoreBreakdown: z.object({
+              mustHaveSkills: z
+                .number()
+                .min(0)
+                .max(crit.weight_must_have_skills)
+                .describe('Weighted score contribution for must-have skills'),
+              yoe: z
+                .number()
+                .min(0)
+                .max(crit.weight_yoe)
+                .describe('Weighted score contribution for years of experience'),
+              english: z
+                .number()
+                .min(0)
+                .max(crit.weight_english)
+                .describe('Weighted score contribution for English requirement'),
+              niceToHave: z
+                .number()
+                .min(0)
+                .max(crit.weight_nice_to_have)
+                .describe('Weighted score contribution for nice-to-have skills'),
+            }),
             fitScore: z.number().int().min(0).max(100),
             pros: z.array(z.string()),
             gaps: z.array(z.string()),
+            flags: z
+              .array(z.string())
+              .describe('Critical guardrail or auto-flag findings that need recruiter attention'),
             justification: z.string(),
           }),
         }),
@@ -218,6 +270,8 @@ ${cvContentText}`,
     overallJustification: parsed.fitAnalysis.justification,
     mustHaveMatches: parsed.fitAnalysis.mustHaveMatches,
     niceToHaveMatches: parsed.fitAnalysis.niceToHaveMatches,
+    scoreBreakdown: parsed.fitAnalysis.scoreBreakdown,
+    flags: parsed.fitAnalysis.flags,
   };
 
   const isShortlisted = parsed.fitAnalysis.fitScore >= 70;
