@@ -156,3 +156,21 @@ export const outreachDrafts = smartrecruitSchema.table(
   },
   (t) => [index('drafts_by_tenant_candidate').on(t.tenant_id, t.candidate_id)],
 );
+
+export const interactionHistories = smartrecruitSchema.table(
+  'interaction_histories',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    criteria_id: uuid('criteria_id'),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    status: text('status').notNull().default('sent'),
+    summary_text: text('summary_text'),
+    sent_at: timestamp('sent_at', { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('interaction_histories_by_tenant_candidate').on(t.tenant_id, t.candidate_id)],
+);

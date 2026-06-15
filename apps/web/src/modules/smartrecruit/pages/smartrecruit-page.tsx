@@ -66,12 +66,14 @@ interface CandidateState {
   email: string;
   phone: string | null;
   status: string;
+  applied_position?: string | null;
   fit_score: number | null;
   screening_report: {
     pros: string[];
     gaps: string[];
     yoeExplanation: string;
     overallJustification: string;
+    piiMapping?: Record<string, string>;
     mustHaveMatches: Array<{
       jdSkill: string;
       cvSkill: string | null;
@@ -126,7 +128,17 @@ function candidateReport(
 export function SmartrecruitPage() {
   // Navigation & Core State
   const [activeTab, setActiveTab] = useState<'new' | 'active'>('new');
+
+  // Suggested candidates from PgVector (Phase 2 LTM)
+  const [suggestedCandidates, setSuggestedCandidates] = useState<CandidateState[]>([]);
+  const [selectedSuggestedIds, setSelectedSuggestedIds] = useState<Record<string, boolean>>({});
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
+    'all',
+  );
+
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [lastLoadedApprovalId, setLastLoadedApprovalId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
 
@@ -173,6 +185,22 @@ export function SmartrecruitPage() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
 
+  const isHallucinationFail = useCallback(
+    (candidateId: string) => {
+      const draft = draftsList.find((d) => d.candidate_id === candidateId);
+      return draft?.hallucination_check_status === 'failed';
+    },
+    [draftsList],
+  );
+
+  const filteredCandidates = candidatesList.filter((cand) => {
+    if (candidateFilter === 'all') return true;
+    if (candidateFilter === 'pass') return (cand.fit_score ?? 0) >= 70;
+    if (candidateFilter === 'fail') return (cand.fit_score ?? 0) < 70;
+    if (candidateFilter === 'hallucination') return isHallucinationFail(cand.id);
+    return true;
+  });
+
   const fetchCriteriaList = useCallback(async () => {
     try {
       const res = await fetch('/api/smartrecruit/v1/criteria');
@@ -190,6 +218,23 @@ export function SmartrecruitPage() {
       const data = await res.json();
       setActiveCriteria(data);
     } catch (_err) {}
+  }, []);
+  const fetchSuggestedCandidates = useCallback(async (criteriaId: string) => {
+    setIsLoadingSuggestions(true);
+    try {
+      const res = await fetch(`/api/smartrecruit/v1/criteria/${criteriaId}/suggest-candidates`);
+      if (res.ok) {
+        const data = await res.json();
+        const list = data.candidates || [];
+        setSuggestedCandidates(list);
+        const sel: Record<string, boolean> = {};
+        for (const c of list) {
+          sel[c.id] = true;
+        }
+        setSelectedSuggestedIds(sel);
+      }
+    } catch (_err) {}
+    setIsLoadingSuggestions(false);
   }, []);
 
   const fetchCandidatesAndDrafts = useCallback(async () => {
@@ -279,22 +324,37 @@ export function SmartrecruitPage() {
   useEffect(() => {
     if (!activeApproval) {
       setActiveCriteria(null);
+      setSuggestedCandidates([]);
+      setSelectedSuggestedIds({});
+      setLastLoadedApprovalId(null);
+      return;
+    }
+
+    const currentApprovalId = activeApproval.proposedPayload?.toolCallId
+      ? `${activeApproval.proposedPayload.toolCallId}:${activeApproval.stepId || activeApproval.proposedPayload?.meta?.toolId}`
+      : activeApproval.stepId;
+    if (currentApprovalId === lastLoadedApprovalId) {
       return;
     }
 
     if (isGate1Active) {
       const criteriaId = activeApproval.proposedPayload?.primary?.argsPatch?.criteriaId;
       if (criteriaId) {
+        setLastLoadedApprovalId(currentApprovalId);
         fetchCriteriaDetails(criteriaId);
+        fetchSuggestedCandidates(criteriaId);
       }
     } else if (isGate2Active) {
+      setLastLoadedApprovalId(currentApprovalId);
       fetchCandidatesAndDrafts();
     }
   }, [
     activeApproval,
     isGate1Active,
     isGate2Active,
+    lastLoadedApprovalId,
     fetchCriteriaDetails,
+    fetchSuggestedCandidates,
     fetchCandidatesAndDrafts,
   ]);
 
@@ -529,6 +589,11 @@ export function SmartrecruitPage() {
       // First save edits
       await handleSaveCriteria();
 
+      const payload = activeApproval.proposedPayload?.primary?.argsPatch || {};
+      const selectedIds = Object.entries(selectedSuggestedIds)
+        .filter(([_, checked]) => checked)
+        .map(([id]) => id);
+
       const res = await fetch(
         `/api/agent/v1/workflows/approvals/${activeApproval.approvalId}/decide`,
         {
@@ -536,9 +601,12 @@ export function SmartrecruitPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             decision: 'approve',
+            ...payload,
+            additionalCandidateIds: selectedIds,
           }),
         },
       );
+
       if (res.ok) {
         setActiveApproval(null);
         setRunStatus('running');
@@ -644,17 +712,17 @@ export function SmartrecruitPage() {
   const handleApproveOutreachBulk = async () => {
     if (!activeApproval) return;
     try {
-      // Save active editing draft first
-      await handleSaveDraft();
+      if (editingDraft) {
+        await handleSaveDraft();
+      }
 
+      const payload = activeApproval.proposedPayload?.primary?.argsPatch || {};
       const res = await fetch(
         `/api/agent/v1/workflows/approvals/${activeApproval.approvalId}/decide`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            decision: 'approve',
-          }),
+          body: JSON.stringify({ decision: 'approve', ...payload }),
         },
       );
       if (res.ok) {
@@ -805,6 +873,52 @@ export function SmartrecruitPage() {
                   {mockDataSummary && (
                     <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
                       {mockDataSummary}
+                    </div>
+                  )}
+
+                  {candidatesList.filter(
+                    (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 80),
+                  ).length > 0 && (
+                    <div className="flex flex-col gap-2 mt-2">
+                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                        <CheckCircle className="size-4 text-emerald-500" />
+                        Passed Candidates (Shortlisted)
+                      </h3>
+                      <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
+                        {candidatesList
+                          .filter(
+                            (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 80),
+                          )
+                          .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
+                          .map((cand) => (
+                            <div
+                              key={cand.id}
+                              className="p-3 flex items-center justify-between transition-colors hover:bg-canvas"
+                            >
+                              <div className="flex flex-col gap-0.5 min-w-0">
+                                <span className="text-body-sm font-bold text-ink truncate">
+                                  {cand.display_name}
+                                </span>
+                                <span className="text-eyebrow text-ink-subtle truncate">
+                                  {cand.email}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  className={
+                                    cand.fit_score != null && cand.fit_score >= 80
+                                      ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
+                                      : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
+                                  }
+                                >
+                                  {cand.fit_score != null
+                                    ? `${cand.fit_score}% Fit`
+                                    : 'Pre-screened'}
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
                     </div>
                   )}
                 </CardContent>
@@ -1262,6 +1376,73 @@ export function SmartrecruitPage() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Suggested Candidates full width section */}
+                    <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-3">
+                      <div className="flex flex-col gap-1">
+                        <h3 className="text-body-md font-bold text-ink flex items-center gap-2">
+                          <User className="size-4 text-primary" />
+                          Ứng viên có sẵn phù hợp từ hệ thống (Top 10)
+                        </h3>
+                        <p className="text-body-sm text-ink-subtle">
+                          Tìm thấy bằng Vector Search dựa trên sự tương đồng với JD mới. Chọn để
+                          thêm vào đợt sàng lọc này.
+                        </p>
+                      </div>
+
+                      {isLoadingSuggestions ? (
+                        <div className="py-6 flex justify-center items-center">
+                          <RefreshCw className="size-5 text-primary animate-spin" />
+                        </div>
+                      ) : suggestedCandidates.length === 0 ? (
+                        <div className="py-6 text-center text-body-sm text-ink-subtle bg-canvas/30 rounded-lg border border-dashed border-hairline">
+                          Không tìm thấy ứng viên phù hợp trong cơ sở dữ liệu.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                          {suggestedCandidates.map((c) => {
+                            const isChecked = !!selectedSuggestedIds[c.id];
+                            return (
+                              <div
+                                key={c.id}
+                                onClick={() =>
+                                  setSelectedSuggestedIds((prev) => ({
+                                    ...prev,
+                                    [c.id]: !prev[c.id],
+                                  }))
+                                }
+                                className={cn(
+                                  'p-3 rounded-lg border cursor-pointer transition-all flex items-start gap-3',
+                                  isChecked
+                                    ? 'bg-primary-tint/20 border-primary shadow-sm'
+                                    : 'bg-surface-1 border-hairline hover:bg-canvas',
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {}} // toggled by outer click
+                                  className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary shrink-0"
+                                />
+                                <div className="flex flex-col gap-0.5 min-w-0">
+                                  <span className="text-body-sm font-bold text-ink truncate">
+                                    {c.display_name}
+                                  </span>
+                                  <span className="text-eyebrow text-ink-subtle truncate">
+                                    {c.email}
+                                  </span>
+                                  {c.applied_position && (
+                                    <span className="text-eyebrow font-medium text-primary mt-1">
+                                      {c.applied_position}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               </div>
@@ -1299,17 +1480,79 @@ export function SmartrecruitPage() {
                           Select candidate to review or edit outreach mail.
                         </CardDescription>
                       </div>
-                      <Button
-                        size="sm"
-                        onClick={handleApproveOutreachBulk}
-                        className="bg-primary hover:bg-primary-hover text-white font-medium shadow"
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={handleDeclineWorkflow}
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                        >
+                          Cancel Pipeline
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={handleApproveOutreachBulk}
+                          className="bg-primary hover:bg-primary-hover text-white font-medium shadow"
+                        >
+                          Approve & Send All
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Tab Filters */}
+                    <div className="flex border-b border-hairline bg-canvas/10 overflow-x-auto shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setCandidateFilter('all')}
+                        className={cn(
+                          'px-3 py-2 text-body-sm font-medium border-b-2 transition-colors shrink-0',
+                          candidateFilter === 'all'
+                            ? 'border-primary text-primary'
+                            : 'border-transparent text-ink-subtle hover:text-ink',
+                        )}
                       >
-                        Approve & Send All
-                      </Button>
+                        Tất cả ({candidatesList.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCandidateFilter('pass')}
+                        className={cn(
+                          'px-3 py-2 text-body-sm font-medium border-b-2 transition-colors shrink-0',
+                          candidateFilter === 'pass'
+                            ? 'border-emerald-500 text-emerald-600'
+                            : 'border-transparent text-ink-subtle hover:text-ink',
+                        )}
+                      >
+                        Đạt ({candidatesList.filter((c) => (c.fit_score ?? 0) >= 70).length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCandidateFilter('fail')}
+                        className={cn(
+                          'px-3 py-2 text-body-sm font-medium border-b-2 transition-colors shrink-0',
+                          candidateFilter === 'fail'
+                            ? 'border-amber-500 text-amber-600'
+                            : 'border-transparent text-ink-subtle hover:text-ink',
+                        )}
+                      >
+                        Không đạt ({candidatesList.filter((c) => (c.fit_score ?? 0) < 70).length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCandidateFilter('hallucination')}
+                        className={cn(
+                          'px-3 py-2 text-body-sm font-medium border-b-2 transition-colors shrink-0',
+                          candidateFilter === 'hallucination'
+                            ? 'border-rose-500 text-rose-600'
+                            : 'border-transparent text-ink-subtle hover:text-ink',
+                        )}
+                      >
+                        Ảo giác ({candidatesList.filter((c) => isHallucinationFail(c.id)).length})
+                      </button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto divide-y divide-hairline">
-                      {candidatesList.map((cand) => {
+                      {filteredCandidates.map((cand) => {
                         const isSelected = selectedCandidate?.id === cand.id;
                         const fitScore = cand.fit_score ?? 0;
                         const scoreColor =
@@ -1452,6 +1695,32 @@ export function SmartrecruitPage() {
                               {candidateReport(selectedCandidate).yoeExplanation}
                             </p>
                           </div>
+
+                          {/* PII Decryption Board */}
+                          {selectedCandidate.screening_report?.piiMapping &&
+                            Object.keys(selectedCandidate.screening_report.piiMapping).length >
+                              0 && (
+                              <div className="border-t border-hairline pt-3 flex flex-col gap-1.5 animate-in fade-in duration-200">
+                                <span className="text-eyebrow text-ink-subtle uppercase flex items-center gap-1">
+                                  <Check className="size-3.5 text-emerald-500" />
+                                  Decrypted contact details (PII)
+                                </span>
+                                <div className="grid grid-cols-2 gap-2 p-2 bg-canvas/40 rounded-lg border border-hairline text-body-sm">
+                                  {Object.entries(
+                                    selectedCandidate.screening_report.piiMapping,
+                                  ).map(([key, val]) => (
+                                    <div key={key} className="flex flex-col gap-0.5 min-w-0">
+                                      <span className="text-eyebrow text-ink-subtle font-mono text-[10px]">
+                                        {key}
+                                      </span>
+                                      <span className="font-medium text-ink truncate">
+                                        {val as string}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                         </div>
 
                         {/* Email draft editor */}
@@ -1483,10 +1752,23 @@ export function SmartrecruitPage() {
                             </div>
 
                             <div className="flex flex-col gap-3 border border-hairline rounded-xl p-3.5 bg-canvas/30">
+                              {editingDraft.hallucination_check_status === 'failed' && (
+                                <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 flex items-start gap-2.5 text-rose-700 text-body-sm animate-pulse">
+                                  <AlertCircle className="size-4 shrink-0 mt-0.5 text-rose-500" />
+                                  <div className="flex-grow">
+                                    <span className="font-bold">
+                                      Cảnh báo ảo giác (Hallucination Warning):
+                                    </span>{' '}
+                                    Lớp kiểm duyệt phát hiện thư nháp chứa thông tin không khớp với
+                                    CV gốc. Hãy rà soát kỹ trước khi gửi.
+                                  </div>
+                                </div>
+                              )}
                               <div className="flex flex-col gap-1">
                                 <label className="text-eyebrow text-ink-subtle uppercase">
                                   Email Subject
                                 </label>
+
                                 <Input
                                   value={editingDraft.subject}
                                   onChange={(e) =>

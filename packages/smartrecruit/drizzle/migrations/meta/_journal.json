@@ -15,6 +15,13 @@
       "when": 1781193110321,
       "tag": "0001_chubby_nekra",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781516436608,
+      "tag": "0002_huge_johnny_storm",
+      "breakpoints": true
     }
   ]
 }

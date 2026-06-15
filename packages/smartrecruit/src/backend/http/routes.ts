@@ -2,7 +2,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv } from '@seta/core';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -16,6 +16,11 @@ import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
 import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
+import {
+  getEmbeddingWithFallback,
+  getSmartrecruitVectorStore,
+  SMARTRECRUIT_VECTOR_INDEX,
+} from '../embeddings/vector-store.ts';
 
 const parseJdSchema = z.object({
   jobTitle: z.string().min(1),
@@ -297,6 +302,64 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     });
 
     return c.json(result);
+  });
+
+  app.get('/api/smartrecruit/v1/criteria/:id/suggest-candidates', async (c) => {
+    const session = c.get('user');
+    const db = smartrecruitDb();
+    const criteriaId = c.req.param('id');
+
+    // 1. Get the criteria
+    const [crit] = await db
+      .select()
+      .from(criteria)
+      .where(and(eq(criteria.id, criteriaId), eq(criteria.tenant_id, session.tenant_id)))
+      .limit(1);
+
+    if (!crit) {
+      return c.json({ error: 'NOT_FOUND', message: 'Criteria not found' }, 404);
+    }
+
+    // 2. Perform Vector Search query against PgVector
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      return c.json({ candidates: [] });
+    }
+
+    try {
+      const store = getSmartrecruitVectorStore(dbUrl);
+      const queryVector = await getEmbeddingWithFallback(crit.jd_text);
+
+      const vectorResults = await store.query({
+        indexName: SMARTRECRUIT_VECTOR_INDEX,
+        queryVector,
+        topK: 10,
+        filter: { tenant_id: { $eq: session.tenant_id } },
+      });
+
+      const candidateIds = vectorResults
+        .map((row) => (row.metadata as any)?.candidate_id)
+        .filter(Boolean) as string[];
+
+      if (candidateIds.length === 0) {
+        return c.json({ candidates: [] });
+      }
+
+      const rows = await db
+        .select()
+        .from(candidates)
+        .where(
+          and(inArray(candidates.id, candidateIds), eq(candidates.tenant_id, session.tenant_id)),
+        );
+
+      // Sort according to vector similarity order
+      const idToIndex = new Map(candidateIds.map((id, index) => [id, index]));
+      rows.sort((a, b) => (idToIndex.get(a.id) ?? 999) - (idToIndex.get(b.id) ?? 999));
+
+      return c.json({ candidates: rows });
+    } catch (err) {
+      return c.json({ error: 'Vector search failed', details: (err as Error).message }, 500);
+    }
   });
 
   // --- Candidates & Scorecard Endpoints ---

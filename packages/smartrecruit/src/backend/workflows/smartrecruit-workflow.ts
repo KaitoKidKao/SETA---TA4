@@ -7,8 +7,8 @@ import { buildActorSession } from '@seta/identity';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { smartrecruitDb } from '../db/client.ts';
-import { criteria as criteriaTable, outreachDrafts } from '../db/schema.ts';
-import { type DraftOutreachOutput, draftOutreach } from '../domain/draft-outreach.ts';
+import { candidates, criteria as criteriaTable, outreachDrafts } from '../db/schema.ts';
+import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { screenCv } from '../domain/screen-cv.ts';
@@ -74,6 +74,7 @@ const parseJdStep = createStep({
     z.object({
       action: z.literal('approve'),
       criteriaId: z.string().uuid(),
+      additionalCandidateIds: z.array(z.string().uuid()).optional(),
     }),
     z.object({
       action: z.literal('decline'),
@@ -209,7 +210,7 @@ Return the result structured according to the schema.`,
       throw new Error('Workflow run was declined at Gate 1: Criteria confirmation.');
     }
 
-    const { criteriaId } = resumeData;
+    const { criteriaId, additionalCandidateIds } = resumeData;
     const db = smartrecruitDb();
     const [existing] = await db
       .select()
@@ -221,13 +222,56 @@ Return the result structured according to the schema.`,
       throw new Error(`Criteria with ID ${criteriaId} not found on resume.`);
     }
 
+    let additionalCvs: Array<{
+      candidateName: string;
+      candidateEmail: string;
+      candidatePhone?: string;
+      cvPath?: string;
+      cvText: string;
+    }> = [];
+
+    if (additionalCandidateIds && additionalCandidateIds.length > 0) {
+      const dbCands = await db
+        .select()
+        .from(candidates)
+        .where(
+          and(
+            eq(candidates.tenant_id, session.tenant_id),
+            inArray(candidates.id, additionalCandidateIds),
+          ),
+        );
+      additionalCvs = dbCands.map((c) => ({
+        candidateName: c.display_name,
+        candidateEmail: c.email,
+        candidatePhone: c.phone ?? undefined,
+        cvPath: c.cv_path ?? undefined,
+        cvText: c.cv_text ?? '',
+      }));
+    }
+
     return {
       criteriaId,
-      cvs: inputData.cvs,
+      cvs: [...inputData.cvs, ...additionalCvs],
       templateId: inputData.templateId,
     };
   },
 });
+
+// --- Helper for Concurrent Batch Processing ---
+
+async function runInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    const chunkResults = await Promise.all(chunk.map((item) => fn(item)));
+    results.push(...chunkResults);
+  }
+  return results;
+}
 
 // --- Step 2: Screen CVs (Calculates Fit Score) ---
 
@@ -237,7 +281,7 @@ const ScreenCvsStepOutputSchema = z.object({
     z.object({
       id: z.string().uuid(),
       displayName: z.string(),
-      email: z.string(),
+      email: z.string().email(),
       fitScore: z.number(),
     }),
   ),
@@ -260,8 +304,8 @@ const screenCvsStep = createStep({
       fitScore: number;
     }> = [];
 
-    for (const cv of inputData.cvs) {
-      const screened = await screenCv({
+    const screenedResults = await runInBatches(inputData.cvs, 5, (cv) =>
+      screenCv({
         candidateName: cv.candidateName,
         candidateEmail: cv.candidateEmail,
         candidatePhone: cv.candidatePhone,
@@ -269,8 +313,10 @@ const screenCvsStep = createStep({
         cvText: cv.cvText,
         criteriaId: inputData.criteriaId,
         session,
-      });
+      }),
+    );
 
+    for (const screened of screenedResults) {
       // Filter: Shortlisted if fitScore >= 70
       if (screened.fitScore >= 70) {
         shortlistedCandidates.push({
@@ -324,15 +370,13 @@ const draftOutreachStep = createStep({
     const session = await buildActorSession({ user_id: userId });
 
     if (!resumeData) {
-      const draftResults: DraftOutreachOutput[] = [];
-      for (const cand of inputData.shortlistedCandidates) {
-        const draft = await draftOutreach({
+      const draftResults = await runInBatches(inputData.shortlistedCandidates, 5, (cand) =>
+        draftOutreach({
           candidateId: cand.id,
           templateId: inputData.templateId,
           session,
-        });
-        draftResults.push(draft);
-      }
+        }),
+      );
 
       // If no candidate got shortlisted/drafted, terminate without suspension
       if (draftResults.length === 0) {
@@ -343,6 +387,7 @@ const draftOutreachStep = createStep({
       const card = {
         toolCallId: `workflow:${runId}`,
         intent: 'Approve outreach emails',
+
         riskBadge: 'external' as const,
         summary: `Review and approve personalized outreach emails for ${draftResults.length} shortlisted candidates`,
         details: [
@@ -351,10 +396,10 @@ const draftOutreachStep = createStep({
             items: inputData.shortlistedCandidates.map((c) => {
               const draft = draftResults.find((d) => d.candidateId === c.id);
               return {
-                id: draft?.id ?? c.id,
+                id: c.id,
                 label: c.displayName,
                 secondary: `Score: ${c.fitScore}% | Anti-Hallucination: ${draft?.hallucinationCheckStatus ?? 'unknown'}`,
-                score: c.fitScore,
+                score: c.fitScore / 100,
               };
             }),
           },
@@ -364,6 +409,7 @@ const draftOutreachStep = createStep({
           argsPatch: {
             action: 'approve',
             approvedDraftIds: draftResults.map((d) => d.id),
+            assigneeUserIds: inputData.shortlistedCandidates.map((candidate) => candidate.id),
           },
         },
         alternates: [],
@@ -398,13 +444,11 @@ const draftOutreachStep = createStep({
       return { approvedDraftIds: [] };
     }
 
-    if ('approvedDraftIds' in resumeData && resumeData.approvedDraftIds?.length) {
-      return {
-        approvedDraftIds: resumeData.approvedDraftIds,
-      };
-    }
+    const candidateIds =
+      'assigneeUserIds' in resumeData && Array.isArray(resumeData.assigneeUserIds)
+        ? (resumeData.assigneeUserIds as string[])
+        : inputData.shortlistedCandidates.map((candidate) => candidate.id);
 
-    const candidateIds = inputData.shortlistedCandidates.map((candidate) => candidate.id);
     if (candidateIds.length === 0) return { approvedDraftIds: [] };
 
     const db = smartrecruitDb();

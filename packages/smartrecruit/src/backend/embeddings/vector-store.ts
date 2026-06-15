@@ -128,3 +128,59 @@ export async function upsertCandidateCvEmbedding(
     ids: [candidateCvVectorId(candidate.tenant_id, candidate.id)],
   });
 }
+
+export const SMARTRECRUIT_HISTORY_INDEX = 'outreach_interaction_embeddings';
+
+export interface OutreachHistoryVectorMetadata {
+  tenant_id: string;
+  candidate_id: string;
+  history_id: string;
+  subject: string;
+  summary_text: string;
+  sent_at: string;
+}
+
+export function outreachHistoryVectorId(tenantId: string, historyId: string): string {
+  return `history:${tenantId}:${historyId}`;
+}
+
+export async function upsertOutreachHistoryEmbedding(
+  dbUrl: string,
+  history: {
+    id: string;
+    tenant_id: string;
+    candidate_id: string;
+    subject: string;
+    summary_text: string;
+    sent_at: string;
+  },
+): Promise<void> {
+  const store = getSmartrecruitVectorStore(dbUrl);
+
+  await store
+    .createIndex({
+      indexName: SMARTRECRUIT_HISTORY_INDEX,
+      dimension: SMARTRECRUIT_VECTOR_DIMENSION,
+      metric: 'cosine',
+      indexConfig: { type: 'hnsw', hnsw: { m: 16, efConstruction: 200 } },
+    })
+    .catch(() => {});
+
+  const vector = await getEmbeddingWithFallback(history.summary_text);
+
+  const metadata: OutreachHistoryVectorMetadata = {
+    tenant_id: history.tenant_id,
+    candidate_id: history.candidate_id,
+    history_id: history.id,
+    subject: history.subject,
+    summary_text: history.summary_text,
+    sent_at: history.sent_at,
+  };
+
+  await store.upsert({
+    indexName: SMARTRECRUIT_HISTORY_INDEX,
+    vectors: [vector],
+    metadata: [metadata],
+    ids: [outreachHistoryVectorId(history.tenant_id, history.id)],
+  });
+}
