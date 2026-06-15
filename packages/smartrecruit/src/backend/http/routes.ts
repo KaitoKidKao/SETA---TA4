@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv } from '@seta/core';
 import { and, desc, eq } from 'drizzle-orm';
@@ -33,6 +34,15 @@ const screenCvSchema = z.object({
 const importMockDataSchema = z.object({
   filePath: z.string().min(1).optional(),
 });
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
+
+function resolveMockDataFilePath(filePath?: string): string {
+  if (filePath) {
+    return isAbsolute(filePath) ? filePath : resolve(repoRoot, filePath);
+  }
+  return resolve(repoRoot, 'mock-data/04_ta_cv_screening.xlsx');
+}
 
 const screenCandidatePoolSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
@@ -75,16 +85,24 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
     }
 
-    const filePath = resolve(
-      process.cwd(),
-      parsed.data.filePath ?? 'mock-data/04_ta_cv_screening.xlsx',
-    );
-    const result = await importSmartrecruitMockData({
-      filePath,
-      session,
-    });
+    const filePath = resolveMockDataFilePath(parsed.data.filePath);
+    try {
+      const result = await importSmartrecruitMockData({
+        filePath,
+        session,
+      });
 
-    return c.json({ filePath, ...result });
+      return c.json({ filePath, ...result });
+    } catch (err) {
+      return c.json(
+        {
+          error: 'MOCK_DATA_IMPORT_FAILED',
+          message: (err as Error).message,
+          filePath,
+        },
+        500,
+      );
+    }
   });
 
   // --- File Upload & PDF Extraction (OCR Fallback) ---

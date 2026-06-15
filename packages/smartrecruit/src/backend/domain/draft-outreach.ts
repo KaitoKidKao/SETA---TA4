@@ -6,7 +6,9 @@ import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, outreachDrafts, outreachTemplates } from '../db/schema.ts';
+import { anonymizeCvText, deAnonymizeText } from './anonymize.ts';
 import { getModelConfig } from './model.ts';
+import { withRetry } from './retry.ts';
 
 export interface DraftOutreachInput {
   candidateId: string;
@@ -83,6 +85,32 @@ Template Use Case: ${templ?.use_case ?? 'General outreach'}
 Template Target Status: ${templ?.target_status ?? 'Any'}
 Template Language: ${templ?.language ?? 'English'}`;
 
+  // 3. Prepare Anonymization
+  let piiMapping: Record<string, string> = {};
+  let anonymizedCvText = cand.cv_text || '';
+
+  const report = cand.screening_report as any;
+  if (report?.piiMapping) {
+    piiMapping = report.piiMapping;
+    // Replace original values in cv_text with placeholders to ensure LLM only sees anonymized text
+    for (const [placeholder, val] of Object.entries(piiMapping)) {
+      if (!val || val.length < 2) continue;
+      const escaped = val.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+      anonymizedCvText = anonymizedCvText.replace(new RegExp(escaped, 'g'), placeholder);
+    }
+  } else {
+    // Fallback if not screened or missing mapping
+    const anon = await anonymizeCvText(cand.cv_text || '');
+    anonymizedCvText = anon.anonymizedText;
+    piiMapping = anon.mapping;
+  }
+
+  // Find candidate name/email/phone placeholder from mapping, or use defaults
+  const namePlaceholder =
+    Object.keys(piiMapping).find((k) => k.includes('CANDIDATE_NAME')) || '[CANDIDATE_NAME]';
+  const emailPlaceholder = Object.keys(piiMapping).find((k) => k.includes('EMAIL')) || '[EMAIL_1]';
+  const phonePlaceholder = Object.keys(piiMapping).find((k) => k.includes('PHONE')) || '[PHONE_1]';
+
   const model = getModelConfig();
 
   // Helper function for generation
@@ -111,9 +139,10 @@ ${warning ? `CRITICAL WARNING: ${warning}` : ''}
       model,
     });
 
-    const res = await agent.generate(
-      `Candidate Name: ${cand.display_name}
-Candidate Email: ${cand.email}
+    const res = await withRetry(() =>
+      agent.generate(
+        `Candidate Name: ${namePlaceholder}
+Candidate Email: ${emailPlaceholder}
 Candidate Current Status: ${cand.status}
 Candidate Source Status: ${cand.source_status ?? 'Unknown'}
 Candidate Pipeline Stage: ${cand.pipeline_stage ?? 'Unknown'}
@@ -128,18 +157,18 @@ Candidate Education: ${[cand.highest_education, cand.education_major].filter(Boo
 Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
 Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
 Candidate CV Content:
-${cand.cv_text}`,
-      {
-        structuredOutput: {
-          schema: z.object({
-            subject: z.string().describe('Email subject line'),
-            body: z.string().describe('Email body text'),
-          }),
-        },
-        temperature: temp,
-        abortSignal: input.abortSignal,
-        // biome-ignore lint/suspicious/noExplicitAny: Mastra options cast
-      } as any,
+${anonymizedCvText}`,
+        {
+          structuredOutput: {
+            schema: z.object({
+              subject: z.string().describe('Email subject line'),
+              body: z.string().describe('Email body text'),
+            }),
+          },
+          temperature: temp,
+          abortSignal: input.abortSignal,
+        } as any,
+      ),
     );
 
     return res.object;
@@ -164,10 +193,11 @@ Return passed=false and list every unsupported or disallowed claim. If all claim
       model,
     });
 
-    const ver = await verificationAgent.generate(
-      `${templateContext}
+    const ver = await withRetry(() =>
+      verificationAgent.generate(
+        `${templateContext}
 
-Candidate Name: ${cand.display_name}
+Candidate Name: ${namePlaceholder}
 Candidate Current Status: ${cand.status}
 Candidate Source Status: ${cand.source_status ?? 'Unknown'}
 Candidate Pipeline Stage: ${cand.pipeline_stage ?? 'Unknown'}
@@ -182,27 +212,28 @@ Candidate Education: ${[cand.highest_education, cand.education_major].filter(Boo
 Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
 Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
 Candidate CV Content:
-${cand.cv_text}
+${anonymizedCvText}
 
 Email Subject: ${subject}
 Email Body:
 ${body}`,
-      {
-        structuredOutput: {
-          schema: z.object({
-            passed: z
-              .boolean()
-              .describe(
-                'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
-              ),
-            hallucinatedEntities: z
-              .array(z.string())
-              .describe('List of unsupported or disallowed claims found in the email'),
-            reason: z.string().describe('Reason for the pass/fail decision'),
-          }),
+        {
+          structuredOutput: {
+            schema: z.object({
+              passed: z
+                .boolean()
+                .describe(
+                  'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
+                ),
+              hallucinatedEntities: z
+                .array(z.string())
+                .describe('List of unsupported or disallowed claims found in the email'),
+              reason: z.string().describe('Reason for the pass/fail decision'),
+            }),
+          },
+          abortSignal: input.abortSignal,
         },
-        abortSignal: input.abortSignal,
-      },
+      ),
     );
 
     return ver.object;
@@ -243,6 +274,10 @@ ${body}`,
     throw new Error('LLM failed to generate a usable outreach draft after all retry attempts.');
   }
 
+  // De-anonymize the final subject & body before saving to CSDL
+  const finalSubject = deAnonymizeText(draftResult.subject, piiMapping);
+  const finalBody = deAnonymizeText(draftResult.body, piiMapping);
+
   let savedId!: string;
   await withEmit(
     {
@@ -257,8 +292,8 @@ ${body}`,
         id,
         tenant_id: input.session.tenant_id,
         candidate_id: cand.id,
-        subject: draftResult.subject,
-        body: draftResult.body,
+        subject: finalSubject,
+        body: finalBody,
         status: 'draft',
         hallucination_check_status: checkStatus,
         error_reason: errorReason,
@@ -270,8 +305,8 @@ ${body}`,
   return {
     id: savedId,
     candidateId: cand.id,
-    subject: draftResult.subject,
-    body: draftResult.body,
+    subject: finalSubject,
+    body: finalBody,
     hallucinationCheckStatus: checkStatus as 'passed' | 'failed',
     errorReason,
   };

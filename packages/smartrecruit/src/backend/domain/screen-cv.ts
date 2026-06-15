@@ -8,8 +8,11 @@ import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria } from '../db/schema.ts';
+import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
+import { anonymizeCvText } from './anonymize.ts';
 import { getModelConfig } from './model.ts';
 import { performOcr } from './ocr.ts';
+import { withRetry } from './retry.ts';
 
 export interface ScreenCvInput {
   existingCandidateId?: string;
@@ -159,8 +162,14 @@ Screening rules:
     model,
   });
 
-  const response = await agent.generate(
-    `Job Title: ${crit.job_title}
+  // Anonymize the CV text using the LLM helper
+  const anonymizedResult = await anonymizeCvText(cvContentText);
+  const anonymizedCvText = anonymizedResult.anonymizedText;
+  const piiMapping = anonymizedResult.mapping;
+
+  const response = await withRetry(() =>
+    agent.generate(
+      `Job Title: ${crit.job_title}
 Must-Have Skills: ${crit.must_have_skills.join(', ')}
 Nice-To-Have Skills: ${crit.nice_to_have_skills.join(', ')}
 Minimum YOE Required: ${crit.min_yoe}
@@ -172,81 +181,82 @@ Auto-flag if missing: ${crit.auto_flag_if_missing ?? 'None'}
 Guardrail Notes: ${crit.guardrail_notes ?? 'None'}
 Scoring Note: ${crit.scoring_note ?? 'None'}
 
-Candidate Name: ${input.candidateName}
+Candidate Name: [CANDIDATE_NAME]
 Candidate CV Content:
-${cvContentText}`,
-    {
-      structuredOutput: {
-        schema: z.object({
-          workPeriods: z.array(
-            z.object({
-              company: z.string(),
-              role: z.string(),
-              startDate: z.string().describe('Start date in YYYY-MM format'),
-              endDate: z.string().describe('End date in YYYY-MM format or "present"'),
-              achievements: z.array(z.string()),
-            }),
-          ),
-          skills: z.array(z.string()),
-          fitAnalysis: z.object({
-            mustHaveMatches: z.array(
+${anonymizedCvText}`,
+      {
+        structuredOutput: {
+          schema: z.object({
+            workPeriods: z.array(
               z.object({
-                jdSkill: z.string(),
-                cvSkill: z.string().nullable(),
-                matched: z.boolean(),
-                justification: z.string(),
-                evidenceSnippet: z
-                  .string()
-                  .nullable()
-                  .describe('Direct supporting evidence from CV, or null when missing'),
+                company: z.string(),
+                role: z.string(),
+                startDate: z.string().describe('Start date in YYYY-MM format'),
+                endDate: z.string().describe('End date in YYYY-MM format or "present"'),
+                achievements: z.array(z.string()),
               }),
             ),
-            niceToHaveMatches: z.array(
-              z.object({
-                jdSkill: z.string(),
-                cvSkill: z.string().nullable(),
-                matched: z.boolean(),
-                justification: z.string(),
-                evidenceSnippet: z
-                  .string()
-                  .nullable()
-                  .describe('Direct supporting evidence from CV, or null when missing'),
+            skills: z.array(z.string()),
+            fitAnalysis: z.object({
+              mustHaveMatches: z.array(
+                z.object({
+                  jdSkill: z.string(),
+                  cvSkill: z.string().nullable(),
+                  matched: z.boolean(),
+                  justification: z.string(),
+                  evidenceSnippet: z
+                    .string()
+                    .nullable()
+                    .describe('Direct supporting evidence from CV, or null when missing'),
+                }),
+              ),
+              niceToHaveMatches: z.array(
+                z.object({
+                  jdSkill: z.string(),
+                  cvSkill: z.string().nullable(),
+                  matched: z.boolean(),
+                  justification: z.string(),
+                  evidenceSnippet: z
+                    .string()
+                    .nullable()
+                    .describe('Direct supporting evidence from CV, or null when missing'),
+                }),
+              ),
+              scoreBreakdown: z.object({
+                mustHaveSkills: z
+                  .number()
+                  .min(0)
+                  .max(crit.weight_must_have_skills)
+                  .describe('Weighted score contribution for must-have skills'),
+                yoe: z
+                  .number()
+                  .min(0)
+                  .max(crit.weight_yoe)
+                  .describe('Weighted score contribution for years of experience'),
+                english: z
+                  .number()
+                  .min(0)
+                  .max(crit.weight_english)
+                  .describe('Weighted score contribution for English requirement'),
+                niceToHave: z
+                  .number()
+                  .min(0)
+                  .max(crit.weight_nice_to_have)
+                  .describe('Weighted score contribution for nice-to-have skills'),
               }),
-            ),
-            scoreBreakdown: z.object({
-              mustHaveSkills: z
-                .number()
-                .min(0)
-                .max(crit.weight_must_have_skills)
-                .describe('Weighted score contribution for must-have skills'),
-              yoe: z
-                .number()
-                .min(0)
-                .max(crit.weight_yoe)
-                .describe('Weighted score contribution for years of experience'),
-              english: z
-                .number()
-                .min(0)
-                .max(crit.weight_english)
-                .describe('Weighted score contribution for English requirement'),
-              niceToHave: z
-                .number()
-                .min(0)
-                .max(crit.weight_nice_to_have)
-                .describe('Weighted score contribution for nice-to-have skills'),
+              fitScore: z.number().int().min(0).max(100),
+              pros: z.array(z.string()),
+              gaps: z.array(z.string()),
+              flags: z
+                .array(z.string())
+                .describe('Critical guardrail or auto-flag findings that need recruiter attention'),
+              justification: z.string(),
             }),
-            fitScore: z.number().int().min(0).max(100),
-            pros: z.array(z.string()),
-            gaps: z.array(z.string()),
-            flags: z
-              .array(z.string())
-              .describe('Critical guardrail or auto-flag findings that need recruiter attention'),
-            justification: z.string(),
           }),
-        }),
+        },
+        abortSignal: input.abortSignal,
       },
-      abortSignal: input.abortSignal,
-    },
+    ),
   );
 
   const parsed = response.object;
@@ -272,6 +282,7 @@ ${cvContentText}`,
     niceToHaveMatches: parsed.fitAnalysis.niceToHaveMatches,
     scoreBreakdown: parsed.fitAnalysis.scoreBreakdown,
     flags: parsed.fitAnalysis.flags,
+    piiMapping,
   };
 
   const isShortlisted = parsed.fitAnalysis.fitScore >= 70;
@@ -325,6 +336,22 @@ ${cvContentText}`,
       }
     },
   );
+
+  // Embed and update PgVector
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    await upsertCandidateCvEmbedding(dbUrl, {
+      id: savedId,
+      tenant_id: input.session.tenant_id,
+      display_name: input.candidateName,
+      email: input.candidateEmail,
+      fit_score: parsed.fitAnalysis.fitScore,
+      cv_skills: parsed.skills.join(', '),
+      cv_text: cvContentText,
+    }).catch((err) => {
+      console.error(`Failed to upsert candidate embedding for ${savedId}:`, err);
+    });
+  }
 
   return {
     id: savedId,

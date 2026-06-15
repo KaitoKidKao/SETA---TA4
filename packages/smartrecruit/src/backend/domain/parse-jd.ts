@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { criteria } from '../db/schema.ts';
 import { getModelConfig } from './model.ts';
+import { withRetry } from './retry.ts';
 
 export interface ParseJdInput {
   jobTitle: string;
@@ -57,9 +58,8 @@ Return the result structured according to the schema.`,
     model,
   });
 
-  const response = await agent.generate(
-    `Job Title: ${input.jobTitle}\n\nJob Description:\n${input.jdText}`,
-    {
+  const response = await withRetry(() =>
+    agent.generate(`Job Title: ${input.jobTitle}\n\nJob Description:\n${input.jdText}`, {
       structuredOutput: {
         schema: z.object({
           mustHaveSkills: z.array(z.string()).describe('List of must-have technical skills'),
@@ -135,7 +135,7 @@ Return the result structured according to the schema.`,
         }),
       },
       abortSignal: input.abortSignal,
-    },
+    }),
   );
 
   const parsed = response.object;

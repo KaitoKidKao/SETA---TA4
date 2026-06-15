@@ -1,4 +1,6 @@
 import { PgVector } from '@mastra/pg';
+import { embedMany, resolveEmbeddingProvider } from '@seta/shared-embeddings';
+import { generatePseudoEmbedding } from '../domain/pseudo-embed.ts';
 
 export const SMARTRECRUIT_VECTOR_NAMESPACE = 'smartrecruit_rag';
 export const SMARTRECRUIT_VECTOR_INDEX = 'candidate_cv_embeddings';
@@ -59,4 +61,70 @@ export async function resetSmartrecruitVectorStore(): Promise<void> {
   const { store } = cached;
   cached = null;
   await store.disconnect().catch(() => {});
+}
+
+let isEmbeddingProviderHealthy = true;
+
+export async function getEmbeddingWithFallback(text: string): Promise<number[]> {
+  if (!isEmbeddingProviderHealthy) {
+    return generatePseudoEmbedding(text);
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'mock-key' || apiKey.startsWith('mock')) {
+    isEmbeddingProviderHealthy = false;
+    return generatePseudoEmbedding(text);
+  }
+
+  try {
+    const provider = resolveEmbeddingProvider();
+    const [vector] = await embedMany(provider, [text]);
+    if (vector) return vector;
+  } catch (error) {
+    console.error('Embedding provider failed, switching to local pseudo-embeddings:', error);
+    isEmbeddingProviderHealthy = false; // Tripping the circuit breaker
+    return generatePseudoEmbedding(text);
+  }
+  return generatePseudoEmbedding(text);
+}
+
+export async function upsertCandidateCvEmbedding(
+  dbUrl: string,
+  candidate: {
+    id: string;
+    tenant_id: string;
+    display_name: string;
+    email: string;
+    fit_score?: number | null;
+    cv_skills?: string | null;
+    cv_text: string;
+  },
+): Promise<void> {
+  const store = getSmartrecruitVectorStore(dbUrl);
+  await ensureSmartrecruitVectorIndex(store);
+
+  const vector = await getEmbeddingWithFallback(candidate.cv_text);
+
+  const metadata: CandidateCVVectorMetadata = {
+    tenant_id: candidate.tenant_id,
+    candidate_id: candidate.id,
+    display_name: candidate.display_name,
+    email: candidate.email,
+    fit_score: candidate.fit_score ?? null,
+    skills: candidate.cv_skills
+      ? candidate.cv_skills
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
+    cv_text: candidate.cv_text,
+    embedded_at: new Date().toISOString(),
+  };
+
+  await store.upsert({
+    indexName: SMARTRECRUIT_VECTOR_INDEX,
+    vectors: [vector],
+    metadata: [metadata],
+    ids: [candidateCvVectorId(candidate.tenant_id, candidate.id)],
+  });
 }

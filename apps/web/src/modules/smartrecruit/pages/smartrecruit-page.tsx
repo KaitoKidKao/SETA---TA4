@@ -66,7 +66,7 @@ interface CandidateState {
   email: string;
   phone: string | null;
   status: string;
-  fit_score: number;
+  fit_score: number | null;
   screening_report: {
     pros: string[];
     gaps: string[];
@@ -84,7 +84,7 @@ interface CandidateState {
       matched: boolean;
       justification: string;
     }>;
-  };
+  } | null;
 }
 
 interface DraftState {
@@ -97,6 +97,32 @@ interface DraftState {
   error_reason: string | null;
 }
 
+async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
+  const text = await res.text();
+  if (!text.trim()) return null;
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(text.slice(0, 300));
+  }
+}
+
+function candidateReport(
+  candidate: CandidateState,
+): NonNullable<CandidateState['screening_report']> {
+  return {
+    pros: candidate.screening_report?.pros ?? [],
+    gaps: candidate.screening_report?.gaps ?? [],
+    yoeExplanation:
+      candidate.screening_report?.yoeExplanation ??
+      'No screening report is available for this candidate yet.',
+    overallJustification: candidate.screening_report?.overallJustification ?? '',
+    mustHaveMatches: candidate.screening_report?.mustHaveMatches ?? [],
+    niceToHaveMatches: candidate.screening_report?.niceToHaveMatches ?? [],
+  };
+}
+
 export function SmartrecruitPage() {
   // Navigation & Core State
   const [activeTab, setActiveTab] = useState<'new' | 'active'>('new');
@@ -105,13 +131,13 @@ export function SmartrecruitPage() {
   const [runError, setRunError] = useState<string | null>(null);
 
   // Form inputs
-  const [jobTitle, setJobTitle] = useState('Full Stack Developer');
+  const [jobTitle, setJobTitle] = useState('AI Engineer');
   const [jdText, setJdText] =
-    useState(`We are looking for a Senior Full Stack Developer to join our team.
-- At least 3 years of experience in backend development.
-- Strong knowledge of React, Node.js, TypeScript, and SQL.
-- Nice to have: Docker, AWS, and Next.js.
-- Bachelor's degree in Computer Science or related fields.`);
+    useState(`We are looking for an AI Engineer to build and deploy advanced AI solutions.
+- At least 3 years of experience in AI/ML development.
+- Strong knowledge of Python, PyTorch, LLMs, and prompt engineering.
+- Nice to have: LangChain, Vector Databases, and cloud deployment (AWS/GCP).
+- Bachelor's degree in Computer Science, Mathematics, or related fields.`);
 
   const [uploadedCvs, setUploadedCvs] = useState<UploadedCv[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -379,7 +405,12 @@ export function SmartrecruitPage() {
         throw new Error('Failed to initiate recruitment agentic workflow');
       }
 
-      const data = await res.json();
+      const data = await readJsonResponse<{ runId?: string; error?: string; message?: string }>(
+        res,
+      );
+      if (!data?.runId) {
+        throw new Error(data?.message || data?.error || 'Workflow start returned no run ID.');
+      }
       setActiveRunId(data.runId);
       setRunStatus('running');
       setRunError(null);
@@ -400,9 +431,18 @@ export function SmartrecruitPage() {
         body: JSON.stringify({}),
       });
 
-      const data = await res.json();
+      const data = await readJsonResponse<{
+        error?: string;
+        message?: string;
+        candidates?: { created: number; updated: number };
+        criteria?: { created: number; updated: number };
+        templates?: { created: number; updated: number };
+      }>(res);
       if (!res.ok) {
-        throw new Error(data.message || data.error || 'Failed to import mock dataset.');
+        throw new Error(data?.message || data?.error || 'Failed to import mock dataset.');
+      }
+      if (!data?.candidates || !data.criteria || !data.templates) {
+        throw new Error('Import mock dataset returned an empty or invalid response.');
       }
 
       setMockDataSummary(
@@ -436,9 +476,17 @@ export function SmartrecruitPage() {
         },
       );
 
-      const data = await res.json();
+      const data = await readJsonResponse<{
+        error?: string;
+        message?: string;
+        screened?: number;
+        skipped?: number;
+      }>(res);
       if (!res.ok) {
-        throw new Error(data.message || data.error || 'Failed to screen candidate pool.');
+        throw new Error(data?.message || data?.error || 'Failed to screen candidate pool.');
+      }
+      if (!data) {
+        throw new Error('Candidate pool screening returned an empty response.');
       }
 
       setMockDataSummary(
@@ -1263,8 +1311,9 @@ export function SmartrecruitPage() {
                     <div className="flex-1 overflow-y-auto divide-y divide-hairline">
                       {candidatesList.map((cand) => {
                         const isSelected = selectedCandidate?.id === cand.id;
+                        const fitScore = cand.fit_score ?? 0;
                         const scoreColor =
-                          cand.fit_score >= 80
+                          fitScore >= 80
                             ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
                             : 'text-amber-500 bg-amber-500/10 border-amber-500/20';
                         const draft = draftsList.find((d) => d.candidate_id === cand.id);
@@ -1310,7 +1359,7 @@ export function SmartrecruitPage() {
                                   scoreColor,
                                 )}
                               >
-                                {cand.fit_score}%
+                                {fitScore}%
                               </div>
                               <ChevronRight className="size-4 text-ink-tertiary" />
                             </div>
@@ -1336,7 +1385,7 @@ export function SmartrecruitPage() {
                         <div className="flex items-center gap-1.5">
                           <span className="text-eyebrow text-ink-subtle">Fit Score:</span>
                           <Badge className="bg-emerald-500 text-white">
-                            {selectedCandidate.fit_score}% Fit
+                            {selectedCandidate.fit_score ?? 0}% Fit
                           </Badge>
                         </div>
                       </div>
@@ -1356,7 +1405,12 @@ export function SmartrecruitPage() {
                                 Pros / Strengths
                               </span>
                               <ul className="flex flex-col gap-1">
-                                {selectedCandidate.screening_report.pros.map((pro, idx) => (
+                                {candidateReport(selectedCandidate).pros.length === 0 && (
+                                  <li className="text-body-sm text-ink-subtle">
+                                    No strengths recorded yet.
+                                  </li>
+                                )}
+                                {candidateReport(selectedCandidate).pros.map((pro, idx) => (
                                   <li
                                     key={idx}
                                     className="text-body-sm text-ink flex items-start gap-1.5"
@@ -1372,7 +1426,12 @@ export function SmartrecruitPage() {
                                 Gaps / Deficiencies
                               </span>
                               <ul className="flex flex-col gap-1">
-                                {selectedCandidate.screening_report.gaps.map((gap, idx) => (
+                                {candidateReport(selectedCandidate).gaps.length === 0 && (
+                                  <li className="text-body-sm text-ink-subtle">
+                                    No gaps recorded yet.
+                                  </li>
+                                )}
+                                {candidateReport(selectedCandidate).gaps.map((gap, idx) => (
                                   <li
                                     key={idx}
                                     className="text-body-sm text-ink flex items-start gap-1.5"
@@ -1390,7 +1449,7 @@ export function SmartrecruitPage() {
                               Experience Calculation
                             </span>
                             <p className="text-body-sm text-ink italic font-medium">
-                              {selectedCandidate.screening_report.yoeExplanation}
+                              {candidateReport(selectedCandidate).yoeExplanation}
                             </p>
                           </div>
                         </div>

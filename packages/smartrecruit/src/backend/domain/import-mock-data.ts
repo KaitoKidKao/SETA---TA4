@@ -4,6 +4,7 @@ import xlsx from 'xlsx';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria, outreachTemplates } from '../db/schema.ts';
+import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
 
 type SheetRow = Record<string, unknown>;
 
@@ -162,16 +163,34 @@ export async function importSmartrecruitMockData(
       )
       .limit(1);
 
+    let candidateId: string;
     if (existing) {
+      candidateId = existing.id;
       await db.update(candidates).set(values).where(eq(candidates.id, existing.id));
       result.candidates.updated++;
     } else {
+      candidateId = crypto.randomUUID();
       await db.insert(candidates).values({
-        id: crypto.randomUUID(),
+        id: candidateId,
         tenant_id: tenantId,
         ...values,
       });
       result.candidates.created++;
+    }
+
+    const dbUrl = process.env.DATABASE_URL;
+    if (dbUrl && values.cv_text) {
+      await upsertCandidateCvEmbedding(dbUrl, {
+        id: candidateId,
+        tenant_id: tenantId,
+        display_name: values.display_name,
+        email: values.email,
+        fit_score: null,
+        cv_skills: values.cv_skills,
+        cv_text: values.cv_text,
+      }).catch((err) => {
+        console.error(`Failed to embed candidate ${candidateId} during import:`, err);
+      });
     }
   }
 

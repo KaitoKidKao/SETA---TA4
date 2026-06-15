@@ -4,11 +4,11 @@ import { createWorkflow } from '@mastra/core/workflows/evented';
 import { ApprovalCardSchema, sessionFromRequestContext, type WorkflowSpec } from '@seta/agent-sdk';
 import { withEmit } from '@seta/core/events';
 import { buildActorSession } from '@seta/identity';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { smartrecruitDb } from '../db/client.ts';
-import { criteria as criteriaTable } from '../db/schema.ts';
-import { draftOutreach } from '../domain/draft-outreach.ts';
+import { criteria as criteriaTable, outreachDrafts } from '../db/schema.ts';
+import { type DraftOutreachOutput, draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { screenCv } from '../domain/screen-cv.ts';
@@ -299,12 +299,17 @@ const DraftOutreachStepOutputSchema = z.object({
 const Gate2ResumeSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('approve'),
-    approvedDraftIds: z.array(z.string().uuid()),
+    approvedDraftIds: z.array(z.string().uuid()).optional(),
   }),
   z.object({
     action: z.literal('decline'),
   }),
 ]);
+
+const Gate2GenericResumeSchema = z.object({
+  decision: z.enum(['approve', 'reject', 'modify', 'timeout']),
+  approvedDraftIds: z.array(z.string().uuid()).optional(),
+});
 
 const draftOutreachStep = createStep({
   id: 'smartrecruit.draftOutreach',
@@ -313,13 +318,13 @@ const draftOutreachStep = createStep({
   inputSchema: ScreenCvsStepOutputSchema,
   outputSchema: DraftOutreachStepOutputSchema,
   suspendSchema: ApprovalCardSchema,
-  resumeSchema: Gate2ResumeSchema,
+  resumeSchema: z.union([Gate2ResumeSchema, Gate2GenericResumeSchema]),
   execute: async ({ inputData, resumeData, suspend, requestContext, runId }) => {
     const { userId } = await sessionFromRequestContext(requestContext);
     const session = await buildActorSession({ user_id: userId });
 
     if (!resumeData) {
-      const draftResults: any[] = [];
+      const draftResults: DraftOutreachOutput[] = [];
       for (const cand of inputData.shortlistedCandidates) {
         const draft = await draftOutreach({
           candidateId: cand.id,
@@ -380,13 +385,42 @@ const draftOutreachStep = createStep({
       return suspend(card);
     }
 
-    // When resumed (Gate 2 confirmed)
-    if (resumeData.action === 'decline') {
-      throw new Error('Workflow run was declined at Gate 2: Outreach email approval.');
+    // When resumed (Gate 2 confirmed). The agent approval route normally
+    // translates ApprovalCard.primary.argsPatch into { action, approvedDraftIds }.
+    // Older/lossy lifecycle events can resume with only { decision: "approve" },
+    // so support both shapes defensively.
+    const declined =
+      ('action' in resumeData && resumeData.action === 'decline') ||
+      ('decision' in resumeData &&
+        (resumeData.decision === 'reject' || resumeData.decision === 'timeout'));
+
+    if (declined) {
+      return { approvedDraftIds: [] };
     }
 
+    if ('approvedDraftIds' in resumeData && resumeData.approvedDraftIds?.length) {
+      return {
+        approvedDraftIds: resumeData.approvedDraftIds,
+      };
+    }
+
+    const candidateIds = inputData.shortlistedCandidates.map((candidate) => candidate.id);
+    if (candidateIds.length === 0) return { approvedDraftIds: [] };
+
+    const db = smartrecruitDb();
+    const rows = await db
+      .select({ id: outreachDrafts.id })
+      .from(outreachDrafts)
+      .where(
+        and(
+          eq(outreachDrafts.tenant_id, session.tenant_id),
+          inArray(outreachDrafts.candidate_id, candidateIds),
+          eq(outreachDrafts.status, 'draft'),
+        ),
+      );
+
     return {
-      approvedDraftIds: resumeData.approvedDraftIds,
+      approvedDraftIds: rows.map((row) => row.id),
     };
   },
 });
