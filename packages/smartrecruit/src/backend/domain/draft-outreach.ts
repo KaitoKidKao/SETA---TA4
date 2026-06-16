@@ -8,6 +8,26 @@ import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 
 const tracer = otelTrace.getTracer('smartrecruit');
 
+const OutreachDraftSchema = z.object({
+  subject: z.string().describe('Email subject line'),
+  body: z.string().describe('Email body text'),
+});
+
+const VerificationSchema = z.object({
+  passed: z
+    .boolean()
+    .describe(
+      'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
+    ),
+  hallucinatedEntities: z
+    .array(z.string())
+    .describe('List of unsupported or disallowed claims found in the email'),
+  reason: z.string().describe('Reason for the pass/fail decision'),
+});
+
+type OutreachDraftResult = z.infer<typeof OutreachDraftSchema>;
+type VerificationResult = z.infer<typeof VerificationSchema>;
+
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, outreachDrafts, outreachTemplates } from '../db/schema.ts';
 import { anonymizeCvText, deAnonymizeText } from './anonymize.ts';
@@ -153,9 +173,7 @@ ${warning ? `CRITICAL WARNING: ${warning}` : ''}
           model,
         });
 
-        const res = await withRetry(() =>
-          agent.generate(
-            `Candidate Name: ${namePlaceholder}
+        const prompt = `Candidate Name: ${namePlaceholder}
 Candidate Email: ${emailPlaceholder}
 Candidate Current Status: ${cand.status}
 Candidate Source Status: ${cand.source_status ?? 'Unknown'}
@@ -171,19 +189,16 @@ Candidate Education: ${[cand.highest_education, cand.education_major].filter(Boo
 Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
 Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
 Candidate CV Content:
-${anonymizedCvText}`,
-            {
-              structuredOutput: {
-                schema: z.object({
-                  subject: z.string().describe('Email subject line'),
-                  body: z.string().describe('Email body text'),
-                }),
-              },
-              temperature: temp,
-              abortSignal: input.abortSignal,
-              // biome-ignore lint/suspicious/noExplicitAny: bypass model options typecheck on overloaded Mastra generate call
-            } as any,
-          ),
+${anonymizedCvText}`;
+
+        const res = await withRetry(() =>
+          agent.generate<typeof OutreachDraftSchema, OutreachDraftResult>(prompt, {
+            structuredOutput: {
+              schema: OutreachDraftSchema,
+            },
+            modelSettings: { temperature: temp },
+            ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+          }),
         );
 
         return res.object;
@@ -208,9 +223,7 @@ Return passed=false and list every unsupported or disallowed claim. If all claim
           model,
         });
 
-        const ver = await withRetry(() =>
-          verificationAgent.generate(
-            `${templateContext}
+        const prompt = `${templateContext}
 
 Candidate Name: ${namePlaceholder}
 Candidate Current Status: ${cand.status}
@@ -231,24 +244,15 @@ ${anonymizedCvText}
 
 Email Subject: ${subject}
 Email Body:
-${body}`,
-            {
-              structuredOutput: {
-                schema: z.object({
-                  passed: z
-                    .boolean()
-                    .describe(
-                      'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
-                    ),
-                  hallucinatedEntities: z
-                    .array(z.string())
-                    .describe('List of unsupported or disallowed claims found in the email'),
-                  reason: z.string().describe('Reason for the pass/fail decision'),
-                }),
-              },
-              abortSignal: input.abortSignal,
+${body}`;
+
+        const ver = await withRetry(() =>
+          verificationAgent.generate<typeof VerificationSchema, VerificationResult>(prompt, {
+            structuredOutput: {
+              schema: VerificationSchema,
             },
-          ),
+            ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+          }),
         );
 
         return ver.object;
@@ -257,10 +261,8 @@ ${body}`,
       // 3. Drafting loop with self-correction
       let temp = 0.7;
       let attempt = 1;
-      let draftResult: { subject: string; body: string } | undefined;
-      let verification:
-        | { passed: boolean; hallucinatedEntities: string[]; reason: string }
-        | undefined;
+      let draftResult: OutreachDraftResult | undefined;
+      let verification: VerificationResult | undefined;
       let warning = '';
 
       while (attempt <= 3) {
