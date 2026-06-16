@@ -16,6 +16,7 @@ allowBuilds:
   msw: true
   protobufjs: true
   ssh2: true
+  tesseract.js: true
 minimumReleaseAgeExclude:
   - '@aws-sdk/*'
   - '@mastra/*'
