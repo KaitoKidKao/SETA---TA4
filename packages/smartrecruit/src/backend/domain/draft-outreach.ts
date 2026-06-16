@@ -181,7 +181,8 @@ ${anonymizedCvText}`,
               },
               temperature: temp,
               abortSignal: input.abortSignal,
-            } as unknown as Parameters<Agent['generate']>[1],
+              // biome-ignore lint/suspicious/noExplicitAny: bypass model options typecheck on overloaded Mastra generate call
+            } as any,
           ),
         );
 
