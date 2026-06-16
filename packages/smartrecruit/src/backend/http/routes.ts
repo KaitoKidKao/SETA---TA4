@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
@@ -46,8 +47,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../.
 
 function resolveMockDataFilePath(filePath?: string): string {
   if (filePath) {
-    return isAbsolute(filePath) ? filePath : resolve(repoRoot, filePath);
+    if (isAbsolute(filePath)) return filePath;
+    const cwdPath = resolve(process.cwd(), filePath);
+    if (existsSync(cwdPath)) return cwdPath;
+    return resolve(repoRoot, filePath);
   }
+  const defaultCwdPath = resolve(process.cwd(), 'mock-data/04_ta_cv_screening.xlsx');
+  if (existsSync(defaultCwdPath)) return defaultCwdPath;
   return resolve(repoRoot, 'mock-data/04_ta_cv_screening.xlsx');
 }
 
