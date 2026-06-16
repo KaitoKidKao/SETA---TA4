@@ -20,6 +20,7 @@ import {
 } from '@seta/shared-ui';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   Check,
   CheckCircle,
@@ -35,7 +36,7 @@ import {
   User,
   XCircle,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 interface UploadedCv {
   id: string;
@@ -51,6 +52,7 @@ interface UploadedCv {
 interface CriteriaState {
   id: string;
   external_criteria_id?: string | null;
+  jd_id?: string | null;
   job_title: string;
   jd_text: string;
   must_have_skills: string[];
@@ -176,6 +178,8 @@ export function SmartrecruitPage() {
   const [newMustHave, setNewMustHave] = useState('');
   const [newNiceToHave, setNewNiceToHave] = useState('');
   const [isSavingCriteria, setIsSavingCriteria] = useState(false);
+  const [skillGaps, setSkillGaps] = useState<any | null>(null);
+  const [slaTracker, setSlaTracker] = useState<any[]>([]);
 
   // Gate 2: Candidate Scorecard & Email workspace
   const [candidatesList, setCandidatesList] = useState<CandidateState[]>([]);
@@ -201,6 +205,37 @@ export function SmartrecruitPage() {
     return true;
   });
 
+  const dataWarnings = useMemo(() => {
+    const list: string[] = [];
+    if (activeCriteria) {
+      const jdId = activeCriteria.jd_id || activeCriteria.external_criteria_id;
+      if (!jdId) {
+        list.push('Cảnh báo: Không tìm thấy mã liên kết mô tả công việc (jd_id).');
+      } else if (!/^[A-Z]{2,4}-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/.test(jdId) && jdId.length <= 6) {
+        list.push(
+          `Cảnh báo: Mã JD liên kết (${jdId}) có thể bị lệch cấu trúc so với định dạng đầy đủ (Ví dụ: JD-AI-SR-001).`,
+        );
+      }
+      if (!activeCriteria.must_have_skills || activeCriteria.must_have_skills.length === 0) {
+        list.push('Cảnh báo: Chưa cấu hình kỹ năng bắt buộc (Must-Have Skills) cho đợt sàng lọc.');
+      }
+      if (activeCriteria.min_yoe === 0) {
+        list.push('Cảnh báo: Số năm kinh nghiệm tối thiểu đang cấu hình bằng 0.');
+      }
+    }
+    for (const cv of uploadedCvs) {
+      if (cv.status === 'ready') {
+        if (!cv.email) {
+          list.push(`Cảnh báo: Ứng viên "${cv.name || cv.filename}" thiếu địa chỉ email.`);
+        }
+        if (!cv.phone) {
+          list.push(`Cảnh báo: Ứng viên "${cv.name || cv.filename}" thiếu số điện thoại liên hệ.`);
+        }
+      }
+    }
+    return list;
+  }, [activeCriteria, uploadedCvs]);
+
   const fetchCriteriaList = useCallback(async () => {
     try {
       const res = await fetch('/api/smartrecruit/v1/criteria');
@@ -217,6 +252,15 @@ export function SmartrecruitPage() {
       const res = await fetch(`/api/smartrecruit/v1/criteria/${criteriaId}`);
       const data = await res.json();
       setActiveCriteria(data);
+      if (data.job_title) {
+        const gapRes = await fetch(
+          `/api/smartrecruit/v1/skill-gaps?jobTitle=${encodeURIComponent(data.job_title)}`,
+        );
+        if (gapRes.ok) {
+          const gapData = await gapRes.json();
+          setSkillGaps(gapData);
+        }
+      }
     } catch (_err) {}
   }, []);
   const fetchSuggestedCandidates = useCallback(async (criteriaId: string) => {
@@ -302,11 +346,22 @@ export function SmartrecruitPage() {
     } catch (_err) {}
   }, [activeRunId]);
 
+  const fetchSlaTracker = useCallback(async () => {
+    try {
+      const res = await fetch('/api/smartrecruit/v1/sla-tracker');
+      if (res.ok) {
+        const data = await res.json();
+        setSlaTracker(data.tracker || []);
+      }
+    } catch (_err) {}
+  }, []);
+
   // Fetch pending runs and criteria list on mount
   useEffect(() => {
     fetchCriteriaList();
     fetchPendingRuns();
-  }, [fetchPendingRuns, fetchCriteriaList]);
+    fetchSlaTracker();
+  }, [fetchPendingRuns, fetchCriteriaList, fetchSlaTracker]);
 
   // Poll active run and pending approvals if a run is running
   useEffect(() => {
@@ -924,6 +979,78 @@ export function SmartrecruitPage() {
                 </CardContent>
               </Card>
 
+              {/* Hiring Manager SLA Tracker Card */}
+              {slaTracker.length > 0 && (
+                <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[350px] overflow-hidden flex flex-col">
+                  <CardHeader className="pb-3 shrink-0">
+                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                      <Mail className="size-4 text-rose-500" />
+                      HM Feedback SLA Tracker (DS08)
+                    </CardTitle>
+                    <CardDescription className="text-eyebrow">
+                      Theo dõi thời hạn phản hồi CV 48h của Hiring Manager.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex-1 overflow-y-auto pt-0">
+                    <div className="flex flex-col gap-2">
+                      {slaTracker.map((item: any) => (
+                        <div
+                          key={item.feedbackId}
+                          className={cn(
+                            'p-2.5 rounded-lg border flex flex-col gap-1 text-body-sm transition-all bg-surface hover:bg-canvas',
+                            item.slaBreach ? 'border-rose-200/50' : 'border-hairline',
+                          )}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-ink truncate max-w-[120px]">
+                              {item.candidateName}
+                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {item.slaBreach ? (
+                                <Badge className="bg-rose-500 text-white font-bold text-[10px] uppercase px-1.5 py-0.5 animate-pulse">
+                                  SLA Breach
+                                </Badge>
+                              ) : (
+                                <Badge className="bg-emerald-500 text-white font-bold text-[10px] uppercase px-1.5 py-0.5">
+                                  On Time
+                                </Badge>
+                              )}
+                              <Badge className="bg-surface-1 border border-hairline font-mono text-[10px]">
+                                {item.feedbackStatus}
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="text-eyebrow text-ink-subtle flex items-center justify-between">
+                            <span>
+                              HM: {item.hiringManager} | Vị trí: {item.position}
+                            </span>
+                            {item.feedbackStatus.toLowerCase() !== 'submitted' && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 text-[10px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-1.5 py-0"
+                                onClick={() =>
+                                  alert(
+                                    `Đã gửi email nhắc nhở tự động đến Hiring Manager (${item.hiringManager}) về hồ sơ ứng viên ${item.candidateName}!`,
+                                  )
+                                }
+                              >
+                                Remind HM
+                              </Button>
+                            )}
+                          </div>
+                          {item.hmFeedbackText && (
+                            <p className="text-[11px] text-ink-subtle bg-canvas/30 p-1.5 rounded italic mt-1 border-l-2 border-primary/30">
+                              HM Feedback: "{item.hmFeedbackText}"
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Start Campaign Trigger */}
               <div className="flex flex-col gap-2">
                 <Button
@@ -1176,6 +1303,21 @@ export function SmartrecruitPage() {
             {/* GATE 1 PANEL: CRITERIA CONFIRMATION */}
             {runStatus === 'paused' && isGate1Active && activeCriteria && (
               <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                {dataWarnings.length > 0 && (
+                  <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 p-4 rounded-xl flex items-start gap-3">
+                    <AlertTriangle className="size-5 shrink-0 mt-0.5" />
+                    <div className="flex-1 flex flex-col gap-1">
+                      <span className="font-bold text-body-sm text-amber-800">
+                        Cảnh báo Chất lượng Dữ liệu (Data Quality Warnings)
+                      </span>
+                      <ul className="list-disc pl-4 text-body-sm space-y-1">
+                        {dataWarnings.map((warning, idx) => (
+                          <li key={idx}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
                 <Card className="shadow-md border-hairline-strong bg-surface">
                   <CardHeader className="border-b border-hairline">
                     <div className="flex items-center justify-between">
@@ -1376,6 +1518,54 @@ export function SmartrecruitPage() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Skill Gap Analysis Section */}
+                    {skillGaps && (
+                      <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-3">
+                        <div className="bg-blue-500/5 border border-blue-500/20 p-4 rounded-xl flex flex-col gap-2">
+                          <div className="flex items-center gap-2 text-blue-700">
+                            <Settings className="size-4 animate-spin-slow" />
+                            <span className="font-bold text-body-sm text-blue-800">
+                              Phân tích Khoảng trống Kỹ năng của Đội ngũ (Team Skill Gap Analysis)
+                            </span>
+                          </div>
+                          <p className="text-body-sm text-ink-subtle">
+                            <strong>Dự án/Team:</strong> {skillGaps.teamName} |{' '}
+                            <strong>Thiếu hụt kỹ năng:</strong>{' '}
+                            {skillGaps.skillsGap.length > 0 ? (
+                              skillGaps.skillsGap.map((s: string, idx: number) => (
+                                <Badge
+                                  key={idx}
+                                  variant="secondary"
+                                  className="mx-0.5 text-rose-600 bg-rose-50 border-rose-100"
+                                >
+                                  {s}
+                                </Badge>
+                              ))
+                            ) : (
+                              <span className="text-emerald-600 font-semibold">
+                                Không phát hiện khoảng trống lớn
+                              </span>
+                            )}
+                          </p>
+                          <blockquote className="border-l-2 border-hairline-strong pl-3 italic text-body-sm text-ink-subtle my-1">
+                            "{skillGaps.summary}"
+                          </blockquote>
+                          <div className="text-body-sm text-ink flex flex-col gap-1 mt-1">
+                            <strong className="text-blue-900">
+                              Đề xuất điều chỉnh trọng số sàng lọc:
+                            </strong>
+                            <ul className="list-disc pl-4 space-y-1">
+                              {skillGaps.recommendations.map((rec: string, idx: number) => (
+                                <li key={idx} className="text-ink-subtle">
+                                  {rec}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Suggested Candidates full width section */}
                     <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-3">

@@ -5,6 +5,7 @@ import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria, outreachTemplates } from '../db/schema.ts';
 import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
+import { normalizeBoolean, normalizeEnglishLevel } from './normalize-candidate.ts';
 
 type SheetRow = Record<string, unknown>;
 
@@ -132,7 +133,7 @@ export async function importSmartrecruitMockData(
       notable_projects: nullableString(row, 'notable_projects'),
       salary_expectation: nullableString(row, 'salary_expectation'),
       cv_skills: nullableString(row, 'cv_skills'),
-      english_level: nullableString(row, 'english_level'),
+      english_level: normalizeEnglishLevel(nullableString(row, 'english_level')),
       highest_education: nullableString(row, 'highest_education'),
       education_major: nullableString(row, 'education_major'),
       certifications: nullableString(row, 'certifications'),
@@ -145,7 +146,7 @@ export async function importSmartrecruitMockData(
       result_release_date: nullableString(row, 'result_release_date'),
       recruiter_owner: nullableString(row, 'recruiter_owner'),
       rejection_reason: nullableString(row, 'rejection_reason'),
-      re_engagement_eligible: stringValue(row, 're_engagement_eligible').toUpperCase() === 'Y',
+      re_engagement_eligible: normalizeBoolean(row.re_engagement_eligible),
       re_engagement_notes: nullableString(row, 're_engagement_notes'),
       cv_text: buildCvText(row),
       status: normalizeCandidateStatus(stringValue(row, 'status')),

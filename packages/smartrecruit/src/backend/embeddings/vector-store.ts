@@ -9,11 +9,8 @@ export const SMARTRECRUIT_VECTOR_DIMENSION = 1536;
 export interface CandidateCVVectorMetadata {
   tenant_id: string;
   candidate_id: string;
-  display_name: string;
-  email: string;
   fit_score: number | null;
   skills: string[];
-  cv_text: string;
   embedded_at: string;
 }
 
@@ -108,8 +105,6 @@ export async function upsertCandidateCvEmbedding(
   const metadata: CandidateCVVectorMetadata = {
     tenant_id: candidate.tenant_id,
     candidate_id: candidate.id,
-    display_name: candidate.display_name,
-    email: candidate.email,
     fit_score: candidate.fit_score ?? null,
     skills: candidate.cv_skills
       ? candidate.cv_skills
@@ -117,7 +112,6 @@ export async function upsertCandidateCvEmbedding(
           .map((s) => s.trim())
           .filter(Boolean)
       : [],
-    cv_text: candidate.cv_text,
     embedded_at: new Date().toISOString(),
   };
 

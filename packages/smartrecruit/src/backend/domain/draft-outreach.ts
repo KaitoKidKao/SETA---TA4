@@ -1,9 +1,13 @@
 import { Agent } from '@mastra/core/agent';
+import { trace as otelTrace, type Span } from '@opentelemetry/api';
 import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
+
+const tracer = otelTrace.getTracer('smartrecruit');
+
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, outreachDrafts, outreachTemplates } from '../db/schema.ts';
 import { anonymizeCvText, deAnonymizeText } from './anonymize.ts';
@@ -29,96 +33,106 @@ export interface DraftOutreachOutput {
 export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOutreachOutput> {
   requirePermission(input.session, SMARTRECRUIT_WRITE);
 
-  const db = smartrecruitDb();
+  return tracer.startActiveSpan('smartrecruit.draftOutreach', async (span: Span) => {
+    span.setAttribute('candidate_id', input.candidateId);
+    if (input.templateId) span.setAttribute('template_id', input.templateId);
 
-  // 1. Fetch candidate
-  const [cand] = await db
-    .select()
-    .from(candidates)
-    .where(
-      and(eq(candidates.id, input.candidateId), eq(candidates.tenant_id, input.session.tenant_id)),
-    )
-    .limit(1);
+    try {
+      const db = smartrecruitDb();
 
-  if (!cand) {
-    throw new Error(`Candidate with ID ${input.candidateId} not found.`);
-  }
+      // 1. Fetch candidate
+      const [cand] = await db
+        .select()
+        .from(candidates)
+        .where(
+          and(
+            eq(candidates.id, input.candidateId),
+            eq(candidates.tenant_id, input.session.tenant_id),
+          ),
+        )
+        .limit(1);
 
-  // 2. Fetch template
-  let templ: typeof outreachTemplates.$inferSelect | undefined;
-  if (input.templateId) {
-    const [t] = await db
-      .select()
-      .from(outreachTemplates)
-      .where(
-        and(
-          eq(outreachTemplates.id, input.templateId),
-          eq(outreachTemplates.tenant_id, input.session.tenant_id),
-        ),
-      )
-      .limit(1);
-    templ = t;
-  } else {
-    const [t] = await db
-      .select()
-      .from(outreachTemplates)
-      .where(eq(outreachTemplates.tenant_id, input.session.tenant_id))
-      .limit(1);
-    templ = t;
-  }
+      if (!cand) {
+        throw new Error(`Candidate with ID ${input.candidateId} not found.`);
+      }
 
-  // Fallback default template if none configured/seeded in DB
-  const subjectTemplate =
-    templ?.subject_template ?? 'Career opportunities at SETA for {{candidateName}}';
-  const bodyTemplate =
-    templ?.body_template ??
-    `Hi {{candidateName}},
+      // 2. Fetch template
+      let templ: typeof outreachTemplates.$inferSelect | undefined;
+      if (input.templateId) {
+        const [t] = await db
+          .select()
+          .from(outreachTemplates)
+          .where(
+            and(
+              eq(outreachTemplates.id, input.templateId),
+              eq(outreachTemplates.tenant_id, input.session.tenant_id),
+            ),
+          )
+          .limit(1);
+        templ = t;
+      } else {
+        const [t] = await db
+          .select()
+          .from(outreachTemplates)
+          .where(eq(outreachTemplates.tenant_id, input.session.tenant_id))
+          .limit(1);
+        templ = t;
+      }
+
+      // Fallback default template if none configured/seeded in DB
+      const subjectTemplate =
+        templ?.subject_template ?? 'Career opportunities at SETA for {{candidateName}}';
+      const bodyTemplate =
+        templ?.body_template ??
+        `Hi {{candidateName}},
 
 We reviewed your impressive background and your experience with {{skills}}. We would love to discuss a potential fit at SETA.
 
 Looking forward to your reply.
 Best regards,
 SETA Recruitment Team`;
-  const templateContext = `Template Name: ${templ?.name ?? 'Default SETA outreach template'}
+      const templateContext = `Template Name: ${templ?.name ?? 'Default SETA outreach template'}
 Template Channel: ${templ?.source_channel ?? 'Email'}
 Template Use Case: ${templ?.use_case ?? 'General outreach'}
 Template Target Status: ${templ?.target_status ?? 'Any'}
 Template Language: ${templ?.language ?? 'English'}`;
 
-  // 3. Prepare Anonymization
-  let piiMapping: Record<string, string> = {};
-  let anonymizedCvText = cand.cv_text || '';
+      // 3. Prepare Anonymization
+      let piiMapping: Record<string, string> = {};
+      let anonymizedCvText = cand.cv_text || '';
 
-  const report = cand.screening_report as any;
-  if (report?.piiMapping) {
-    piiMapping = report.piiMapping;
-    // Replace original values in cv_text with placeholders to ensure LLM only sees anonymized text
-    for (const [placeholder, val] of Object.entries(piiMapping)) {
-      if (!val || val.length < 2) continue;
-      const escaped = val.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-      anonymizedCvText = anonymizedCvText.replace(new RegExp(escaped, 'g'), placeholder);
-    }
-  } else {
-    // Fallback if not screened or missing mapping
-    const anon = await anonymizeCvText(cand.cv_text || '');
-    anonymizedCvText = anon.anonymizedText;
-    piiMapping = anon.mapping;
-  }
+      const report = cand.screening_report as { piiMapping?: Record<string, string> } | null;
+      if (report?.piiMapping) {
+        piiMapping = report.piiMapping;
+        // Replace original values in cv_text with placeholders to ensure LLM only sees anonymized text
+        for (const [placeholder, val] of Object.entries(piiMapping)) {
+          if (!val || val.length < 2) continue;
+          const escaped = val.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+          anonymizedCvText = anonymizedCvText.replace(new RegExp(escaped, 'g'), placeholder);
+        }
+      } else {
+        // Fallback if not screened or missing mapping
+        const anon = await anonymizeCvText(cand.cv_text || '');
+        anonymizedCvText = anon.anonymizedText;
+        piiMapping = anon.mapping;
+      }
 
-  // Find candidate name/email/phone placeholder from mapping, or use defaults
-  const namePlaceholder =
-    Object.keys(piiMapping).find((k) => k.includes('CANDIDATE_NAME')) || '[CANDIDATE_NAME]';
-  const emailPlaceholder = Object.keys(piiMapping).find((k) => k.includes('EMAIL')) || '[EMAIL_1]';
-  const phonePlaceholder = Object.keys(piiMapping).find((k) => k.includes('PHONE')) || '[PHONE_1]';
+      // Find candidate name/email/phone placeholder from mapping, or use defaults
+      const namePlaceholder =
+        Object.keys(piiMapping).find((k) => k.includes('CANDIDATE_NAME')) || '[CANDIDATE_NAME]';
+      const emailPlaceholder =
+        Object.keys(piiMapping).find((k) => k.includes('EMAIL')) || '[EMAIL_1]';
+      const _phonePlaceholder =
+        Object.keys(piiMapping).find((k) => k.includes('PHONE')) || '[PHONE_1]';
 
-  const model = getModelConfig();
+      const model = getModelConfig();
 
-  // Helper function for generation
-  const generateDraft = async (temp: number, warning?: string) => {
-    const agent = new Agent({
-      id: 'smartrecruit.outreachDrafter',
-      name: 'Outreach Drafter',
-      instructions: `You are an expert recruitment outreach coordinator drafting a candidate email for a human approval gate.
+      // Helper function for generation
+      const generateDraft = async (temp: number, warning?: string) => {
+        const agent = new Agent({
+          id: 'smartrecruit.outreachDrafter',
+          name: 'Outreach Drafter',
+          instructions: `You are an expert recruitment outreach coordinator drafting a candidate email for a human approval gate.
 
 Use the template as the source of structure and intent. Personalize only with facts present in the candidate profile or CV.
 
@@ -136,12 +150,12 @@ Template Body: ${bodyTemplate}
 
 ${warning ? `CRITICAL WARNING: ${warning}` : ''}
 `,
-      model,
-    });
+          model,
+        });
 
-    const res = await withRetry(() =>
-      agent.generate(
-        `Candidate Name: ${namePlaceholder}
+        const res = await withRetry(() =>
+          agent.generate(
+            `Candidate Name: ${namePlaceholder}
 Candidate Email: ${emailPlaceholder}
 Candidate Current Status: ${cand.status}
 Candidate Source Status: ${cand.source_status ?? 'Unknown'}
@@ -158,28 +172,28 @@ Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
 Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
 Candidate CV Content:
 ${anonymizedCvText}`,
-        {
-          structuredOutput: {
-            schema: z.object({
-              subject: z.string().describe('Email subject line'),
-              body: z.string().describe('Email body text'),
-            }),
-          },
-          temperature: temp,
-          abortSignal: input.abortSignal,
-        } as any,
-      ),
-    );
+            {
+              structuredOutput: {
+                schema: z.object({
+                  subject: z.string().describe('Email subject line'),
+                  body: z.string().describe('Email body text'),
+                }),
+              },
+              temperature: temp,
+              abortSignal: input.abortSignal,
+            } as unknown as Parameters<Agent['generate']>[1],
+          ),
+        );
 
-    return res.object;
-  };
+        return res.object;
+      };
 
-  // Helper function for anti-hallucination verification
-  const verifyDraft = async (subject: string, body: string) => {
-    const verificationAgent = new Agent({
-      id: 'smartrecruit.hallucinationVerifier',
-      name: 'Hallucination Verifier',
-      instructions: `You are an anti-hallucination and compliance verification agent for recruitment outreach.
+      // Helper function for anti-hallucination verification
+      const verifyDraft = async (subject: string, body: string) => {
+        const verificationAgent = new Agent({
+          id: 'smartrecruit.hallucinationVerifier',
+          name: 'Hallucination Verifier',
+          instructions: `You are an anti-hallucination and compliance verification agent for recruitment outreach.
 
 Compare the drafted email against the candidate context and template.
 
@@ -190,12 +204,12 @@ Fail the draft when it contains:
 4. Any personalization that conflicts with the template target status/use case.
 
 Return passed=false and list every unsupported or disallowed claim. If all claims are grounded and compliant, return passed=true.`,
-      model,
-    });
+          model,
+        });
 
-    const ver = await withRetry(() =>
-      verificationAgent.generate(
-        `${templateContext}
+        const ver = await withRetry(() =>
+          verificationAgent.generate(
+            `${templateContext}
 
 Candidate Name: ${namePlaceholder}
 Candidate Current Status: ${cand.status}
@@ -217,97 +231,109 @@ ${anonymizedCvText}
 Email Subject: ${subject}
 Email Body:
 ${body}`,
+            {
+              structuredOutput: {
+                schema: z.object({
+                  passed: z
+                    .boolean()
+                    .describe(
+                      'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
+                    ),
+                  hallucinatedEntities: z
+                    .array(z.string())
+                    .describe('List of unsupported or disallowed claims found in the email'),
+                  reason: z.string().describe('Reason for the pass/fail decision'),
+                }),
+              },
+              abortSignal: input.abortSignal,
+            },
+          ),
+        );
+
+        return ver.object;
+      };
+
+      // 3. Drafting loop with self-correction
+      let temp = 0.7;
+      let attempt = 1;
+      let draftResult: { subject: string; body: string } | undefined;
+      let verification:
+        | { passed: boolean; hallucinatedEntities: string[]; reason: string }
+        | undefined;
+      let warning = '';
+
+      while (attempt <= 3) {
+        const draft = await generateDraft(temp, warning);
+        if (!draft) {
+          throw new Error('LLM failed to generate email draft.');
+        }
+
+        draftResult = draft;
+        verification = await verifyDraft(draft.subject, draft.body);
+
+        if (verification?.passed) {
+          break;
+        }
+
+        // Hallucination detected! Run self-correction
+        attempt++;
+        temp = 0.0; // Lower temperature to 0
+        warning = `In the previous attempt, you used unsupported or disallowed claims: [${verification?.hallucinatedEntities.join(', ')}]. Remove them. Do not invent facts, scores, salary, interview promises, offers, projects, clients, employers, titles, skills, education, English level, or years of experience. Stick strictly to the candidate context and template.`;
+      }
+
+      const checkStatus = verification?.passed ? 'passed' : 'failed';
+      const errorReason = verification?.passed
+        ? null
+        : `Failed anti-hallucination check: ${verification?.reason}`;
+
+      if (!draftResult) {
+        throw new Error('LLM failed to generate a usable outreach draft after all retry attempts.');
+      }
+
+      // De-anonymize the final subject & body before saving to CSDL
+      const finalSubject = deAnonymizeText(draftResult.subject, piiMapping);
+      const finalBody = deAnonymizeText(draftResult.body, piiMapping);
+
+      let savedId!: string;
+      await withEmit(
         {
-          structuredOutput: {
-            schema: z.object({
-              passed: z
-                .boolean()
-                .describe(
-                  'True if all personalized and recruitment claims are grounded in the candidate context and compliant with outreach rules',
-                ),
-              hallucinatedEntities: z
-                .array(z.string())
-                .describe('List of unsupported or disallowed claims found in the email'),
-              reason: z.string().describe('Reason for the pass/fail decision'),
-            }),
+          actor: {
+            userId: input.session.user_id,
+            tenantId: input.session.tenant_id,
           },
-          abortSignal: input.abortSignal,
         },
-      ),
-    );
+        async (tx) => {
+          const id = crypto.randomUUID();
+          await tx.insert(outreachDrafts).values({
+            id,
+            tenant_id: input.session.tenant_id,
+            candidate_id: cand.id,
+            subject: finalSubject,
+            body: finalBody,
+            status: 'draft',
+            hallucination_check_status: checkStatus,
+            error_reason: errorReason,
+          });
+          savedId = id;
+        },
+      );
 
-    return ver.object;
-  };
+      span.setAttribute('hallucination_check_status', checkStatus);
+      span.setAttribute('attempts', attempt);
 
-  // 3. Drafting loop with self-correction
-  let temp = 0.7;
-  let attempt = 1;
-  let draftResult: { subject: string; body: string } | undefined;
-  let verification: { passed: boolean; hallucinatedEntities: string[]; reason: string } | undefined;
-  let warning = '';
-
-  while (attempt <= 3) {
-    const draft = await generateDraft(temp, warning);
-    if (!draft) {
-      throw new Error('LLM failed to generate email draft.');
-    }
-
-    draftResult = draft;
-    verification = await verifyDraft(draft.subject, draft.body);
-
-    if (verification?.passed) {
-      break;
-    }
-
-    // Hallucination detected! Run self-correction
-    attempt++;
-    temp = 0.0; // Lower temperature to 0
-    warning = `In the previous attempt, you used unsupported or disallowed claims: [${verification?.hallucinatedEntities.join(', ')}]. Remove them. Do not invent facts, scores, salary, interview promises, offers, projects, clients, employers, titles, skills, education, English level, or years of experience. Stick strictly to the candidate context and template.`;
-  }
-
-  const checkStatus = verification?.passed ? 'passed' : 'failed';
-  const errorReason = verification?.passed
-    ? null
-    : `Failed anti-hallucination check: ${verification?.reason}`;
-
-  if (!draftResult) {
-    throw new Error('LLM failed to generate a usable outreach draft after all retry attempts.');
-  }
-
-  // De-anonymize the final subject & body before saving to CSDL
-  const finalSubject = deAnonymizeText(draftResult.subject, piiMapping);
-  const finalBody = deAnonymizeText(draftResult.body, piiMapping);
-
-  let savedId!: string;
-  await withEmit(
-    {
-      actor: {
-        userId: input.session.user_id,
-        tenantId: input.session.tenant_id,
-      },
-    },
-    async (tx) => {
-      const id = crypto.randomUUID();
-      await tx.insert(outreachDrafts).values({
-        id,
-        tenant_id: input.session.tenant_id,
-        candidate_id: cand.id,
+      span.end();
+      return {
+        id: savedId,
+        candidateId: cand.id,
         subject: finalSubject,
         body: finalBody,
-        status: 'draft',
-        hallucination_check_status: checkStatus,
-        error_reason: errorReason,
-      });
-      savedId = id;
-    },
-  );
-
-  return {
-    id: savedId,
-    candidateId: cand.id,
-    subject: finalSubject,
-    body: finalBody,
-    hallucinationCheckStatus: checkStatus as 'passed' | 'failed',
-    errorReason,
-  };
+        hallucinationCheckStatus: checkStatus as 'passed' | 'failed',
+        errorReason,
+      };
+    } catch (err) {
+      span.recordException(err as Error);
+      span.end();
+      throw err;
+    }
+  });
 }

@@ -16,6 +16,8 @@ import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
 import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
+import { analyzeSkillGaps } from '../domain/skill-gap-analyzer.ts';
+import { getSLATracker } from '../domain/sla-tracker.ts';
 import {
   getEmbeddingWithFallback,
   getSmartrecruitVectorStore,
@@ -338,7 +340,7 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       });
 
       const candidateIds = vectorResults
-        .map((row) => (row.metadata as any)?.candidate_id)
+        .map((row) => (row.metadata as { candidate_id?: string })?.candidate_id)
         .filter(Boolean) as string[];
 
       if (candidateIds.length === 0) {
@@ -519,5 +521,16 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       session,
     });
     return c.json(result);
+  });
+
+  app.get('/api/smartrecruit/v1/skill-gaps', async (c) => {
+    const jobTitle = c.req.query('jobTitle') || '';
+    const result = analyzeSkillGaps(jobTitle);
+    return c.json(result);
+  });
+
+  app.get('/api/smartrecruit/v1/sla-tracker', async (c) => {
+    const result = getSLATracker();
+    return c.json({ tracker: result });
   });
 }
