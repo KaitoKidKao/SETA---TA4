@@ -248,9 +248,7 @@ export function SmartrecruitPage() {
     return true;
   });
 
-  const isAnyCvNotReady = uploadedCvs.some(
-    (c) => c.status === 'uploading' || c.status === 'extracting',
-  );
+  const isAnyCvNotReady = uploadedCvs.some((c) => c.status !== 'ready');
 
   const dataWarnings = useMemo(() => {
     const list: string[] = [];
