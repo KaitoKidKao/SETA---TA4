@@ -1,6 +1,9 @@
+import { existsSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv } from '@seta/core';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -9,9 +12,18 @@ import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria, outreachDrafts, outreachTemplates } from '../db/schema.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
+import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
+import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
+import { analyzeSkillGaps } from '../domain/skill-gap-analyzer.ts';
+import { getSLATracker } from '../domain/sla-tracker.ts';
+import {
+  getEmbeddingWithFallback,
+  getSmartrecruitVectorStore,
+  SMARTRECRUIT_VECTOR_INDEX,
+} from '../embeddings/vector-store.ts';
 
 const parseJdSchema = z.object({
   jobTitle: z.string().min(1),
@@ -27,9 +39,40 @@ const screenCvSchema = z.object({
   criteriaId: z.string().uuid(),
 });
 
+const importMockDataSchema = z.object({
+  filePath: z.string().min(1).optional(),
+});
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
+
+function resolveMockDataFilePath(filePath?: string): string {
+  if (filePath) {
+    if (isAbsolute(filePath)) return filePath;
+    const cwdPath = resolve(process.cwd(), filePath);
+    if (existsSync(cwdPath)) return cwdPath;
+    return resolve(repoRoot, filePath);
+  }
+  const defaultCwdPath = resolve(process.cwd(), 'mock-data/04_ta_cv_screening.xlsx');
+  if (existsSync(defaultCwdPath)) return defaultCwdPath;
+  return resolve(repoRoot, 'mock-data/04_ta_cv_screening.xlsx');
+}
+
+const screenCandidatePoolSchema = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  includeAlreadyScreened: z.boolean().optional(),
+});
+
 const draftOutreachSchema = z.object({
   candidateId: z.string().uuid(),
   templateId: z.string().uuid().optional(),
+});
+
+const updateCriteriaSchema = z.object({
+  mustHaveSkills: z.array(z.string()),
+  niceToHaveSkills: z.array(z.string()),
+  minYoe: z.number().int().min(0),
+  educationLevel: z.string().nullable(),
+  additionalRequirements: z.string().nullable(),
 });
 
 const updateDraftSchema = z.object({
@@ -43,6 +86,36 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     const session = c.get('user');
     requirePermission(session, SMARTRECRUIT_ACCESS);
     await next();
+  });
+
+  // --- Mock Dataset Import ---
+  app.post('/api/smartrecruit/v1/mock-data/import', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = importMockDataSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const filePath = resolveMockDataFilePath(parsed.data.filePath);
+    try {
+      const result = await importSmartrecruitMockData({
+        filePath,
+        session,
+      });
+
+      return c.json({ filePath, ...result });
+    } catch (err) {
+      return c.json(
+        {
+          error: 'MOCK_DATA_IMPORT_FAILED',
+          message: (err as Error).message,
+          filePath,
+        },
+        500,
+      );
+    }
   });
 
   // --- File Upload & PDF Extraction (OCR Fallback) ---
@@ -71,14 +144,24 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
           .filter(Boolean)
           .join('\n');
       } catch (err) {
-        // Fallback OCR Simulator
-        text = `[OCR FALLBACK RESULT - PARSE ERROR: ${(err as Error).message}]\n`;
-        // Add fallback content placeholder based on file name
-        text += `Candidate: ${file.name.replace(/\.[^/.]+$/, '')}\nSkills: JavaScript, Node.js, React, SQL\nExperience: Senior Software Engineer at TechCorp (2020-present).\n`;
+        return c.json(
+          {
+            error: 'CV_TEXT_EXTRACTION_FAILED',
+            message: 'Unable to extract text from the uploaded CV file.',
+            details: (err as Error).message,
+          },
+          422,
+        );
       }
 
       if (!text.trim()) {
-        text = `[OCR FALLBACK RESULT - EMPTY PDF]\nCandidate Profile\nSkills: Python, Django, PostgreSQL\nExperience: Backend Developer at WebSoft (2022-2025).\n`;
+        return c.json(
+          {
+            error: 'CV_TEXT_EMPTY',
+            message: 'The uploaded CV file did not contain extractable text.',
+          },
+          422,
+        );
       }
 
       return c.json({
@@ -174,6 +257,117 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       return c.json({ error: 'NOT_FOUND', message: 'Criteria not found' }, 404);
     }
     return c.json(row);
+  });
+
+  app.patch('/api/smartrecruit/v1/criteria/:id', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = updateCriteriaSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const [existing] = await db
+      .select()
+      .from(criteria)
+      .where(and(eq(criteria.id, c.req.param('id')), eq(criteria.tenant_id, session.tenant_id)))
+      .limit(1);
+
+    if (!existing) {
+      return c.json({ error: 'NOT_FOUND', message: 'Criteria not found' }, 404);
+    }
+
+    const [updated] = await db
+      .update(criteria)
+      .set({
+        must_have_skills: parsed.data.mustHaveSkills,
+        nice_to_have_skills: parsed.data.niceToHaveSkills,
+        min_yoe: parsed.data.minYoe,
+        education_level: parsed.data.educationLevel,
+        additional_requirements: parsed.data.additionalRequirements,
+        updated_at: new Date(),
+      })
+      .where(and(eq(criteria.id, existing.id), eq(criteria.tenant_id, session.tenant_id)))
+      .returning();
+
+    return c.json(updated);
+  });
+
+  app.post('/api/smartrecruit/v1/criteria/:id/screen-candidates', async (c) => {
+    const session = c.get('user');
+    const parsed = screenCandidatePoolSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const result = await screenCandidatePool({
+      criteriaId: c.req.param('id'),
+      limit: parsed.data.limit,
+      includeAlreadyScreened: parsed.data.includeAlreadyScreened,
+      session,
+    });
+
+    return c.json(result);
+  });
+
+  app.get('/api/smartrecruit/v1/criteria/:id/suggest-candidates', async (c) => {
+    const session = c.get('user');
+    const db = smartrecruitDb();
+    const criteriaId = c.req.param('id');
+
+    // 1. Get the criteria
+    const [crit] = await db
+      .select()
+      .from(criteria)
+      .where(and(eq(criteria.id, criteriaId), eq(criteria.tenant_id, session.tenant_id)))
+      .limit(1);
+
+    if (!crit) {
+      return c.json({ error: 'NOT_FOUND', message: 'Criteria not found' }, 404);
+    }
+
+    // 2. Perform Vector Search query against PgVector
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      return c.json({ candidates: [] });
+    }
+
+    try {
+      const store = getSmartrecruitVectorStore(dbUrl);
+      const queryVector = await getEmbeddingWithFallback(crit.jd_text);
+
+      const vectorResults = await store.query({
+        indexName: SMARTRECRUIT_VECTOR_INDEX,
+        queryVector,
+        topK: 10,
+        filter: { tenant_id: { $eq: session.tenant_id } },
+      });
+
+      const candidateIds = vectorResults
+        .map((row) => (row.metadata as { candidate_id?: string })?.candidate_id)
+        .filter(Boolean) as string[];
+
+      if (candidateIds.length === 0) {
+        return c.json({ candidates: [] });
+      }
+
+      const rows = await db
+        .select()
+        .from(candidates)
+        .where(
+          and(inArray(candidates.id, candidateIds), eq(candidates.tenant_id, session.tenant_id)),
+        );
+
+      // Sort according to vector similarity order
+      const idToIndex = new Map(candidateIds.map((id, index) => [id, index]));
+      rows.sort((a, b) => (idToIndex.get(a.id) ?? 999) - (idToIndex.get(b.id) ?? 999));
+
+      return c.json({ candidates: rows });
+    } catch (err) {
+      return c.json({ error: 'Vector search failed', details: (err as Error).message }, 500);
+    }
   });
 
   // --- Candidates & Scorecard Endpoints ---
@@ -333,5 +527,16 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
       session,
     });
     return c.json(result);
+  });
+
+  app.get('/api/smartrecruit/v1/skill-gaps', async (c) => {
+    const jobTitle = c.req.query('jobTitle') || '';
+    const result = analyzeSkillGaps(jobTitle);
+    return c.json(result);
+  });
+
+  app.get('/api/smartrecruit/v1/sla-tracker', async (c) => {
+    const result = getSLATracker();
+    return c.json({ tracker: result });
   });
 }

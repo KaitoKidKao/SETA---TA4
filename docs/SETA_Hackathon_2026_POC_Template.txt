@@ -1,0 +1,184 @@
+**SETA INTERNATIONAL**
+
+**AGENTIC AI HACKATHON 2026**
+
+POC Round Template
+
+| **Build Period**<br><br>11-23 June 2026 | **Submission Deadline**<br><br>23 June 2026, 23:59 GMT+7 | **Final Presentation**<br><br>28 June 2026 |
+| --------------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
+
+|     | **1\. PURPOSE** |
+| --- | --------------- |
+
+This document provides a standardized template for all competing teams to prepare their POC deliverables, final presentation, and live demo. It is designed for clarity, ease of evaluation, and consistency across teams.
+
+|     | **2\. SUBMISSION CHECKLIST** |
+| --- | ---------------------------- |
+
+| **No.** | **Item**                              | **Format**                                  | **Required** |
+| ------- | ------------------------------------- | ------------------------------------------- | ------------ |
+| **1**   | **Presentation Slides**               | PDF or PPTX following the 8-slide structure | **✔ Yes**    |
+| **2**   | **Source Code**                       | GitHub repository link                      | **✔ Yes**    |
+| **3**   | **Documentation**                     | README with setup and run instructions      | **✔ Yes**    |
+| **4**   | **Backup Demo Video**                 | MP4 or YouTube link, 3-5 minutes            | **✔ Yes**    |
+| **5**   | **Architecture Diagram**              | Included in slides or as a separate file    | **✔ Yes**    |
+| **6**   | **UAT Guide for Evaluators**          | PDF                                         | **✔ Yes**    |
+| **7**   | **Supplementary Technical Documents** | If available                                | Optional     |
+
+|     | **3\. POC ROUND TIMELINE** |
+| --- | -------------------------- |
+
+| **Milestone**                  | **Date / Time**                     | **Required Action**                                                        |
+| ------------------------------ | ----------------------------------- | -------------------------------------------------------------------------- |
+| POC Development Period         | 11 June - 23 June 2026              | Teams build the POC and complete all items in the submission checklist.    |
+| POC Submission Deadline        | Tuesday, 23 June 2026 23:59 (GMT+7) | Teams submit all required deliverables listed in the submission checklist. |
+| Final Presentation & Live Demo | 28 June 2026                        | Teams present slides and demonstrate the working POC to the judges.        |
+
+**⚠ Important Deadline**
+
+All required materials must be submitted by Tuesday, 23 June 2026 at 23:59 (GMT+7).
+
+Late submissions may not be accepted unless otherwise announced by the Organizing Committee.
+
+|     | **4\. OVERALL FINAL ROUND FORMAT** |
+| --- | ---------------------------------- |
+
+| **Section** | **Content**                                                      | **Duration** |
+| ----------- | ---------------------------------------------------------------- | ------------ |
+| Part 1      | Slide presentation covering business context and technical depth | 10 minutes   |
+| Part 2      | Live system demonstration                                        | 10 minutes   |
+
+|     | **5\. PART 1 - SLIDE PRESENTATION GUIDELINES** |
+| --- | ---------------------------------------------- |
+
+**5.1 General Requirements**
+
+| **Number of Slides**   | 8 slides, mandatory                      |
+| ---------------------- | ---------------------------------------- |
+| **Presentation Style** | Clear, concise, supported by evidence    |
+| **Data Sources**       | All metrics must be accompanied by proof |
+
+**5.2 Mandatory 8-Slide Structure**
+
+| **1** | **Opening**                                                                                                                                                                                                                                                                                                         | **0:20** |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+|       | **Team name: \[**Team Name\]<br><br>**Project name: \[**Project Name\]<br><br>**Elevator pitch:** For \[target audience\], we built an AI Agent that \[function\] to solve \[problem\]<br><br>**Team members:** Name and role of each member<br><br>**Objective:** Make a strong first impression within 30 seconds |          |
+
+| **2** | **Problem Statement**                                                                                                                                                                                                                                                                                                                                                         | **1:20** |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+|       | **Business context:** Brief overview of the industry or domain<br><br>**Core problem:** Specific pain point with supporting data if available<br><br>**Current approach:** Why the existing solution is insufficient<br><br>**Affected stakeholders:** Who is impacted by this problem<br><br>**Objective:** Ensure the judges clearly understand why this solution is needed |          |
+
+| **3** | **Solution Overview**                                                                                                                                                                                                                                                                                                                                                 | **1:20** |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+|       | **Overall solution:** How the AI Agent addresses the problem<br><br>**Why an Agent:** Why an Agent is more suitable than a standard chatbot or automation<br><br>**Core value:** Primary benefit delivered to users<br><br>**User journey:** Summary of the end-to-end user experience<br><br>**Objective:** Demonstrate the practical value of the proposed solution |          |
+
+| **4** | **Architecture & Technology Stack**                                                                                                                                                                                                                                                                                                                                                                                                                                                     | **2:00** |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+|       | **Architecture diagram:** System overview - visual diagram is mandatory<br><br>**LLM selection:** Model name and rationale for choosing it<br><br>**Agent framework:** Framework used to build the Agent<br><br>**Integrated tools:** APIs and external services connected<br><br>**Data layer:** Database, vector database, data pipeline<br><br>**Deployment:** Hosting environment and infrastructure<br><br>**Objective:** Demonstrate technical depth and system design capability |          |
+
+| **5** | **Agentic Design**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | **2:00** |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+|       | **Reasoning:** How the Agent reasons through tasks<br><br>**Planning:** How the Agent decomposes and sequences subtasks<br><br>**Memory:** Short-term and long-term context retention mechanisms<br><br>**Tool usage:** Criteria the Agent uses to select tools<br><br>**Autonomy level:** When the Agent acts independently vs. requires human input<br><br>**Multi-Agent coordination:** If applicable, how multiple Agents collaborate<br><br>**Objective:** Prove that this is a genuine Agent system, not merely a language model wrapper |          |
+
+**6**
+
+**Proposal vs. Reality**
+
+**1:00**
+
+| **Category** | **Initial Plan** | **Actual Result** | **Notes**            |
+| ------------ | ---------------- | ----------------- | -------------------- |
+| Architecture | ...              | ...               | What changed and why |
+| Features     | ...              | ...               | Completion rate      |
+| Technology   | ...              | ...               | Any pivots in stack  |
+| Scope        | ...              | ...               | Expanded or reduced  |
+
+| **7** | **Results & Metrics**                                                                                                                                                                                                                                                                                                                                                                                                                                                         | **1:30** |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+|       | **Output quality:** e.g. 92% accuracy - Evidence: Screenshots, test results<br><br>**Processing speed:** e.g. 30 seconds per request - Evidence: Logs, monitoring dashboard<br><br>**Efficiency improvement:** e.g. from 4 hours to 5 minutes - Evidence: Before/after comparison<br><br>**Test coverage:** e.g. 20 scenarios tested - Evidence: Test case list<br><br>**Edge case handling:** e.g. 5 error categories addressed - Evidence: Description of handling approach |          |
+
+**⚠ Mandatory Requirement**
+
+Every metric must be supported by concrete evidence
+
+| **8** | **Closing**                                                                                                                                                                                                                          | **0:30** |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+|       | **Challenges & lessons:** 2-3 key takeaways<br><br>**Future direction:** Next steps if development continues<br><br>**Closing statement:** One clear, memorable message<br><br>**Objective:** Leave a lasting, persuasive impression |          |
+
+**5.3 Slide Time Allocation Summary**
+
+| **Slide** | **Content**                       | **Time**  |
+| --------- | --------------------------------- | --------- |
+| 1         | Opening and elevator pitch        | 0:20      |
+| 2         | Problem statement                 | 1:20      |
+| 3         | Solution overview                 | 1:20      |
+| 4         | Architecture and technology stack | 2:00      |
+| 5         | Agentic design                    | 2:00      |
+| 6         | Proposal vs. reality              | 1:00      |
+| 7         | Results and metrics               | 1:30      |
+| 8         | Closing                           | 0:30      |
+| **Total** |                                   | **10:00** |
+
+|     | **6\. PART 2 - LIVE DEMO GUIDELINES** |
+| --- | ------------------------------------- |
+
+**6.1 Demo Structure Overview**
+
+| **Phase** | **Content**                     | **Duration** |
+| --------- | ------------------------------- | ------------ |
+| 1         | Context setup                   | 1 minute     |
+| 2         | Core flow demonstration         | 3 minutes    |
+| 3         | Advanced scenario demonstration | 3 minutes    |
+| 4         | Error and edge case handling    | 2 minutes    |
+| 5         | Open demo per judge request     | 1 minutes    |
+
+**6.2 Detailed Phase Breakdown**
+
+| **Phase 1 Context** Setup · 1 minute | |
+| --- | | --- |
+| **Demo environment** | Local, cloud, or staging |
+| **Scenarios covered** | Outline what will be demonstrated |
+| **Demo data** | Real data or synthetic data |
+
+| **Phase 2 Core** Flow Demonstration · 3 minutes | |
+| --- | | --- |
+| **Step 1** | Provide input or trigger the Agent |
+| **Step 2** | Agent receives and analyzes the task |
+| **Step 3** | Agent selects and invokes tools to gather information |
+| **Step 4** | Agent synthesizes and returns results |
+| **Step 5** | Compare output against expected results |
+
+| **Phase 3 Advanced** Scenarios · 3 minutes | |
+| --- | | --- |
+| **Multi-step reasoning** | Complex task requiring sequential reasoning |
+| **Multi-Agent collaboration** | Multiple Agents working together (if applicable) |
+| **Dynamic tool selection** | Agent adapts tool choice based on context |
+| **Context retention** | Agent leverages information from prior interactions |
+| **Adaptive behavior** | Agent changes strategy when conditions shift |
+
+| **Phase 4 Error** & Edge Case Handling · 2 minutes | |
+| --- | | --- |
+| **Invalid input** | Wrong format, missing data, different language |
+| **API failure** | External service unresponsive |
+| **Ambiguous request** | Agent asks for clarification or infers intent |
+| **Hallucination control** | Mechanism for self-checking output |
+| **Human-in-the-loop** | Conditions that trigger a pause for user confirmation |
+
+| **Phase 5 Open** Demo per Judge Request · 1 minutes | |
+| --- | | --- |
+| **Additional requests** | Judges may ask for new scenarios on the spot |
+| **Bonus features** | Teams may demonstrate extra capabilities if time permits |
+
+|     | **7\. BACKUP DEMO POLICY** |
+| --- | -------------------------- |
+
+| **Situation**               | **Resolution**                                           |
+| --------------------------- | -------------------------------------------------------- |
+| Live demo succeeds          | Scored under standard criteria                           |
+| Live demo fails mid-process | One restart allowed within the allotted time             |
+| Live demo cannot continue   | Switch to backup video; judges determine score deduction |
+| No demo available           | Demo section scored as zero                              |
+
+**⚠ Mandatory Backup Requirement**
+
+Each team must submit a backup demo video of 3-5 minutes before the competition date.

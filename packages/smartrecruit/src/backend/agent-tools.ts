@@ -2,9 +2,10 @@ import type { AgentTool } from '@seta/agent-sdk';
 import { actorFromContext, defineAgentTool } from '@seta/agent-sdk';
 import { buildActorSession } from '@seta/identity';
 import { z } from 'zod';
-import { SMARTRECRUIT_OUTREACH_APPROVE, SMARTRECRUIT_WRITE } from '../rbac.ts';
+import { requirePermission, SMARTRECRUIT_OUTREACH_APPROVE, SMARTRECRUIT_WRITE } from '../rbac.ts';
 import { draftOutreach } from './domain/draft-outreach.ts';
 import { executeOutreach } from './domain/execute-outreach.ts';
+import { performOcr } from './domain/ocr.ts';
 import { parseJd } from './domain/parse-jd.ts';
 import { screenCv } from './domain/screen-cv.ts';
 
@@ -84,7 +85,7 @@ export const smartrecruitScreenCvTool = defineAgentTool({
     }),
   }),
   rbac: SMARTRECRUIT_WRITE,
-  needsApproval: false,
+  needsApproval: true,
   execute: async (input, ctx) => {
     const actor = actorFromContext(ctx);
     const session = await buildActorSession({ user_id: actor.user_id });
@@ -161,9 +162,31 @@ export const smartrecruitExecuteOutreachTool = defineAgentTool({
   },
 });
 
+export const smartrecruitOcrBackupTool = defineAgentTool({
+  id: 'smartrecruit_ocrBackup',
+  name: 'OCR Backup Tool',
+  description: 'OCR a CV file (PDF or image) using OpenAI Vision or Tesseract as fallback.',
+  input: z.object({
+    filePath: z.string().describe('The path to the CV file to process'),
+  }),
+  output: z.object({
+    text: z.string().describe('The extracted text content'),
+  }),
+  rbac: SMARTRECRUIT_WRITE,
+  needsApproval: true,
+  execute: async (input, ctx) => {
+    const actor = actorFromContext(ctx);
+    const session = await buildActorSession({ user_id: actor.user_id });
+    requirePermission(session, SMARTRECRUIT_WRITE);
+    const text = await performOcr(input.filePath);
+    return { text };
+  },
+});
+
 export const smartrecruitAgentTools: AgentTool[] = [
   smartrecruitParseJdTool,
   smartrecruitScreenCvTool,
   smartrecruitDraftOutreachTool,
   smartrecruitExecuteOutreachTool,
+  smartrecruitOcrBackupTool,
 ];

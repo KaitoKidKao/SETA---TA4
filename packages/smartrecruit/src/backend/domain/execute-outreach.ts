@@ -1,10 +1,11 @@
 import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
 import { parseMailerEnv, resolveTransport } from '@seta/shared-mailer';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { requirePermission, SMARTRECRUIT_OUTREACH_APPROVE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
-import { candidates, outreachDrafts } from '../db/schema.ts';
+import { candidates, criteria, interactionHistories, outreachDrafts } from '../db/schema.ts';
+import { upsertOutreachHistoryEmbedding } from '../embeddings/vector-store.ts';
 
 export interface ExecuteOutreachInput {
   draftId: string;
@@ -75,8 +76,29 @@ export async function executeOutreach(input: ExecuteOutreachInput): Promise<Exec
   });
 
   const sentAt = new Date();
+  const historyId = crypto.randomUUID();
+  const summaryText = `Outreach email sent to candidate ${cand.display_name} (${cand.email}) for position "${cand.applied_position ?? 'Unknown'}".\nSubject: ${draft.subject}\nBody:\n${draft.body}`;
 
-  // 4. Update draft and candidate status
+  // Find related criteria if any
+  let critId: string | null = null;
+  if (cand.applied_position) {
+    const [critRow] = await db
+      .select({ id: criteria.id })
+      .from(criteria)
+      .where(
+        and(
+          eq(criteria.tenant_id, input.session.tenant_id),
+          eq(criteria.job_title, cand.applied_position),
+        ),
+      )
+      .orderBy(desc(criteria.created_at))
+      .limit(1);
+    if (critRow) {
+      critId = critRow.id;
+    }
+  }
+
+  // 4. Update draft, candidate status, and save interaction history
   await withEmit(
     {
       actor: {
@@ -99,8 +121,35 @@ export async function executeOutreach(input: ExecuteOutreachInput): Promise<Exec
           status: 'outreached',
         })
         .where(eq(candidates.id, cand.id));
+
+      await tx.insert(interactionHistories).values({
+        id: historyId,
+        tenant_id: input.session.tenant_id,
+        candidate_id: cand.id,
+        criteria_id: critId,
+        subject: draft.subject,
+        body: draft.body,
+        status: 'sent',
+        summary_text: summaryText,
+        sent_at: sentAt,
+      });
     },
   );
+
+  // 5. Upsert to PgVector in the background
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    await upsertOutreachHistoryEmbedding(dbUrl, {
+      id: historyId,
+      tenant_id: input.session.tenant_id,
+      candidate_id: cand.id,
+      subject: draft.subject,
+      summary_text: summaryText,
+      sent_at: sentAt.toISOString(),
+    }).catch((err) => {
+      console.error(`Failed to upsert outreach history embedding for ${historyId}:`, err);
+    });
+  }
 
   return {
     id: draft.id,

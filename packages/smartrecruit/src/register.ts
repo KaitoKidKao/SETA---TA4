@@ -5,6 +5,7 @@ import type { ContributionRegistry } from '@seta/core';
 import { smartrecruitAgentTools } from './backend/agent-tools.ts';
 import * as schema from './backend/db/schema.ts';
 import { buildSmartrecruitRoutes } from './backend/http/index.ts';
+import { smartrecruitJobs } from './backend/jobs/index.ts';
 import {
   smartrecruitWorkflow,
   smartrecruitWorkflowSpec,
@@ -25,6 +26,7 @@ export function registerSmartrecruitContributions(reg: ContributionRegistry): vo
     events: SMARTRECRUIT_EVENTS,
     rbac: SMARTRECRUIT_PERMISSIONS,
     agentTools: smartrecruitAgentTools,
+    jobs: smartrecruitJobs,
     routes: { mountAt: '/', build: buildSmartrecruitRoutes },
     workflows: [
       {
