@@ -1,7 +1,9 @@
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import xlsx from 'xlsx';
 
-const repoRoot = path.resolve(process.cwd());
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '../../../../..');
 
 export interface SkillGapInfo {
   position: string;

@@ -291,6 +291,7 @@ ${anonymizedCvText}`,
       const yoeExplanation = `Extracted ${parsed.workPeriods.length} work periods totaling ${totalYoe} years of experience (${totalMonths} months). Minimum required is ${crit.min_yoe} years.`;
 
       const screeningReport = {
+        criteriaId: input.criteriaId,
         pros: parsed.fitAnalysis.pros,
         gaps: parsed.fitAnalysis.gaps,
         yoeExplanation,

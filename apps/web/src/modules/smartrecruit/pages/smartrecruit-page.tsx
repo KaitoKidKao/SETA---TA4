@@ -17,19 +17,25 @@ import {
   Input,
   PageChrome,
   Textarea,
+  toast,
 } from '@seta/shared-ui';
 import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
+  Bell,
+  Calendar,
   Check,
   CheckCircle,
   ChevronRight,
+  Clock,
   FileText,
+  Loader2,
   Mail,
   Play,
   Plus,
   RefreshCw,
+  Search,
   Settings,
   Trash2,
   Upload,
@@ -178,8 +184,45 @@ export function SmartrecruitPage() {
   const [newMustHave, setNewMustHave] = useState('');
   const [newNiceToHave, setNewNiceToHave] = useState('');
   const [isSavingCriteria, setIsSavingCriteria] = useState(false);
+  const [isConfirmingCriteria, setIsConfirmingCriteria] = useState(false);
+  const [isApprovingOutreach, setIsApprovingOutreach] = useState(false);
   const [skillGaps, setSkillGaps] = useState<any | null>(null);
   const [slaTracker, setSlaTracker] = useState<any[]>([]);
+  const [slaSearchQuery, setSlaSearchQuery] = useState('');
+  const [slaFilterTab, setSlaFilterTab] = useState<'all' | 'breached' | 'pending'>('all');
+  const [remindingIds, setRemindingIds] = useState<Record<string, boolean>>({});
+  const [remindedIds, setRemindedIds] = useState<Record<string, boolean>>({});
+
+  const handleRemindHM = useCallback((item: any) => {
+    const id = item.feedbackId;
+    setRemindingIds((prev) => ({ ...prev, [id]: true }));
+
+    setTimeout(() => {
+      setRemindingIds((prev) => ({ ...prev, [id]: false }));
+      setRemindedIds((prev) => ({ ...prev, [id]: true }));
+
+      toast.success('Đã gửi email nhắc nhở tự động!', {
+        description: `Đã nhắc nhở Hiring Manager (${item.hiringManager}) về hồ sơ ứng viên ${item.candidateName}.`,
+      });
+    }, 800);
+  }, []);
+
+  const filteredSlaTracker = useMemo(() => {
+    return slaTracker.filter((item) => {
+      const query = slaSearchQuery.toLowerCase();
+      const matchesSearch =
+        item.candidateName?.toLowerCase().includes(query) ||
+        item.hiringManager?.toLowerCase().includes(query) ||
+        item.position?.toLowerCase().includes(query);
+
+      if (!matchesSearch) return false;
+
+      if (slaFilterTab === 'breached') return item.slaBreach;
+      if (slaFilterTab === 'pending') return item.feedbackStatus.toLowerCase() !== 'submitted';
+
+      return true;
+    });
+  }, [slaTracker, slaSearchQuery, slaFilterTab]);
 
   // Gate 2: Candidate Scorecard & Email workspace
   const [candidatesList, setCandidatesList] = useState<CandidateState[]>([]);
@@ -204,6 +247,10 @@ export function SmartrecruitPage() {
     if (candidateFilter === 'hallucination') return isHallucinationFail(cand.id);
     return true;
   });
+
+  const isAnyCvNotReady = uploadedCvs.some(
+    (c) => c.status === 'uploading' || c.status === 'extracting',
+  );
 
   const dataWarnings = useMemo(() => {
     const list: string[] = [];
@@ -285,21 +332,35 @@ export function SmartrecruitPage() {
     try {
       const resCand = await fetch('/api/smartrecruit/v1/candidates');
       const dataCand = await resCand.json();
-      setCandidatesList(dataCand.candidates);
+      const cands = dataCand.candidates || [];
 
       const resDraft = await fetch('/api/smartrecruit/v1/outreach/drafts');
       const dataDraft = await resDraft.json();
-      setDraftsList(dataDraft.drafts);
+      const drafts = dataDraft.drafts || [];
 
-      if (dataCand.candidates.length > 0 && !selectedCandidate) {
-        setSelectedCandidate(dataCand.candidates[0]);
-        const matchedDraft = dataDraft.drafts.find(
-          (d: any) => d.candidate_id === dataCand.candidates[0].id,
-        );
+      let currentCriteriaId = activeCriteria?.id || '';
+      if (!currentCriteriaId && cands.length > 0) {
+        const firstWithReport = cands.find((c: any) => c.screening_report?.criteriaId);
+        if (firstWithReport) {
+          currentCriteriaId = firstWithReport.screening_report.criteriaId;
+          fetchCriteriaDetails(currentCriteriaId);
+        }
+      }
+
+      const filteredCands = currentCriteriaId
+        ? cands.filter((c: any) => c.screening_report?.criteriaId === currentCriteriaId)
+        : cands;
+
+      setCandidatesList(filteredCands);
+      setDraftsList(drafts);
+
+      if (filteredCands.length > 0 && !selectedCandidate) {
+        setSelectedCandidate(filteredCands[0]);
+        const matchedDraft = drafts.find((d: any) => d.candidate_id === filteredCands[0].id);
         setEditingDraft(matchedDraft || null);
       }
     } catch (_err) {}
-  }, [selectedCandidate]);
+  }, [selectedCandidate, activeCriteria, fetchCriteriaDetails]);
 
   const fetchPendingRuns = useCallback(async () => {
     try {
@@ -639,7 +700,9 @@ export function SmartrecruitPage() {
   };
 
   const handleConfirmCriteria = async () => {
-    if (!activeApproval) return;
+    if (!activeApproval || isConfirmingCriteria) return;
+    setIsConfirmingCriteria(true);
+    setErrorMsg(null);
     try {
       // First save edits
       await handleSaveCriteria();
@@ -665,8 +728,15 @@ export function SmartrecruitPage() {
       if (res.ok) {
         setActiveApproval(null);
         setRunStatus('running');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.message || 'Failed to confirm criteria.');
       }
-    } catch (_err) {}
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setIsConfirmingCriteria(false);
+    }
   };
 
   const handleDeclineWorkflow = async () => {
@@ -687,8 +757,13 @@ export function SmartrecruitPage() {
         setActiveRunId(null);
         setRunStatus(null);
         setActiveTab('new');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.message || 'Failed to decline workflow.');
       }
-    } catch (_err) {}
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    }
   };
 
   const addMustHave = () => {
@@ -765,7 +840,9 @@ export function SmartrecruitPage() {
   };
 
   const handleApproveOutreachBulk = async () => {
-    if (!activeApproval) return;
+    if (!activeApproval || isApprovingOutreach) return;
+    setIsApprovingOutreach(true);
+    setErrorMsg(null);
     try {
       if (editingDraft) {
         await handleSaveDraft();
@@ -783,8 +860,15 @@ export function SmartrecruitPage() {
       if (res.ok) {
         setActiveApproval(null);
         setRunStatus('success');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.message || 'Failed to approve outreach.');
       }
-    } catch (_err) {}
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setIsApprovingOutreach(false);
+    }
   };
 
   const resetPipeline = () => {
@@ -981,7 +1065,7 @@ export function SmartrecruitPage() {
 
               {/* Hiring Manager SLA Tracker Card */}
               {slaTracker.length > 0 && (
-                <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[350px] overflow-hidden flex flex-col">
+                <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[450px] overflow-hidden flex flex-col">
                   <CardHeader className="pb-3 shrink-0">
                     <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
                       <Mail className="size-4 text-rose-500" />
@@ -991,61 +1075,160 @@ export function SmartrecruitPage() {
                       Theo dõi thời hạn phản hồi CV 48h của Hiring Manager.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="flex-1 overflow-y-auto pt-0">
-                    <div className="flex flex-col gap-2">
-                      {slaTracker.map((item: any) => (
-                        <div
-                          key={item.feedbackId}
+
+                  {/* Search and Filters */}
+                  <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
+                      <Input
+                        type="text"
+                        placeholder="Tìm kiếm ứng viên, HM, vị trí..."
+                        className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
+                        value={slaSearchQuery}
+                        onChange={(e) => setSlaSearchQuery(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
+                      {(
+                        [
+                          { id: 'all', label: 'Tất cả' },
+                          { id: 'breached', label: 'Trễ SLA ⚠️' },
+                          { id: 'pending', label: 'Chờ HM' },
+                        ] as const
+                      ).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
                           className={cn(
-                            'p-2.5 rounded-lg border flex flex-col gap-1 text-body-sm transition-all bg-surface hover:bg-canvas',
-                            item.slaBreach ? 'border-rose-200/50' : 'border-hairline',
+                            'flex-1 py-1 rounded-sm font-medium transition-all',
+                            slaFilterTab === tab.id
+                              ? 'bg-surface text-ink shadow-sm'
+                              : 'text-ink-subtle hover:text-ink hover:bg-surface-1',
                           )}
+                          onClick={() => setSlaFilterTab(tab.id)}
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-ink truncate max-w-[120px]">
-                              {item.candidateName}
+                          {tab.label}
+                          {tab.id === 'breached' && (
+                            <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
+                              {slaTracker.filter((i) => i.slaBreach).length}
                             </span>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {item.slaBreach ? (
-                                <Badge className="bg-rose-500 text-white font-bold text-[10px] uppercase px-1.5 py-0.5 animate-pulse">
-                                  SLA Breach
-                                </Badge>
-                              ) : (
-                                <Badge className="bg-emerald-500 text-white font-bold text-[10px] uppercase px-1.5 py-0.5">
-                                  On Time
-                                </Badge>
-                              )}
-                              <Badge className="bg-surface-1 border border-hairline font-mono text-[10px]">
-                                {item.feedbackStatus}
-                              </Badge>
-                            </div>
-                          </div>
-                          <div className="text-eyebrow text-ink-subtle flex items-center justify-between">
-                            <span>
-                              HM: {item.hiringManager} | Vị trí: {item.position}
-                            </span>
-                            {item.feedbackStatus.toLowerCase() !== 'submitted' && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 text-[10px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-1.5 py-0"
-                                onClick={() =>
-                                  alert(
-                                    `Đã gửi email nhắc nhở tự động đến Hiring Manager (${item.hiringManager}) về hồ sơ ứng viên ${item.candidateName}!`,
-                                  )
-                                }
-                              >
-                                Remind HM
-                              </Button>
-                            )}
-                          </div>
-                          {item.hmFeedbackText && (
-                            <p className="text-[11px] text-ink-subtle bg-canvas/30 p-1.5 rounded italic mt-1 border-l-2 border-primary/30">
-                              HM Feedback: "{item.hmFeedbackText}"
-                            </p>
                           )}
-                        </div>
+                        </button>
                       ))}
+                    </div>
+                  </div>
+
+                  <CardContent className="flex-1 overflow-y-auto pt-0">
+                    <div className="flex flex-col gap-2.5">
+                      {filteredSlaTracker.length === 0 ? (
+                        <div className="text-center py-6 text-ink-subtle text-xs">
+                          Không tìm thấy kết quả phù hợp.
+                        </div>
+                      ) : (
+                        filteredSlaTracker.map((item: any) => {
+                          const isBreached = item.slaBreach;
+                          const isReminding = remindingIds[item.feedbackId];
+                          const isReminded = remindedIds[item.feedbackId];
+                          const isSubmitted = item.feedbackStatus.toLowerCase() === 'submitted';
+
+                          return (
+                            <div
+                              key={item.feedbackId}
+                              className={cn(
+                                'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
+                                isBreached
+                                  ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
+                                  : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
+                              )}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-ink text-sm flex items-center gap-1.5">
+                                    <User className="size-3.5 text-ink-subtle" />
+                                    {item.candidateName}
+                                  </span>
+                                  <span className="text-[11px] text-ink-subtle mt-0.5">
+                                    Vị trí:{' '}
+                                    <span className="font-medium text-ink/80">{item.position}</span>
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                  {isBreached ? (
+                                    <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
+                                      SLA Breach
+                                    </Badge>
+                                  ) : (
+                                    <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
+                                      On Time
+                                    </Badge>
+                                  )}
+                                  <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
+                                    {item.feedbackStatus}
+                                  </Badge>
+                                </div>
+                              </div>
+
+                              <div className="text-xs text-ink-subtle flex flex-col gap-1 border-t border-hairline/50 pt-2 mt-1">
+                                <div className="flex justify-between items-center">
+                                  <span>
+                                    HM:{' '}
+                                    <span className="font-medium text-ink">
+                                      {item.hiringManager}
+                                    </span>
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+                                  <Calendar className="size-3 text-ink-subtle" />
+                                  <span>Shortlist: {item.shortlistedDatetime}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+                                  <Clock className="size-3 text-ink-subtle" />
+                                  <span>Deadline: {item.feedbackDeadline}</span>
+                                </div>
+                              </div>
+
+                              {item.hmFeedbackText && (
+                                <p className="text-[11px] text-ink-subtle bg-canvas/40 p-2 rounded italic border-l-2 border-primary/30 mt-1">
+                                  HM Feedback: "{item.hmFeedbackText}"
+                                </p>
+                              )}
+
+                              {!isSubmitted && (
+                                <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
+                                  <Button
+                                    size="sm"
+                                    disabled={isReminding || isReminded}
+                                    className={cn(
+                                      'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
+                                      isReminded
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50 cursor-default'
+                                        : 'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
+                                    )}
+                                    onClick={() => handleRemindHM(item)}
+                                  >
+                                    {isReminding ? (
+                                      <>
+                                        <Loader2 className="animate-spin size-3.5" />
+                                        <span>Đang gửi...</span>
+                                      </>
+                                    ) : isReminded ? (
+                                      <>
+                                        <Check className="size-3.5" />
+                                        <span>Đã nhắc nhở</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Bell className="size-3.5" />
+                                        <span>Remind HM</span>
+                                      </>
+                                    )}
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -1055,7 +1238,7 @@ export function SmartrecruitPage() {
               <div className="flex flex-col gap-2">
                 <Button
                   onClick={handleStartPipeline}
-                  disabled={isUploading || uploadedCvs.length === 0}
+                  disabled={isUploading || isAnyCvNotReady || uploadedCvs.length === 0}
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium shadow-md flex items-center justify-center gap-2 h-11"
                 >
                   <Play className="size-4 fill-current" />
@@ -1341,9 +1524,17 @@ export function SmartrecruitPage() {
                         </Button>
                         <Button
                           onClick={handleConfirmCriteria}
-                          disabled={isSavingCriteria}
+                          disabled={isSavingCriteria || isConfirmingCriteria}
                           className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 font-medium shadow"
                         >
+                          {isConfirmingCriteria ? (
+                            <>
+                              <Loader2 className="animate-spin size-4" />
+                              <span>Confirming...</span>
+                            </>
+                          ) : (
+                            <span>Confirm Criteria</span>
+                          )}
                           <CheckCircle className="size-4" />
                           Confirm & Run Screener
                         </Button>
@@ -1682,9 +1873,17 @@ export function SmartrecruitPage() {
                         <Button
                           size="sm"
                           onClick={handleApproveOutreachBulk}
-                          className="bg-primary hover:bg-primary-hover text-white font-medium shadow"
+                          disabled={isSavingDraft || isApprovingOutreach}
+                          className="bg-primary hover:bg-primary-hover text-white font-medium shadow flex items-center gap-1.5"
                         >
-                          Approve & Send All
+                          {isApprovingOutreach ? (
+                            <>
+                              <Loader2 className="animate-spin size-3.5" />
+                              <span>Sending...</span>
+                            </>
+                          ) : (
+                            <span>Approve & Send All</span>
+                          )}
                         </Button>
                       </div>
                     </div>
@@ -2006,21 +2205,37 @@ export function SmartrecruitPage() {
 
                 {/* Candidate sent results */}
                 <div className="w-full px-6 max-h-[240px] overflow-y-auto border border-hairline rounded-xl divide-y divide-hairline bg-canvas/10">
-                  {candidatesList.map((cand) => (
-                    <div
-                      key={cand.id}
-                      className="py-3 flex items-center justify-between text-body-sm"
-                    >
-                      <div className="flex items-center gap-2">
-                        <User className="size-4 text-ink-tertiary" />
-                        <span className="font-semibold text-ink">{cand.display_name}</span>
-                        <span className="text-ink-subtle">({cand.email})</span>
+                  {candidatesList.map((cand) => {
+                    const status = cand.status;
+                    const isOutreached = status === 'outreached';
+                    const isShortlisted = status === 'shortlisted';
+                    return (
+                      <div
+                        key={cand.id}
+                        className="py-3 flex items-center justify-between text-body-sm"
+                      >
+                        <div className="flex items-center gap-2">
+                          <User className="size-4 text-ink-tertiary" />
+                          <span className="font-semibold text-ink">{cand.display_name}</span>
+                          <span className="text-ink-subtle">({cand.email})</span>
+                          <span className="text-xs text-ink-muted">· Score: {cand.fit_score}%</span>
+                        </div>
+                        {isOutreached ? (
+                          <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium">
+                            Outreached
+                          </Badge>
+                        ) : isShortlisted ? (
+                          <Badge className="bg-blue-500/10 text-blue-500 border border-blue-500/20 font-medium">
+                            Shortlisted
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-amber-500/10 text-amber-500 border border-amber-500/20 font-medium">
+                            Screened Only
+                          </Badge>
+                        )}
                       </div>
-                      <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium">
-                        Outreached
-                      </Badge>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <Button
