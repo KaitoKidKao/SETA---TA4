@@ -108,6 +108,104 @@ export const criteria = smartrecruitSchema.table(
   ],
 );
 
+export const campaigns = smartrecruitSchema.table(
+  'campaigns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    workflow_run_id: text('workflow_run_id'),
+    criteria_id: uuid('criteria_id'),
+    job_title: text('job_title').notNull(),
+    jd_text: text('jd_text').notNull(),
+    template_id: uuid('template_id'),
+    status: text('status', {
+      enum: [
+        'queued',
+        'awaiting_criteria',
+        'screening',
+        'screening_completed',
+        'drafting',
+        'awaiting_outreach_approval',
+        'sending',
+        'completed',
+        'failed',
+        'canceled',
+      ],
+    })
+      .notNull()
+      .default('queued'),
+    total_candidates: integer('total_candidates').default(0).notNull(),
+    screened_count: integer('screened_count').default(0).notNull(),
+    shortlisted_count: integer('shortlisted_count').default(0).notNull(),
+    failed_count: integer('failed_count').default(0).notNull(),
+    drafted_count: integer('drafted_count').default(0).notNull(),
+    sent_count: integer('sent_count').default(0).notNull(),
+    created_by: uuid('created_by').notNull(),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+    error_reason: text('error_reason'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('campaigns_by_tenant_status').on(t.tenant_id, t.status),
+    index('campaigns_by_tenant_created_by').on(t.tenant_id, t.created_by),
+    index('campaigns_by_workflow_run').on(t.tenant_id, t.workflow_run_id),
+  ],
+);
+
+export const campaignCandidates = smartrecruitSchema.table(
+  'campaign_candidates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    source: text('source', {
+      enum: ['uploaded', 'suggested', 'mock_pool', 'manual'],
+    })
+      .notNull()
+      .default('uploaded'),
+    status: text('status', {
+      enum: [
+        'queued',
+        'screening',
+        'screened',
+        'shortlisted',
+        'screening_failed',
+        'drafting',
+        'drafted',
+        'draft_failed',
+        'sending',
+        'sent',
+        'send_failed',
+        'rejected',
+      ],
+    })
+      .notNull()
+      .default('queued'),
+    fit_score: integer('fit_score'),
+    screening_report: jsonb('screening_report'),
+    draft_id: uuid('draft_id'),
+    error_reason: text('error_reason'),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    screened_at: timestamp('screened_at', { withTimezone: true }),
+    drafted_at: timestamp('drafted_at', { withTimezone: true }),
+    sent_at: timestamp('sent_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('campaign_candidates_unique_candidate').on(
+      t.tenant_id,
+      t.campaign_id,
+      t.candidate_id,
+    ),
+    index('campaign_candidates_by_campaign').on(t.tenant_id, t.campaign_id),
+    index('campaign_candidates_by_status').on(t.tenant_id, t.campaign_id, t.status),
+  ],
+);
+
 export const outreachTemplates = smartrecruitSchema.table(
   'outreach_templates',
   {
@@ -136,6 +234,7 @@ export const outreachDrafts = smartrecruitSchema.table(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id'),
     candidate_id: uuid('candidate_id').notNull(),
     subject: text('subject').notNull(),
     body: text('body').notNull(),
@@ -154,7 +253,10 @@ export const outreachDrafts = smartrecruitSchema.table(
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [index('drafts_by_tenant_candidate').on(t.tenant_id, t.candidate_id)],
+  (t) => [
+    index('drafts_by_tenant_candidate').on(t.tenant_id, t.candidate_id),
+    index('drafts_by_tenant_campaign').on(t.tenant_id, t.campaign_id),
+  ],
 );
 
 export const interactionHistories = smartrecruitSchema.table(

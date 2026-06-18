@@ -1002,6 +1002,7 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
       overrideUserIds?: string[];
       alternateIndex?: number;
       alternateIndices?: number[];
+      argsPatch?: Record<string, unknown>;
       note?: string;
     };
     try {
@@ -1042,6 +1043,11 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
         );
       }
     }
+    if (body.argsPatch !== undefined) {
+      if (!body.argsPatch || typeof body.argsPatch !== 'object' || Array.isArray(body.argsPatch)) {
+        return c.json({ error: 'invalid_body', message: 'argsPatch must be an object' }, 400);
+      }
+    }
     try {
       const result = await decideApproval({
         session,
@@ -1050,6 +1056,7 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
         overrideUserIds: body.overrideUserIds,
         alternateIndex: body.alternateIndex,
         alternateIndices: body.alternateIndices,
+        argsPatch: body.argsPatch,
         note: body.note,
         mastra: deps.mastra as Mastra,
         chatHitlDeciders: deps.chatHitlDeciders,

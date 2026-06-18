@@ -9,7 +9,14 @@ import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_ACCESS, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
-import { candidates, criteria, outreachDrafts, outreachTemplates } from '../db/schema.ts';
+import {
+  campaigns,
+  candidates,
+  criteria,
+  outreachDrafts,
+  outreachTemplates,
+} from '../db/schema.ts';
+import { createSmartrecruitCampaign, getCampaignView } from '../domain/campaign.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
@@ -37,6 +44,23 @@ const screenCvSchema = z.object({
   cvPath: z.string().optional(),
   cvText: z.string().min(1),
   criteriaId: z.string().uuid(),
+});
+
+const createCampaignSchema = z.object({
+  jobTitle: z.string().min(1),
+  jdText: z.string().min(1),
+  templateId: z.string().uuid().optional(),
+  cvs: z
+    .array(
+      z.object({
+        candidateName: z.string().min(1),
+        candidateEmail: z.string().email(),
+        candidatePhone: z.string().optional(),
+        cvPath: z.string().optional(),
+        cvText: z.string().min(1),
+      }),
+    )
+    .min(1),
 });
 
 const importMockDataSchema = z.object({
@@ -86,6 +110,65 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     const session = c.get('user');
     requirePermission(session, SMARTRECRUIT_ACCESS);
     await next();
+  });
+
+  // --- Campaign Endpoints ---
+  app.post('/api/smartrecruit/v1/campaigns', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = createCampaignSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const view = await createSmartrecruitCampaign({
+      jobTitle: parsed.data.jobTitle,
+      jdText: parsed.data.jdText,
+      cvs: parsed.data.cvs,
+      templateId: parsed.data.templateId,
+      session,
+    });
+
+    return c.json(view, 201);
+  });
+
+  app.get('/api/smartrecruit/v1/campaigns', async (c) => {
+    const session = c.get('user');
+    const scope = c.req.query('scope') ?? 'self';
+    if (scope !== 'self' && scope !== 'tenant') {
+      return c.json({ error: 'VALIDATION', message: 'scope must be self|tenant' }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const rows = await db
+      .select()
+      .from(campaigns)
+      .where(
+        scope === 'self'
+          ? and(
+              eq(campaigns.tenant_id, session.tenant_id),
+              eq(campaigns.created_by, session.user_id),
+            )
+          : eq(campaigns.tenant_id, session.tenant_id),
+      )
+      .orderBy(desc(campaigns.created_at));
+
+    return c.json({ campaigns: rows });
+  });
+
+  app.get('/api/smartrecruit/v1/campaigns/:id', async (c) => {
+    const session = c.get('user');
+    const view = await getCampaignView({
+      campaignId: c.req.param('id'),
+      tenantId: session.tenant_id,
+    });
+
+    if (!view) {
+      return c.json({ error: 'NOT_FOUND', message: 'Campaign not found' }, 404);
+    }
+
+    return c.json(view);
   });
 
   // --- Mock Dataset Import ---

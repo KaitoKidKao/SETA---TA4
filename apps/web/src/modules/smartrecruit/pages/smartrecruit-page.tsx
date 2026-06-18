@@ -99,12 +99,42 @@ interface CandidateState {
 
 interface DraftState {
   id: string;
+  campaign_id?: string | null;
   candidate_id: string;
   subject: string;
   body: string;
   status: 'draft' | 'approved' | 'sent' | 'failed';
   hallucination_check_status: 'pending' | 'passed' | 'failed';
   error_reason: string | null;
+}
+
+interface CampaignView {
+  campaign: {
+    id: string;
+    workflow_run_id: string | null;
+    criteria_id: string | null;
+    job_title: string;
+    status: string;
+    total_candidates: number;
+    screened_count: number;
+    shortlisted_count: number;
+    failed_count: number;
+    drafted_count: number;
+    sent_count: number;
+    error_reason: string | null;
+  };
+  candidates: Array<{
+    campaignCandidate: {
+      candidate_id: string;
+      status: string;
+      fit_score: number | null;
+      screening_report: CandidateState['screening_report'];
+      draft_id: string | null;
+      error_reason: string | null;
+    };
+    candidate: CandidateState | null;
+    draft: DraftState | null;
+  }>;
 }
 
 async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
@@ -146,6 +176,8 @@ export function SmartrecruitPage() {
   );
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
+  const [activeCampaign, setActiveCampaign] = useState<CampaignView | null>(null);
   const [lastLoadedApprovalId, setLastLoadedApprovalId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -326,8 +358,53 @@ export function SmartrecruitPage() {
     setIsLoadingSuggestions(false);
   }, []);
 
+  const applyCampaignView = useCallback(
+    (view: CampaignView) => {
+      setActiveCampaign(view);
+      const cands = view.candidates
+        .map(({ campaignCandidate, candidate }) => {
+          if (!candidate) return null;
+          return {
+            ...candidate,
+            status: campaignCandidate.status,
+            fit_score: campaignCandidate.fit_score ?? candidate.fit_score,
+            screening_report: campaignCandidate.screening_report ?? candidate.screening_report,
+          };
+        })
+        .filter(Boolean) as CandidateState[];
+      const drafts = view.candidates.map((row) => row.draft).filter(Boolean) as DraftState[];
+      setCandidatesList(cands);
+      setDraftsList(drafts);
+
+      const firstCandidate = cands[0];
+      if (firstCandidate && !selectedCandidate) {
+        setSelectedCandidate(firstCandidate);
+        setEditingDraft(drafts.find((d) => d.candidate_id === firstCandidate.id) || null);
+      }
+    },
+    [selectedCandidate],
+  );
+
+  const fetchCampaignProgress = useCallback(
+    async (campaignId: string) => {
+      const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}`);
+      const data = await readJsonResponse<CampaignView & { error?: string; message?: string }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.message || data?.error || 'Failed to load campaign progress.');
+      }
+      applyCampaignView(data);
+      return data;
+    },
+    [applyCampaignView],
+  );
+
   const fetchCandidatesAndDrafts = useCallback(async () => {
     try {
+      if (activeCampaignId) {
+        await fetchCampaignProgress(activeCampaignId);
+        return;
+      }
+
       const resCand = await fetch('/api/smartrecruit/v1/candidates');
       const dataCand = await resCand.json();
       const cands = dataCand.candidates || [];
@@ -357,8 +434,16 @@ export function SmartrecruitPage() {
         const matchedDraft = drafts.find((d: any) => d.candidate_id === filteredCands[0].id);
         setEditingDraft(matchedDraft || null);
       }
-    } catch (_err) {}
-  }, [selectedCandidate, activeCriteria, fetchCriteriaDetails]);
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    }
+  }, [
+    selectedCandidate,
+    activeCriteria,
+    fetchCriteriaDetails,
+    activeCampaignId,
+    fetchCampaignProgress,
+  ]);
 
   const fetchPendingRuns = useCallback(async () => {
     try {
@@ -370,6 +455,7 @@ export function SmartrecruitPage() {
         const running = data.rows.find((r: any) => r.status === 'paused' || r.status === 'running');
         if (running) {
           setActiveRunId(running.runId);
+          setActiveCampaignId(running.inputSummary?.campaignId ?? null);
           setRunStatus(running.status);
           setActiveTab('active');
         }
@@ -388,13 +474,16 @@ export function SmartrecruitPage() {
       }
       const data = await res.json();
       setRunStatus(data.status);
+      if (activeCampaignId) {
+        await fetchCampaignProgress(activeCampaignId);
+      }
       if (data.status === 'success') {
         fetchCandidatesAndDrafts();
       } else if (data.status === 'failed') {
         setRunError(data.errorSummary ?? 'Run failed.');
       }
     } catch (_err) {}
-  }, [activeRunId, fetchCandidatesAndDrafts]);
+  }, [activeRunId, fetchCandidatesAndDrafts, activeCampaignId, fetchCampaignProgress]);
 
   const fetchPendingApprovals = useCallback(async () => {
     try {
@@ -549,18 +638,26 @@ export function SmartrecruitPage() {
 
   // --- Start Workflow Run ---
   const handleStartPipeline = async () => {
+    if (!jobTitle.trim() || !jdText.trim()) {
+      setErrorMsg('Please provide a job title and job description before launching.');
+      return;
+    }
     if (uploadedCvs.length === 0) {
       setErrorMsg('Please upload at least one candidate CV.');
       return;
     }
-    const readyCvs = uploadedCvs.filter((c) => c.status === 'ready');
-    if (readyCvs.length === 0) {
-      setErrorMsg('No ready CVs to process. Please wait for upload to complete.');
+    if (uploadedCvs.some((c) => c.status === 'error')) {
+      setErrorMsg('One or more CVs failed extraction. Remove or re-upload them before launching.');
       return;
     }
+    if (uploadedCvs.some((c) => c.status !== 'ready')) {
+      setErrorMsg('Please wait until every CV is ready before launching.');
+      return;
+    }
+    const readyCvs = uploadedCvs.filter((c) => c.status === 'ready');
 
     try {
-      const res = await fetch('/api/agent/v1/workflows/runs/smartrecruit/start', {
+      const campaignRes = await fetch('/api/smartrecruit/v1/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -574,6 +671,25 @@ export function SmartrecruitPage() {
           })),
         }),
       });
+      const campaignData = await readJsonResponse<
+        CampaignView & { error?: string; message?: string }
+      >(campaignRes);
+      if (!campaignRes.ok || !campaignData?.campaign?.id) {
+        throw new Error(
+          campaignData?.message || campaignData?.error || 'Failed to create recruitment campaign.',
+        );
+      }
+
+      const res = await fetch('/api/agent/v1/workflows/runs/smartrecruit/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: campaignData.campaign.id,
+          jobTitle,
+          jdText,
+          cvs: [],
+        }),
+      });
 
       if (!res.ok) {
         throw new Error('Failed to initiate recruitment agentic workflow');
@@ -585,6 +701,8 @@ export function SmartrecruitPage() {
       if (!data?.runId) {
         throw new Error(data?.message || data?.error || 'Workflow start returned no run ID.');
       }
+      applyCampaignView(campaignData);
+      setActiveCampaignId(campaignData.campaign.id);
       setActiveRunId(data.runId);
       setRunStatus('running');
       setRunError(null);
@@ -717,8 +835,10 @@ export function SmartrecruitPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             decision: 'approve',
-            ...payload,
-            additionalCandidateIds: selectedIds,
+            argsPatch: {
+              ...payload,
+              additionalCandidateIds: selectedIds,
+            },
           }),
         },
       );
@@ -852,7 +972,7 @@ export function SmartrecruitPage() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ decision: 'approve', ...payload }),
+          body: JSON.stringify({ decision: 'approve', argsPatch: payload }),
         },
       );
       if (res.ok) {
@@ -871,6 +991,8 @@ export function SmartrecruitPage() {
 
   const resetPipeline = () => {
     setActiveRunId(null);
+    setActiveCampaignId(null);
+    setActiveCampaign(null);
     setRunStatus(null);
     setRunError(null);
     setUploadedCvs([]);
@@ -1479,6 +1601,108 @@ export function SmartrecruitPage() {
                   </Button>
                 </div>
               </div>
+            )}
+
+            {activeCampaign && (
+              <Card className="shadow-sm border-hairline bg-surface">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-body-lg font-semibold">
+                        Campaign Progress
+                      </CardTitle>
+                      <CardDescription>
+                        {activeCampaign.campaign.job_title} · {activeCampaign.campaign.status}
+                      </CardDescription>
+                    </div>
+                    <Badge
+                      variant={activeCampaign.campaign.failed_count > 0 ? 'warning' : 'success'}
+                    >
+                      {activeCampaign.campaign.screened_count}/
+                      {activeCampaign.campaign.total_candidates} screened
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <div className="h-2 rounded-full bg-canvas overflow-hidden border border-hairline">
+                    <div
+                      className="h-full bg-primary transition-all"
+                      style={{
+                        width: `${
+                          activeCampaign.campaign.total_candidates > 0
+                            ? Math.round(
+                                (activeCampaign.campaign.screened_count /
+                                  activeCampaign.campaign.total_candidates) *
+                                  100,
+                              )
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-body-sm">
+                    <div className="rounded border border-hairline p-2">
+                      <div className="text-ink-subtle">Shortlisted</div>
+                      <div className="font-semibold">
+                        {activeCampaign.campaign.shortlisted_count}
+                      </div>
+                    </div>
+                    <div className="rounded border border-hairline p-2">
+                      <div className="text-ink-subtle">Failed</div>
+                      <div className="font-semibold">{activeCampaign.campaign.failed_count}</div>
+                    </div>
+                    <div className="rounded border border-hairline p-2">
+                      <div className="text-ink-subtle">Drafted</div>
+                      <div className="font-semibold">{activeCampaign.campaign.drafted_count}</div>
+                    </div>
+                    <div className="rounded border border-hairline p-2">
+                      <div className="text-ink-subtle">Sent</div>
+                      <div className="font-semibold">{activeCampaign.campaign.sent_count}</div>
+                    </div>
+                    <div className="rounded border border-hairline p-2">
+                      <div className="text-ink-subtle">Campaign ID</div>
+                      <div className="font-mono text-xs">
+                        {activeCampaign.campaign.id.slice(0, 8)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">
+                    {activeCampaign.candidates.map(({ campaignCandidate, candidate }) => (
+                      <div
+                        key={campaignCandidate.candidate_id}
+                        className="flex items-center justify-between gap-3 p-3 bg-canvas/30"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">
+                            {candidate?.display_name ?? campaignCandidate.candidate_id}
+                          </div>
+                          <div className="text-xs text-ink-subtle truncate">
+                            {campaignCandidate.error_reason ||
+                              candidate?.email ||
+                              'No candidate detail available'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {campaignCandidate.status === 'screening_failed' ||
+                          campaignCandidate.status === 'draft_failed' ||
+                          campaignCandidate.status === 'send_failed' ? (
+                            <Badge variant="destructive">{campaignCandidate.status}</Badge>
+                          ) : (
+                            <Badge variant="secondary">{campaignCandidate.status}</Badge>
+                          )}
+                          {campaignCandidate.status === 'screening_failed' ? (
+                            <span className="text-xs text-rose-600">Screening failed</span>
+                          ) : (
+                            <span className="text-xs font-semibold">
+                              {campaignCandidate.fit_score ?? 0}% Fit
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
             )}
 
             {/* GATE 1 PANEL: CRITERIA CONFIRMATION */}

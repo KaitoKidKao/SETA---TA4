@@ -24,6 +24,7 @@ export interface DecideApprovalOpts {
    */
   alternateIndex?: number;
   alternateIndices?: number[];
+  argsPatch?: Record<string, unknown>;
   note?: string;
   mastra: Mastra;
   /**
@@ -72,6 +73,7 @@ function resumeDataFromDecision(
   overrideUserIds: string[] | undefined,
   alternateIndex: number | undefined,
   alternateIndices: number[] | undefined,
+  requestArgsPatch: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   const card = (ctx.proposedPayload ?? null) as ApprovalCardLike | null;
   if (!card) return undefined;
@@ -91,16 +93,26 @@ function resumeDataFromDecision(
         return { kind: 'link', existingIds };
       }
     }
-    return card.primary?.argsPatch;
+    return card.primary?.argsPatch || requestArgsPatch
+      ? { ...(card.primary?.argsPatch ?? {}), ...(requestArgsPatch ?? {}) }
+      : undefined;
   }
-  if (decision === 'reject') return card.decline?.argsPatch;
+  if (decision === 'reject') {
+    return card.decline?.argsPatch || requestArgsPatch
+      ? { ...(card.decline?.argsPatch ?? {}), ...(requestArgsPatch ?? {}) }
+      : undefined;
+  }
   // modify: substitute the user-composed assignee set into primary.argsPatch.
   if (decision === 'modify' && overrideUserIds && overrideUserIds.length > 0) {
     if (card.primary?.argsPatch) {
-      return { ...card.primary.argsPatch, assigneeUserIds: overrideUserIds };
+      return {
+        ...card.primary.argsPatch,
+        ...(requestArgsPatch ?? {}),
+        assigneeUserIds: overrideUserIds,
+      };
     }
   }
-  return undefined;
+  return requestArgsPatch;
 }
 
 export async function decideApproval(opts: DecideApprovalOpts): Promise<DecideApprovalResult> {
@@ -161,6 +173,7 @@ export async function decideApproval(opts: DecideApprovalOpts): Promise<DecideAp
     const decisionPayload = {
       decision: opts.decision,
       ...(opts.overrideUserIds !== undefined ? { override_user_ids: opts.overrideUserIds } : {}),
+      ...(opts.argsPatch !== undefined ? { args_patch: opts.argsPatch } : {}),
       ...(opts.note !== undefined ? { note: opts.note } : {}),
     };
     await tx.execute(sql`
@@ -259,10 +272,12 @@ export async function decideApproval(opts: DecideApprovalOpts): Promise<DecideAp
     opts.overrideUserIds,
     opts.alternateIndex,
     opts.alternateIndices,
+    opts.argsPatch,
   );
   const resumeData: Record<string, unknown> = fromCard ?? {
     decision: opts.decision,
     ...(opts.overrideUserIds !== undefined ? { override_user_ids: opts.overrideUserIds } : {}),
+    ...(opts.argsPatch ?? {}),
   };
   if (opts.note !== undefined && resumeData.note === undefined) {
     resumeData.note = opts.note;
