@@ -118,6 +118,7 @@ export const campaigns = smartrecruitSchema.table(
     job_title: text('job_title').notNull(),
     jd_text: text('jd_text').notNull(),
     template_id: uuid('template_id'),
+    orchestration_version: integer('orchestration_version').default(1).notNull(),
     status: text('status', {
       enum: [
         'queued',
@@ -128,6 +129,7 @@ export const campaigns = smartrecruitSchema.table(
         'awaiting_outreach_approval',
         'sending',
         'completed',
+        'completed_with_errors',
         'failed',
         'canceled',
       ],
@@ -142,6 +144,12 @@ export const campaigns = smartrecruitSchema.table(
     sent_count: integer('sent_count').default(0).notNull(),
     created_by: uuid('created_by').notNull(),
     started_at: timestamp('started_at', { withTimezone: true }),
+    screening_started_at: timestamp('screening_started_at', { withTimezone: true }),
+    screening_completed_at: timestamp('screening_completed_at', { withTimezone: true }),
+    drafting_started_at: timestamp('drafting_started_at', { withTimezone: true }),
+    drafting_completed_at: timestamp('drafting_completed_at', { withTimezone: true }),
+    sending_started_at: timestamp('sending_started_at', { withTimezone: true }),
+    sending_completed_at: timestamp('sending_completed_at', { withTimezone: true }),
     completed_at: timestamp('completed_at', { withTimezone: true }),
     error_reason: text('error_reason'),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -185,9 +193,18 @@ export const campaignCandidates = smartrecruitSchema.table(
       .notNull()
       .default('queued'),
     fit_score: integer('fit_score'),
+    reviewed_fit_score: integer('reviewed_fit_score'),
+    reviewed_by: uuid('reviewed_by'),
+    reviewed_at: timestamp('reviewed_at', { withTimezone: true }),
+    review_reason: text('review_reason'),
     screening_report: jsonb('screening_report'),
     draft_id: uuid('draft_id'),
     error_reason: text('error_reason'),
+    last_error_code: text('last_error_code'),
+    screening_attempts: integer('screening_attempts').default(0).notNull(),
+    drafting_attempts: integer('drafting_attempts').default(0).notNull(),
+    sending_attempts: integer('sending_attempts').default(0).notNull(),
+    last_attempt_at: timestamp('last_attempt_at', { withTimezone: true }),
     started_at: timestamp('started_at', { withTimezone: true }),
     screened_at: timestamp('screened_at', { withTimezone: true }),
     drafted_at: timestamp('drafted_at', { withTimezone: true }),
@@ -203,6 +220,90 @@ export const campaignCandidates = smartrecruitSchema.table(
     ),
     index('campaign_candidates_by_campaign').on(t.tenant_id, t.campaign_id),
     index('campaign_candidates_by_status').on(t.tenant_id, t.campaign_id, t.status),
+  ],
+);
+
+export const recruiterOverrides = smartrecruitSchema.table(
+  'recruiter_overrides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    field: text('field').notNull(),
+    ai_value: jsonb('ai_value').notNull(),
+    human_value: jsonb('human_value').notNull(),
+    reason: text('reason').notNull(),
+    prompt_version: text('prompt_version'),
+    created_by: uuid('created_by').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('recruiter_overrides_by_campaign_candidate').on(
+      t.tenant_id,
+      t.campaign_id,
+      t.candidate_id,
+    ),
+  ],
+);
+
+export const campaignDataWarnings = smartrecruitSchema.table(
+  'campaign_data_warnings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    warning_code: text('warning_code').notNull(),
+    severity: text('severity', { enum: ['info', 'warning', 'error'] }).notNull(),
+    entity_type: text('entity_type').notNull(),
+    entity_id: text('entity_id'),
+    message: text('message').notNull(),
+    details: jsonb('details').notNull().default({}),
+    resolved_at: timestamp('resolved_at', { withTimezone: true }),
+    resolved_by: uuid('resolved_by'),
+    resolution_note: text('resolution_note'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('campaign_data_warnings_by_campaign').on(t.tenant_id, t.campaign_id, t.severity)],
+);
+
+export const campaignAiUsage = smartrecruitSchema.table(
+  'campaign_ai_usage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    candidate_id: uuid('candidate_id'),
+    stage: text('stage').notNull(),
+    model: text('model').notNull(),
+    prompt_version: text('prompt_version').notNull(),
+    input_tokens: integer('input_tokens'),
+    output_tokens: integer('output_tokens'),
+    latency_ms: integer('latency_ms').notNull(),
+    attempt: integer('attempt').default(1).notNull(),
+    ocr_source: text('ocr_source'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('campaign_ai_usage_by_campaign').on(t.tenant_id, t.campaign_id, t.stage)],
+);
+
+export const campaignReports = smartrecruitSchema.table(
+  'campaign_reports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    version: integer('version').notNull(),
+    snapshot: jsonb('snapshot').notNull(),
+    markdown: text('markdown').notNull(),
+    content_hash: text('content_hash').notNull(),
+    recruiter_note: text('recruiter_note'),
+    created_by: uuid('created_by').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('campaign_reports_unique_version').on(t.tenant_id, t.campaign_id, t.version),
+    index('campaign_reports_by_campaign').on(t.tenant_id, t.campaign_id, t.created_at),
   ],
 );
 

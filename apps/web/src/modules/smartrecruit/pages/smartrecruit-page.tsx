@@ -40,9 +40,11 @@ import {
   Trash2,
   Upload,
   User,
-  XCircle,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CampaignKPIDashboard } from '../components/CampaignKPIDashboard';
+import { CandidateScorecard } from '../components/CandidateScorecard';
+import { HMReportModal } from '../components/HMReportModal';
 
 interface UploadedCv {
   id: string;
@@ -76,6 +78,9 @@ interface CandidateState {
   status: string;
   applied_position?: string | null;
   fit_score: number | null;
+  effective_fit_score?: number | null;
+  reviewed_fit_score?: number | null;
+  review_reason?: string | null;
   screening_report: {
     pros: string[];
     gaps: string[];
@@ -87,13 +92,22 @@ interface CandidateState {
       cvSkill: string | null;
       matched: boolean;
       justification: string;
+      evidenceSnippet?: string | null;
     }>;
     niceToHaveMatches: Array<{
       jdSkill: string;
       cvSkill: string | null;
       matched: boolean;
       justification: string;
+      evidenceSnippet?: string | null;
     }>;
+    scoreBreakdown?: {
+      mustHaveSkills: number;
+      yoe: number;
+      english: number;
+      niceToHave: number;
+    };
+    flags?: string[];
   } | null;
 }
 
@@ -128,6 +142,9 @@ interface CampaignView {
       candidate_id: string;
       status: string;
       fit_score: number | null;
+      effective_fit_score: number | null;
+      reviewed_fit_score: number | null;
+      review_reason: string | null;
       screening_report: CandidateState['screening_report'];
       draft_id: string | null;
       error_reason: string | null;
@@ -148,24 +165,10 @@ async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
   }
 }
 
-function candidateReport(
-  candidate: CandidateState,
-): NonNullable<CandidateState['screening_report']> {
-  return {
-    pros: candidate.screening_report?.pros ?? [],
-    gaps: candidate.screening_report?.gaps ?? [],
-    yoeExplanation:
-      candidate.screening_report?.yoeExplanation ??
-      'No screening report is available for this candidate yet.',
-    overallJustification: candidate.screening_report?.overallJustification ?? '',
-    mustHaveMatches: candidate.screening_report?.mustHaveMatches ?? [],
-    niceToHaveMatches: candidate.screening_report?.niceToHaveMatches ?? [],
-  };
-}
-
 export function SmartrecruitPage() {
   // Navigation & Core State
   const [activeTab, setActiveTab] = useState<'new' | 'active'>('new');
+  const [showReportModal, setShowReportModal] = useState(false);
 
   // Suggested candidates from PgVector (Phase 2 LTM)
   const [suggestedCandidates, setSuggestedCandidates] = useState<CandidateState[]>([]);
@@ -178,6 +181,8 @@ export function SmartrecruitPage() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
   const [activeCampaign, setActiveCampaign] = useState<CampaignView | null>(null);
+  const [campaignMetrics, setCampaignMetrics] = useState<any | null>(null);
+  const [campaignWarnings, setCampaignWarnings] = useState<any[]>([]);
   const [lastLoadedApprovalId, setLastLoadedApprovalId] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -368,6 +373,12 @@ export function SmartrecruitPage() {
             ...candidate,
             status: campaignCandidate.status,
             fit_score: campaignCandidate.fit_score ?? candidate.fit_score,
+            effective_fit_score:
+              campaignCandidate.effective_fit_score ??
+              campaignCandidate.fit_score ??
+              candidate.fit_score,
+            reviewed_fit_score: campaignCandidate.reviewed_fit_score,
+            review_reason: campaignCandidate.review_reason,
             screening_report: campaignCandidate.screening_report ?? candidate.screening_report,
           };
         })
@@ -375,6 +386,10 @@ export function SmartrecruitPage() {
       const drafts = view.candidates.map((row) => row.draft).filter(Boolean) as DraftState[];
       setCandidatesList(cands);
       setDraftsList(drafts);
+      if (selectedCandidate) {
+        const refreshedSelection = cands.find((candidate) => candidate.id === selectedCandidate.id);
+        if (refreshedSelection) setSelectedCandidate(refreshedSelection);
+      }
 
       const firstCandidate = cands[0];
       if (firstCandidate && !selectedCandidate) {
@@ -393,6 +408,15 @@ export function SmartrecruitPage() {
         throw new Error(data?.message || data?.error || 'Failed to load campaign progress.');
       }
       applyCampaignView(data);
+      const [metricsRes, warningsRes] = await Promise.all([
+        fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/metrics`),
+        fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/warnings`),
+      ]);
+      if (metricsRes.ok) setCampaignMetrics(await readJsonResponse(metricsRes));
+      if (warningsRes.ok) {
+        const warningData = await readJsonResponse<{ warnings?: any[] }>(warningsRes);
+        setCampaignWarnings(warningData?.warnings ?? []);
+      }
       return data;
     },
     [applyCampaignView],
@@ -452,7 +476,9 @@ export function SmartrecruitPage() {
       );
       const data = await res.json();
       if (data.rows && data.rows.length > 0) {
-        const running = data.rows.find((r: any) => r.status === 'paused' || r.status === 'running');
+        const running = data.rows.find(
+          (r: any) => r.status === 'paused' || r.status === 'running' || r.status === 'waiting',
+        );
         if (running) {
           setActiveRunId(running.runId);
           setActiveCampaignId(running.inputSummary?.campaignId ?? null);
@@ -977,10 +1003,16 @@ export function SmartrecruitPage() {
       );
       if (res.ok) {
         setActiveApproval(null);
-        setRunStatus('success');
+        setRunStatus('running');
+        await Promise.all([
+          pollRunStatus(),
+          fetchPendingApprovals(),
+          activeCampaignId ? fetchCampaignProgress(activeCampaignId) : Promise.resolve(),
+        ]);
       } else {
         const data = await res.json().catch(() => ({}));
-        setErrorMsg(data.message || 'Failed to approve outreach.');
+        const details = data.details ? ` (${JSON.stringify(data.details)})` : '';
+        setErrorMsg(`${data.message || data.error || 'Failed to approve outreach.'}${details}`);
       }
     } catch (err) {
       setErrorMsg((err as Error).message);
@@ -1584,6 +1616,8 @@ export function SmartrecruitPage() {
               </CardContent>
             </Card>
 
+            {activeCampaignId && <CampaignKPIDashboard campaignId={activeCampaignId} />}
+
             {/* Run error layout */}
             {runError && (
               <div className="bg-destructive-tint/20 border border-destructive/20 text-destructive p-4 rounded-xl flex items-start gap-3">
@@ -1665,6 +1699,59 @@ export function SmartrecruitPage() {
                         {activeCampaign.campaign.id.slice(0, 8)}
                       </div>
                     </div>
+                  </div>
+                  {campaignMetrics && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-body-sm">
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Time to screen</div>
+                        <div className="font-semibold">
+                          {campaignMetrics.timeToScreenMs == null
+                            ? 'Pending'
+                            : `${Math.round(campaignMetrics.timeToScreenMs / 1000)}s`}
+                        </div>
+                      </div>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">CV / minute</div>
+                        <div className="font-semibold">
+                          {campaignMetrics.candidatesPerMinute ?? 'Pending'}
+                        </div>
+                      </div>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Retries</div>
+                        <div className="font-semibold">{campaignMetrics.retryCount}</div>
+                      </div>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">AI latency</div>
+                        <div className="font-semibold">
+                          {Math.round(campaignMetrics.aiLatencyMs / 1000)}s
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {campaignWarnings.filter((warning) => !warning.resolved_at).length > 0 && (
+                    <div className="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                      <div className="font-semibold text-body-sm">Data quality warnings</div>
+                      <ul className="mt-1 list-disc pl-5 text-body-sm">
+                        {campaignWarnings
+                          .filter((warning) => !warning.resolved_at)
+                          .map((warning) => (
+                            <li key={warning.id}>{warning.message}</li>
+                          ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center border-t border-hairline pt-3">
+                    <div className="text-body-sm text-ink-subtle">
+                      Báo cáo Shortlist cho Hiring Manager
+                    </div>
+                    <Button
+                      type="button"
+                      onClick={() => setShowReportModal(true)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5"
+                    >
+                      <FileText className="size-4" />
+                      Xuất & Quản lý Báo cáo HM
+                    </Button>
                   </div>
                   <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">
                     {activeCampaign.candidates.map(({ campaignCandidate, candidate }) => (
@@ -2238,101 +2325,32 @@ export function SmartrecruitPage() {
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-eyebrow text-ink-subtle">Fit Score:</span>
-                          <Badge className="bg-emerald-500 text-white">
-                            {selectedCandidate.fit_score ?? 0}% Fit
-                          </Badge>
+                          {selectedCandidate.status === 'screening_failed' ? (
+                            <Badge className="bg-rose-500 text-white">Screening failed</Badge>
+                          ) : (
+                            <Badge className="bg-emerald-500 text-white">
+                              {selectedCandidate.effective_fit_score ??
+                                selectedCandidate.fit_score ??
+                                'Pending'}
+                              % Fit
+                            </Badge>
+                          )}
                         </div>
                       </div>
 
                       {/* Content panel */}
                       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5">
-                        {/* Scorecard block */}
-                        <div className="flex flex-col gap-3.5 bg-canvas p-4 rounded-xl border border-hairline">
-                          <h4 className="text-body-sm font-bold text-ink flex items-center gap-2">
-                            <FileText className="size-4 text-primary" /> Candidate Suitability
-                            Scorecard
-                          </h4>
-
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="flex flex-col gap-1.5">
-                              <span className="text-eyebrow text-ink-subtle uppercase">
-                                Pros / Strengths
-                              </span>
-                              <ul className="flex flex-col gap-1">
-                                {candidateReport(selectedCandidate).pros.length === 0 && (
-                                  <li className="text-body-sm text-ink-subtle">
-                                    No strengths recorded yet.
-                                  </li>
-                                )}
-                                {candidateReport(selectedCandidate).pros.map((pro, idx) => (
-                                  <li
-                                    key={idx}
-                                    className="text-body-sm text-ink flex items-start gap-1.5"
-                                  >
-                                    <Check className="size-4 text-emerald-500 shrink-0 mt-0.5" />
-                                    <span>{pro}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                            <div className="flex flex-col gap-1.5">
-                              <span className="text-eyebrow text-ink-subtle uppercase">
-                                Gaps / Deficiencies
-                              </span>
-                              <ul className="flex flex-col gap-1">
-                                {candidateReport(selectedCandidate).gaps.length === 0 && (
-                                  <li className="text-body-sm text-ink-subtle">
-                                    No gaps recorded yet.
-                                  </li>
-                                )}
-                                {candidateReport(selectedCandidate).gaps.map((gap, idx) => (
-                                  <li
-                                    key={idx}
-                                    className="text-body-sm text-ink flex items-start gap-1.5"
-                                  >
-                                    <XCircle className="size-4 text-rose-500 shrink-0 mt-0.5" />
-                                    <span>{gap}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-
-                          <div className="border-t border-hairline pt-3 flex flex-col gap-1">
-                            <span className="text-eyebrow text-ink-subtle uppercase">
-                              Experience Calculation
-                            </span>
-                            <p className="text-body-sm text-ink italic font-medium">
-                              {candidateReport(selectedCandidate).yoeExplanation}
-                            </p>
-                          </div>
-
-                          {/* PII Decryption Board */}
-                          {selectedCandidate.screening_report?.piiMapping &&
-                            Object.keys(selectedCandidate.screening_report.piiMapping).length >
-                              0 && (
-                              <div className="border-t border-hairline pt-3 flex flex-col gap-1.5 animate-in fade-in duration-200">
-                                <span className="text-eyebrow text-ink-subtle uppercase flex items-center gap-1">
-                                  <Check className="size-3.5 text-emerald-500" />
-                                  Decrypted contact details (PII)
-                                </span>
-                                <div className="grid grid-cols-2 gap-2 p-2 bg-canvas/40 rounded-lg border border-hairline text-body-sm">
-                                  {Object.entries(
-                                    selectedCandidate.screening_report.piiMapping,
-                                  ).map(([key, val]) => (
-                                    <div key={key} className="flex flex-col gap-0.5 min-w-0">
-                                      <span className="text-eyebrow text-ink-subtle font-mono text-[10px]">
-                                        {key}
-                                      </span>
-                                      <span className="font-medium text-ink truncate">
-                                        {val as string}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                        </div>
+                        <CandidateScorecard
+                          selectedCandidate={selectedCandidate}
+                          campaignId={activeCampaignId || ''}
+                          onReviewSaved={async () => {
+                            if (activeCampaignId) {
+                              await fetchCampaignProgress(activeCampaignId);
+                            } else {
+                              await fetchCandidatesAndDrafts();
+                            }
+                          }}
+                        />
 
                         {/* Email draft editor */}
                         {editingDraft && (
@@ -2470,6 +2488,9 @@ export function SmartrecruitPage() {
               </Card>
             )}
           </div>
+        )}
+        {showReportModal && activeCampaignId && (
+          <HMReportModal campaignId={activeCampaignId} onClose={() => setShowReportModal(false)} />
         )}
       </div>
     </PageChrome>

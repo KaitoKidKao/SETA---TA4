@@ -17,6 +17,11 @@ import { anonymizeCvText } from './anonymize.ts';
 import { getModelConfig } from './model.ts';
 import { performOcr } from './ocr.ts';
 import { withRetry } from './retry.ts';
+import {
+  calculateDeterministicScore,
+  SCORING_VERSION,
+  SCREENING_PROMPT_VERSION,
+} from './scoring.ts';
 
 export interface ScreenCvInput {
   existingCandidateId?: string;
@@ -63,6 +68,10 @@ export interface ScreenCvOutput {
       niceToHave: number;
     };
     flags?: string[];
+    promptVersion?: string;
+    scoringVersion?: string;
+    model?: string;
+    ocrSource?: string;
   };
 }
 
@@ -105,6 +114,7 @@ export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
 
     try {
       let cvContentText = input.cvText || '';
+      let ocrSource = cvContentText.trim() ? 'provided_text' : 'none';
 
       if ((!cvContentText || cvContentText.trim().length === 0) && input.cvPath) {
         const isPdf = input.cvPath.toLowerCase().endsWith('.pdf');
@@ -114,6 +124,7 @@ export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
             const doc = await getDocumentProxy(new Uint8Array(buffer));
             const { text } = await extractText(doc, { mergePages: true });
             cvContentText = Array.isArray(text) ? text.join('\n') : text;
+            if (cvContentText.trim()) ocrSource = 'pdf_text_layer';
           } catch (pdfErr) {
             console.warn(
               `Direct PDF parsing failed for ${input.cvPath}, trying OCR fallback:`,
@@ -127,6 +138,7 @@ export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
           try {
             span.setAttribute('ocr_fallback_triggered', true);
             cvContentText = await performOcr(input.cvPath);
+            ocrSource = 'ocr_fallback';
           } catch (ocrErr) {
             console.error(`OCR fallback failed for ${input.cvPath}:`, ocrErr);
             throw new Error(`Failed to extract text from CV file. ${String(ocrErr)}`);
@@ -165,12 +177,8 @@ Screening rules:
 1. Extract work history periods from the CV only. Use YYYY-MM when available. Use "present" only when the CV indicates an ongoing role.
 2. Extract technical skills from the CV only. Do not infer a skill unless there is a clear semantic equivalent. Example: PostgreSQL can support SQL; Next.js can support React. Do not treat unrelated adjacent tools as a match.
 3. For every must-have and nice-to-have criterion, return one match row. Each row must include an evidence snippet copied or tightly paraphrased from the CV. If there is no evidence, matched=false, cvSkill=null, and evidenceSnippet=null.
-4. Apply the provided scoring weights exactly:
-   - must-have skills weight: proportion of matched must-have requirements.
-   - YOE weight: full credit when total YOE >= minimum; partial credit if close; zero if clearly below.
-   - English weight: full credit only when CV evidence meets or exceeds the required level; zero if no English evidence and English is required.
-   - nice-to-have weight: proportion of matched nice-to-have requirements.
-5. fitScore must equal the rounded sum of the four score breakdown numbers and must be between 0 and 100.
+4. Extract the candidate's English CEFR level and a supporting evidence snippet. Return null when the CV has no evidence.
+5. Do not calculate a final score. The server applies approved deterministic weights.
 6. Apply auto-flag rules and guardrail notes. If a critical missing item is present, include it in flags and gaps.
 7. Do not reward missing information. If the CV does not mention a fact, mark it as unknown or missing.
 8. Keep pros and gaps specific, evidence-based, and useful for a recruiter reviewing Gate 2.`,
@@ -237,29 +245,12 @@ ${anonymizedCvText}`,
                         .describe('Direct supporting evidence from CV, or null when missing'),
                     }),
                   ),
-                  scoreBreakdown: z.object({
-                    mustHaveSkills: z
-                      .number()
-                      .min(0)
-                      .max(crit.weight_must_have_skills)
-                      .describe('Weighted score contribution for must-have skills'),
-                    yoe: z
-                      .number()
-                      .min(0)
-                      .max(crit.weight_yoe)
-                      .describe('Weighted score contribution for years of experience'),
-                    english: z
-                      .number()
-                      .min(0)
-                      .max(crit.weight_english)
-                      .describe('Weighted score contribution for English requirement'),
-                    niceToHave: z
-                      .number()
-                      .min(0)
-                      .max(crit.weight_nice_to_have)
-                      .describe('Weighted score contribution for nice-to-have skills'),
-                  }),
-                  fitScore: z.number().int().min(0).max(100),
+                  englishEvidence: z
+                    .object({
+                      level: z.string().nullable(),
+                      evidenceSnippet: z.string().nullable(),
+                    })
+                    .optional(),
                   pros: z.array(z.string()),
                   gaps: z.array(z.string()),
                   flags: z
@@ -289,21 +280,55 @@ ${anonymizedCvText}`,
       const totalYoe = Math.round((totalMonths / 12) * 10) / 10; // e.g., 2.5 years
 
       const yoeExplanation = `Extracted ${parsed.workPeriods.length} work periods totaling ${totalYoe} years of experience (${totalMonths} months). Minimum required is ${crit.min_yoe} years.`;
+      const deterministic = calculateDeterministicScore({
+        mustHaveSkills: crit.must_have_skills,
+        niceToHaveSkills: crit.nice_to_have_skills,
+        mustHaveMatches: parsed.fitAnalysis.mustHaveMatches,
+        niceToHaveMatches: parsed.fitAnalysis.niceToHaveMatches,
+        totalYoe,
+        minYoe: crit.min_yoe,
+        englishRequired: crit.english_level_required,
+        englishLevel: parsed.fitAnalysis.englishEvidence?.level,
+        englishEvidence: parsed.fitAnalysis.englishEvidence?.evidenceSnippet,
+        weights: {
+          mustHaveSkills: crit.weight_must_have_skills,
+          yoe: crit.weight_yoe,
+          english: crit.weight_english,
+          niceToHave: crit.weight_nice_to_have,
+        },
+      });
+      const modelRecord = model as unknown as {
+        id?: string;
+        providerId?: string;
+        modelId?: string;
+      };
+      const modelName =
+        typeof model === 'string'
+          ? model
+          : (modelRecord.id ??
+            (modelRecord.providerId && modelRecord.modelId
+              ? `${modelRecord.providerId}/${modelRecord.modelId}`
+              : 'configured-model'));
 
       const screeningReport = {
         criteriaId: input.criteriaId,
+        promptVersion: SCREENING_PROMPT_VERSION,
+        scoringVersion: SCORING_VERSION,
+        model: modelName,
+        ocrSource,
         pros: parsed.fitAnalysis.pros,
         gaps: parsed.fitAnalysis.gaps,
         yoeExplanation,
         overallJustification: parsed.fitAnalysis.justification,
-        mustHaveMatches: parsed.fitAnalysis.mustHaveMatches,
-        niceToHaveMatches: parsed.fitAnalysis.niceToHaveMatches,
-        scoreBreakdown: parsed.fitAnalysis.scoreBreakdown,
-        flags: parsed.fitAnalysis.flags,
+        mustHaveMatches: deterministic.mustHaveMatches,
+        niceToHaveMatches: deterministic.niceToHaveMatches,
+        englishEvidence: parsed.fitAnalysis.englishEvidence ?? null,
+        scoreBreakdown: deterministic.scoreBreakdown,
+        flags: [...new Set([...parsed.fitAnalysis.flags, ...deterministic.flags])],
         piiMapping,
       };
 
-      const isShortlisted = parsed.fitAnalysis.fitScore >= 70;
+      const isShortlisted = deterministic.fitScore >= 70;
       const status = isShortlisted ? 'shortlisted' : 'screened';
 
       let savedId!: string;
@@ -325,7 +350,7 @@ ${anonymizedCvText}`,
                 cv_path: input.cvPath ?? null,
                 cv_text: cvContentText,
                 status,
-                fit_score: parsed.fitAnalysis.fitScore,
+                fit_score: deterministic.fitScore,
                 screening_report: screeningReport,
                 updated_at: new Date(),
               })
@@ -347,7 +372,7 @@ ${anonymizedCvText}`,
               cv_path: input.cvPath ?? null,
               cv_text: cvContentText,
               status,
-              fit_score: parsed.fitAnalysis.fitScore,
+              fit_score: deterministic.fitScore,
               screening_report: screeningReport,
             });
             savedId = id;
@@ -363,7 +388,7 @@ ${anonymizedCvText}`,
           tenant_id: input.session.tenant_id,
           display_name: input.candidateName,
           email: input.candidateEmail,
-          fit_score: parsed.fitAnalysis.fitScore,
+          fit_score: deterministic.fitScore,
           cv_skills: parsed.skills.join(', '),
           cv_text: cvContentText,
         }).catch((err) => {
@@ -371,7 +396,7 @@ ${anonymizedCvText}`,
         });
       }
 
-      span.setAttribute('fit_score', parsed.fitAnalysis.fitScore);
+      span.setAttribute('fit_score', deterministic.fitScore);
       span.setAttribute('status', status);
 
       span.end();
@@ -380,7 +405,7 @@ ${anonymizedCvText}`,
         displayName: input.candidateName,
         email: input.candidateEmail,
         status,
-        fitScore: parsed.fitAnalysis.fitScore,
+        fitScore: deterministic.fitScore,
         totalYoe,
         report: screeningReport,
       };

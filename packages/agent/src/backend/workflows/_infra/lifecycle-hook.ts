@@ -1,3 +1,4 @@
+import { isWorkflowSystemWaitPayload } from '@seta/agent-sdk';
 import type { Pool, PoolClient } from 'pg';
 
 interface BaseEvent {
@@ -161,12 +162,14 @@ async function onRunSuspended(client: PoolClient, evt: RunSuspendedEvent): Promi
     tenantId: evt.tenantId,
   });
 
+  const systemWait = isWorkflowSystemWaitPayload(evt.proposedPayload);
   await client.query(
     `UPDATE agent.workflow_runs
-        SET status = 'paused', suspend_reason = $2
+        SET status = $2, suspend_reason = $3
       WHERE run_id = $1`,
-    [evt.runId, evt.suspendReason],
+    [evt.runId, systemWait ? 'waiting' : 'paused', evt.suspendReason],
   );
+  if (systemWait) return;
   // Supersede any existing pending approval for this run (e.g. from a prior
   // HITL cycle that was never decided, or a previous execution that completed
   // without the approval being resolved). This keeps at most one pending
@@ -495,9 +498,12 @@ export function adaptMastraEvent(raw: RawMastraEvent): MastraLifecycleEvent | nu
           ? ((stepEntry as { suspendPayload?: unknown; payload?: unknown }).suspendPayload ??
             (stepEntry as { payload?: unknown }).payload)
           : undefined);
-      const suspendReason =
-        typeof data.suspendReason === 'string' ? data.suspendReason : 'hitl_pending';
       const proposedPayload = data.proposedPayload ?? proposedFromSuspend ?? {};
+      const suspendReason = isWorkflowSystemWaitPayload(proposedPayload)
+        ? 'background_job'
+        : typeof data.suspendReason === 'string'
+          ? data.suspendReason
+          : 'hitl_pending';
       // Approver defaults to the rc actor; if both rc parsing and the explicit
       // field fail we leave it empty and let onRunSuspended fill it in from
       // workflow_runs.started_by (it always has the seeded value). Same idea
