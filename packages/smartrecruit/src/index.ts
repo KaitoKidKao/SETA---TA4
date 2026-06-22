@@ -8,6 +8,12 @@ export {
   type ExecuteOutreachOutput,
   executeOutreach,
 } from './backend/domain/execute-outreach.ts';
+export type {
+  HmFeedbackTrackerItem,
+  ImportHmFeedbackInput,
+  ImportHmFeedbackOutput,
+  ListHmFeedbackInput,
+} from './backend/domain/hm-feedback.ts';
 export {
   type ImportSmartrecruitMockDataInput,
   type ImportSmartrecruitMockDataOutput,
@@ -20,5 +26,9 @@ export {
   screenCandidatePool,
 } from './backend/domain/screen-candidate-pool.ts';
 export { type ScreenCvInput, type ScreenCvOutput, screenCv } from './backend/domain/screen-cv.ts';
+export {
+  type CampaignStageCompletedPayload,
+  SMARTRECRUIT_EVENTS,
+} from './events.ts';
 export { SmartrecruitError } from './rbac.ts';
 export { registerSmartrecruitContributions } from './register.ts';

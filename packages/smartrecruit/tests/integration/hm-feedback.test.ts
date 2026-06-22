@@ -1,8 +1,10 @@
-import { eq } from 'drizzle-orm';
+import path from 'node:path';
+import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { hmFeedbackReminderAttempts, hmFeedbackRequests } from '../../src/backend/db/schema.ts';
 import {
   approveHmFeedbackReminder,
+  importHmFeedbackFromWorkbook,
   listHmFeedbackTracker,
   prepareHmFeedbackReminderDraft,
 } from '../../src/backend/domain/hm-feedback.ts';
@@ -130,6 +132,92 @@ describe('HM feedback SLA persistence', () => {
           addJob: async () => {},
         }),
       ).rejects.toThrow(/submitted/i);
+    });
+  });
+
+  it('proves workbook import, upsert behavior, tenant isolation, and transactional event writes', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      const mockFilePath = path.resolve(
+        __dirname,
+        '../../../../mock-data/03_ta_hire_request_jd_generation.xlsx',
+      );
+
+      // 1. Proves import behavior (first time, creates rows)
+      const importResult1 = await importHmFeedbackFromWorkbook({
+        filePath: mockFilePath,
+        session,
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
+      expect(importResult1.created).toBeGreaterThan(0);
+      expect(importResult1.invalid).toHaveLength(0);
+
+      const countAfterImport = importResult1.created;
+
+      // 2. Proves upsert behavior (second time, updates rows instead of creating duplicates)
+      const importResult2 = await importHmFeedbackFromWorkbook({
+        filePath: mockFilePath,
+        session,
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
+      expect(importResult2.created).toBe(0);
+      expect(importResult2.updated).toBe(countAfterImport);
+
+      // 3. Proves tenant isolation
+      const trackerForTenant = await listHmFeedbackTracker({
+        tenantId: session.tenant_id,
+      });
+      expect(trackerForTenant.length).toBe(countAfterImport);
+
+      const otherTenantId = crypto.randomUUID();
+      const trackerForOtherTenant = await listHmFeedbackTracker({
+        tenantId: otherTenantId,
+      });
+      expect(trackerForOtherTenant).toHaveLength(0);
+
+      // 4. Proves transactional state and event writes on approval
+      // Find an eligible feedback request in the imported list, or make one eligible
+      let eligibleItem = trackerForTenant.find(
+        (item) => item.reminderAvailable && item.hiringManagerEmail,
+      );
+      if (!eligibleItem) {
+        const itemToModify = trackerForTenant[0];
+        expect(itemToModify).toBeDefined();
+        await db
+          .update(hmFeedbackRequests)
+          .set({
+            feedback_status: 'Pending',
+            submitted_at: null,
+            hiring_manager_email: 'hm@example.com',
+          })
+          .where(eq(hmFeedbackRequests.id, itemToModify!.id));
+
+        const updatedTracker = await listHmFeedbackTracker({
+          tenantId: session.tenant_id,
+        });
+        eligibleItem = updatedTracker.find((item) => item.id === itemToModify!.id);
+      }
+      expect(eligibleItem).toBeDefined();
+      expect(eligibleItem!.reminderAvailable).toBe(true);
+
+      const addJob = vi.fn(async () => {});
+      const approved = await approveHmFeedbackReminder({
+        tenantId: session.tenant_id,
+        feedbackRequestId: eligibleItem!.id,
+        session,
+        addJob,
+      });
+
+      expect(approved.status).toBe('queued');
+      expect(addJob).toHaveBeenCalledTimes(1);
+
+      // Query the database outbox to verify the transactional event was written
+      const events = await db.execute(sql`
+        SELECT * FROM core.events 
+        WHERE tenant_id = ${session.tenant_id} 
+          AND event_type = 'smartrecruit.hm_feedback.reminder_queued'
+      `);
+      expect(events.rows).toHaveLength(1);
+      expect((events.rows[0] as any).aggregate_id).toBe(eligibleItem!.id);
     });
   });
 });

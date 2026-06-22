@@ -1,7 +1,13 @@
 import type { SessionScope } from '@seta/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { smartrecruitDb } from '../db/client.ts';
-import { campaignAiUsage, campaignDataWarnings, criteria } from '../db/schema.ts';
+import {
+  campaignAiUsage,
+  campaignCandidates,
+  campaignDataWarnings,
+  campaigns,
+  criteria,
+} from '../db/schema.ts';
 import { getCampaignView } from './campaign.ts';
 
 export async function getCampaignMetrics(args: { campaignId: string; tenantId: string }) {
@@ -163,4 +169,115 @@ export async function resolveCampaignWarning(args: {
     )
     .returning();
   return updated ?? null;
+}
+
+/**
+ * Data-integrity check for campaign shortlist counts (task 5.3).
+ *
+ * Compares each campaign's persisted `shortlisted_count` against the actual
+ * count derived from `campaign_candidates.status`. Rows with statuses that
+ * progress through drafting / sending are considered shortlisted — this mirrors
+ * the same set used in the `counts()` helper inside campaign-jobs.ts.
+ *
+ * **Safe to run in production at any time:**
+ * - With `repair: false` (default) the function is a pure read; it returns the
+ *   list of discrepant campaigns but makes no writes.
+ * - With `repair: true` it corrects only the `shortlisted_count` column for
+ *   discrepant campaigns and returns the full list of corrections applied.
+ *
+ * Typical invocation:
+ * ```ts
+ * // Inspect only — zero risk:
+ * const report = await checkCampaignShortlistCounts({ tenantId });
+ *
+ * // Repair after confirming the report looks correct:
+ * const fixed = await checkCampaignShortlistCounts({ tenantId, repair: true });
+ * ```
+ */
+export async function checkCampaignShortlistCounts(args: {
+  tenantId?: string;
+  repair?: boolean;
+}): Promise<
+  Array<{
+    campaignId: string;
+    persisted: number;
+    actual: number;
+    repaired: boolean;
+  }>
+> {
+  const SHORTLISTED_STATUSES = new Set([
+    'shortlisted',
+    'drafting',
+    'drafted',
+    'draft_failed',
+    'sending',
+    'sent',
+    'send_failed',
+    'rejected',
+  ]);
+
+  const db = smartrecruitDb();
+
+  // Load all campaigns in scope
+  const campaignRows = await db
+    .select({
+      id: campaigns.id,
+      tenantId: campaigns.tenant_id,
+      shortlistedCount: campaigns.shortlisted_count,
+    })
+    .from(campaigns)
+    .where(args.tenantId ? eq(campaigns.tenant_id, args.tenantId) : sql`true`);
+
+  if (campaignRows.length === 0) return [];
+
+  // Load all campaignCandidates for those campaigns in one query
+  const campaignIds = campaignRows.map((r) => r.id);
+  const allRows = await db
+    .select({
+      campaignId: campaignCandidates.campaign_id,
+      status: campaignCandidates.status,
+    })
+    .from(campaignCandidates)
+    .where(
+      sql`${campaignCandidates.campaign_id} = ANY(${sql.raw(
+        `ARRAY[${campaignIds.map((id) => `'${id}'`).join(',')}]::uuid[]`,
+      )})`,
+    );
+
+  // Tally actual shortlisted counts per campaign
+  const actualCounts = new Map<string, number>();
+  for (const row of allRows) {
+    const prev = actualCounts.get(row.campaignId) ?? 0;
+    actualCounts.set(row.campaignId, prev + (SHORTLISTED_STATUSES.has(row.status) ? 1 : 0));
+  }
+
+  const discrepancies: Array<{
+    campaignId: string;
+    persisted: number;
+    actual: number;
+    repaired: boolean;
+  }> = [];
+
+  for (const campaign of campaignRows) {
+    const actual = actualCounts.get(campaign.id) ?? 0;
+    if (actual === campaign.shortlistedCount) continue;
+
+    let repaired = false;
+    if (args.repair) {
+      await db
+        .update(campaigns)
+        .set({ shortlisted_count: actual, updated_at: new Date() })
+        .where(eq(campaigns.id, campaign.id));
+      repaired = true;
+    }
+
+    discrepancies.push({
+      campaignId: campaign.id,
+      persisted: campaign.shortlistedCount,
+      actual,
+      repaired,
+    });
+  }
+
+  return discrepancies;
 }
