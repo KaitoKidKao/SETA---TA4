@@ -1042,7 +1042,6 @@ export function useSmartRecruitWorkflow() {
     editingDraft,
     setEditingDraft,
     isSavingDraft,
-    sentDrafts,
     filteredCandidates,
     isAnyCvNotReady,
     dataWarnings,
