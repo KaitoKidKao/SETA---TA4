@@ -8,6 +8,86 @@ import { parseJd } from '../../src/backend/domain/parse-jd.ts';
 import { screenCv } from '../../src/backend/domain/screen-cv.ts';
 import { withSmartrecruitTestDb } from './helpers.ts';
 
+// Dynamic mock store to accumulate vectors in tests
+let mockVectorQueryResults: any[] = [];
+
+vi.mock('../../src/backend/embeddings/vector-store.ts', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/backend/embeddings/vector-store.ts')>();
+  return {
+    ...actual,
+    getSmartrecruitVectorStore: (databaseUrl: string) => {
+      return {
+        createIndex: async () => {},
+        upsert: async (opts: any) => {
+          const ids = opts.ids || [];
+          const metadata = opts.metadata || [];
+          for (let i = 0; i < ids.length; i++) {
+            mockVectorQueryResults.push({
+              id: ids[i],
+              score: 0.99,
+              metadata: metadata[i],
+            });
+          }
+        },
+        query: async (opts: any) => {
+          const tenantId = opts.filter?.tenant_id?.$eq;
+          let results = mockVectorQueryResults;
+          if (tenantId) {
+            results = results.filter((r) => r.metadata?.tenant_id === tenantId);
+          }
+          return results.slice(0, opts.topK || 25);
+        },
+        disconnect: async () => {},
+      };
+    },
+    candidateCvVectorId: actual.candidateCvVectorId,
+    SMARTRECRUIT_VECTOR_INDEX: actual.SMARTRECRUIT_VECTOR_INDEX,
+  };
+});
+
+let mockPdfText = 'Parsed text from PDF text-layer.';
+const mockTesseractText = 'Extracted text via Tesseract local OCR.';
+let mockTesseractShouldFail = false;
+let mockVisionApiShouldFail = false;
+let mockLlmRateLimitCalls = 0;
+let mockLlmRateLimitThreshold = 0;
+
+vi.mock('unpdf', () => {
+  return {
+    getDocumentProxy: async (buffer: Uint8Array) => {
+      return { numPages: 1 };
+    },
+    extractText: async (doc: any, options?: any) => {
+      return { text: mockPdfText };
+    },
+  };
+});
+
+vi.mock('tesseract.js', () => {
+  return {
+    default: {
+      recognize: async (image: any, langs: string) => {
+        if (mockTesseractShouldFail) {
+          throw new Error('Tesseract failed');
+        }
+        return {
+          data: {
+            text: mockTesseractText,
+          },
+        };
+      },
+    },
+  };
+});
+
+vi.mock('node:fs/promises', () => {
+  return {
+    access: async (path: string) => true,
+    readFile: async (path: string) => Buffer.from('mock-file-content'),
+  };
+});
+
 // Mock Seta mailer so we don't send real emails
 vi.mock('@seta/shared-mailer', () => {
   return {
@@ -44,6 +124,39 @@ describe('SmartRecruit Integration Tests', () => {
       // We can inspect prompt content or instructions to decide mock response
       const promptStr = String(prompt);
       const instructions = this.getInstructions ? this.getInstructions() : '';
+
+      // Mock OCR agent
+      if (this.id === 'smartrecruit.ocrAgent' || instructions.includes('OCR expert')) {
+        if (mockVisionApiShouldFail) {
+          throw new Error('OpenAI API Quota Exceeded (429)');
+        }
+        return {
+          text: 'Extracted text via OpenAI Vision API.',
+        } as any;
+      }
+
+      // Mock Anonymizer Agent
+      if (this.id === 'smartrecruit.anonymizer' || instructions.includes('redact PII')) {
+        return {
+          object: {
+            anonymizedText: promptStr
+              .replace('John Doe', '[CANDIDATE_NAME]')
+              .replace('john@example.com', '[EMAIL_1]')
+              .replace('+84987654321', '[PHONE_1]'),
+            mapping: [
+              { placeholder: '[CANDIDATE_NAME]', originalValue: 'John Doe' },
+              { placeholder: '[EMAIL_1]', originalValue: 'john@example.com' },
+              { placeholder: '[PHONE_1]', originalValue: '+84987654321' },
+            ],
+          },
+        } as any;
+      }
+
+      // Mock Rate Limit
+      if (mockLlmRateLimitThreshold > 0 && mockLlmRateLimitCalls < mockLlmRateLimitThreshold) {
+        mockLlmRateLimitCalls++;
+        throw new Error('Rate limit exceeded (HTTP 429)');
+      }
 
       if (promptStr.includes('Job Description:')) {
         // jdParser
@@ -146,8 +259,8 @@ describe('SmartRecruit Integration Tests', () => {
         ) {
           return {
             object: {
-              subject: 'Career opportunity at SETA',
-              body: 'Hi Candidate, we noticed your Node.js experience. We would love to chat.',
+              subject: 'Career opportunity at SETA for [CANDIDATE_NAME]',
+              body: 'Hi [CANDIDATE_NAME], we noticed your Node.js experience. We would love to chat.',
             },
             // biome-ignore lint/suspicious/noExplicitAny: mock return
           } as any;
@@ -155,11 +268,15 @@ describe('SmartRecruit Integration Tests', () => {
 
         // Otherwise check if we want to simulate a hallucination in the draft
         // (to test the adoption filter)
-        if (promptStr.includes('Simulate Hallucination')) {
+        // Since candidate name is anonymized to [CANDIDATE_NAME], we check if the CV content matches the hallucination test candidate's CV
+        if (
+          promptStr.includes('Simulate Hallucination') ||
+          promptStr.includes('Only worked on React and Node.js')
+        ) {
           return {
             object: {
-              subject: 'Outreach to Candidate',
-              body: 'Hi Candidate, we noticed you worked on the hallucinated project at TechCorp.',
+              subject: 'Outreach to [CANDIDATE_NAME]',
+              body: 'Hi [CANDIDATE_NAME], we noticed you worked on the hallucinated project at TechCorp.',
             },
             // biome-ignore lint/suspicious/noExplicitAny: mock return
           } as any;
@@ -167,8 +284,8 @@ describe('SmartRecruit Integration Tests', () => {
 
         return {
           object: {
-            subject: 'Career opportunity at SETA',
-            body: 'Hi Candidate, we noticed your React experience at TechCorp. We would love to chat.',
+            subject: 'Career opportunity at SETA for [CANDIDATE_NAME]',
+            body: 'Hi [CANDIDATE_NAME], we noticed your React experience at TechCorp. We would love to chat.',
           },
           // biome-ignore lint/suspicious/noExplicitAny: mock return
         } as any;
@@ -315,6 +432,207 @@ describe('SmartRecruit Integration Tests', () => {
       expect(draftResult.hallucinationCheckStatus).toBe('passed');
       expect(draftResult.body).not.toContain('hallucinated project');
       expect(draftResult.body).toContain('Node.js experience');
+    });
+  });
+
+  it('Verification Case 1: trích xuất trực tiếp PDF text-layer', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      // Setup mock
+      mockPdfText = 'Senior developer experienced in React and SQL.';
+      mockVisionApiShouldFail = false;
+      mockTesseractShouldFail = false;
+
+      const jdResult = await parseJd({
+        jobTitle: 'Developer',
+        jdText: 'React, SQL',
+        session,
+      });
+
+      const cvResult = await screenCv({
+        candidateName: 'John Doe',
+        candidateEmail: 'john@example.com',
+        cvPath: 'john_cv.pdf',
+        cvText: '', // Empty text triggers extraction
+        criteriaId: jdResult.id,
+        session,
+      });
+
+      expect(cvResult.displayName).toBe('John Doe');
+      expect(cvResult.report.yoeExplanation).toContain('work periods');
+    });
+  });
+
+  it('Verification Case 2: Fallback OCR via Vision API (GPT-4o-mini) for images', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      // Setup mock to fail direct PDF parsing (simulate image or scan PDF)
+      mockPdfText = ''; // empty means no text-layer
+      mockVisionApiShouldFail = false;
+      mockTesseractShouldFail = false;
+
+      const jdResult = await parseJd({
+        jobTitle: 'Developer',
+        jdText: 'React, SQL',
+        session,
+      });
+
+      const cvResult = await screenCv({
+        candidateName: 'Jane Smith',
+        candidateEmail: 'jane@example.com',
+        cvPath: 'jane_cv.png', // Image file
+        cvText: '', // Triggers OCR
+        criteriaId: jdResult.id,
+        session,
+      });
+
+      expect(cvResult.displayName).toBe('Jane Smith');
+      // Should have extracted text via Vision API mock
+      const [cand] = await db
+        .select()
+        .from(candidates)
+        .where(eq(candidates.id, cvResult.id))
+        .limit(1);
+      expect(cand?.cv_text).toBe('Extracted text via OpenAI Vision API.');
+    });
+  });
+
+  it('Verification Case 3: Fallback OCR local via Tesseract when Vision API fails', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      mockPdfText = '';
+      mockVisionApiShouldFail = true; // Simulating OpenAI 429/quota error
+      mockTesseractShouldFail = false;
+
+      const jdResult = await parseJd({
+        jobTitle: 'Developer',
+        jdText: 'React, SQL',
+        session,
+      });
+
+      const cvResult = await screenCv({
+        candidateName: 'Fallback Candidate',
+        candidateEmail: 'fallback@example.com',
+        cvPath: 'fallback_cv.jpg',
+        cvText: '',
+        criteriaId: jdResult.id,
+        session,
+      });
+
+      expect(cvResult.displayName).toBe('Fallback Candidate');
+      const [cand] = await db
+        .select()
+        .from(candidates)
+        .where(eq(candidates.id, cvResult.id))
+        .limit(1);
+      expect(cand?.cv_text).toBe('Extracted text via Tesseract local OCR.');
+    });
+  });
+
+  it('Verification Case 4: Rate Limit Retry on temporary 429 errors', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      // Simulate 429 error on the first 2 LLM calls, but succeeds on 3rd call
+      mockLlmRateLimitCalls = 0;
+      mockLlmRateLimitThreshold = 2;
+
+      // Because parseJd internally uses withRetry, it will retry and succeed directly
+      const result = await parseJd({
+        jobTitle: 'Resilient Developer',
+        jdText: 'React, Node.js',
+        session,
+      });
+
+      expect(mockLlmRateLimitCalls).toBe(2);
+      expect(result).toBeDefined();
+      expect(result.jobTitle).toBe('Resilient Developer');
+    });
+  });
+
+  it('Verification Case 5: PII Anonymization & De-anonymization in CV screening and outreach', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      const jdResult = await parseJd({
+        jobTitle: 'Developer',
+        jdText: 'React, Node.js',
+        session,
+      });
+
+      const cvResult = await screenCv({
+        candidateName: 'John Doe',
+        candidateEmail: 'john@example.com',
+        cvPath: 'john_cv.pdf',
+        cvText: 'CV of John Doe. Contact: john@example.com, Phone: +84987654321',
+        criteriaId: jdResult.id,
+        session,
+      });
+
+      expect(cvResult.displayName).toBe('John Doe');
+
+      const [cand] = await db
+        .select()
+        .from(candidates)
+        .where(eq(candidates.id, cvResult.id))
+        .limit(1);
+
+      expect(cand).toBeDefined();
+      const report = cand?.screening_report as any;
+      expect(report.piiMapping).toBeDefined();
+      expect(report.piiMapping['[CANDIDATE_NAME]']).toBe('John Doe');
+      expect(report.piiMapping['[EMAIL_1]']).toBe('john@example.com');
+
+      // Test draft outreach and verify it gets de-anonymized correctly before saving
+      const draftResult = await draftOutreach({
+        candidateId: cvResult.id,
+        session,
+      });
+
+      // The returned draft should contain the de-anonymized name John Doe
+      expect(draftResult.body).toContain('John Doe');
+      expect(draftResult.body).not.toContain('[CANDIDATE_NAME]');
+    });
+  });
+
+  it('Verification Case 6: Vector Search based screening for Candidate Pool', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      // Clear mock query results before test
+      mockVectorQueryResults = [];
+
+      const jdResult = await parseJd({
+        jobTitle: 'Go Developer',
+        jdText: 'Golang, AWS',
+        session,
+      });
+
+      // We screen two candidates, which will trigger upsert to our mockVectorQueryResults
+      await screenCv({
+        candidateName: 'Go Expert',
+        candidateEmail: 'go@example.com',
+        cvText: 'Senior Go Developer with 5 YOE',
+        criteriaId: jdResult.id,
+        session,
+      });
+
+      await screenCv({
+        candidateName: 'Java Dev',
+        candidateEmail: 'java@example.com',
+        cvText: 'Java backend developer with Spring boot',
+        criteriaId: jdResult.id,
+        session,
+      });
+
+      // Import the pool filter domain
+      const { screenCandidatePool } = await import(
+        '../../src/backend/domain/screen-candidate-pool.ts'
+      );
+
+      // Query screenCandidatePool
+      const result = await screenCandidatePool({
+        criteriaId: jdResult.id,
+        limit: 5,
+        includeAlreadyScreened: true,
+        session,
+      });
+
+      // It should successfully query the vector store and return results
+      expect(result).toBeDefined();
+      expect(result.results.length).toBeGreaterThan(0);
+      expect(result.results.map((r) => r.displayName)).toContain('Go Expert');
     });
   });
 });

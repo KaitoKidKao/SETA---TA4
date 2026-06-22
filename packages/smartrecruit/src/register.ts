@@ -1,10 +1,17 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Mastra } from '@mastra/core';
 import { AgentRegistry } from '@seta/agent-sdk';
 import type { ContributionRegistry } from '@seta/core';
 import { smartrecruitAgentTools } from './backend/agent-tools.ts';
 import * as schema from './backend/db/schema.ts';
 import { buildSmartrecruitRoutes } from './backend/http/index.ts';
+import { smartrecruitJobs } from './backend/jobs/index.ts';
+import {
+  buildResumeAfterDraftingSubscriber,
+  buildResumeAfterScreeningSubscriber,
+  buildResumeAfterSendingSubscriber,
+} from './backend/subscribers/resume-campaign-workflow.ts';
 import {
   smartrecruitWorkflow,
   smartrecruitWorkflowSpec,
@@ -25,13 +32,19 @@ export function registerSmartrecruitContributions(reg: ContributionRegistry): vo
     events: SMARTRECRUIT_EVENTS,
     rbac: SMARTRECRUIT_PERMISSIONS,
     agentTools: smartrecruitAgentTools,
+    jobs: smartrecruitJobs,
+    subscriberBuilders: [
+      buildResumeAfterScreeningSubscriber,
+      buildResumeAfterDraftingSubscriber,
+      buildResumeAfterSendingSubscriber,
+    ],
     routes: { mountAt: '/', build: buildSmartrecruitRoutes },
     workflows: [
       {
         id: 'smartrecruit',
         build: (mastra) => {
           // mastra is passed in from agent package buildMastraFull
-          (mastra as any).addWorkflow(smartrecruitWorkflow);
+          (mastra as Mastra).addWorkflow(smartrecruitWorkflow);
         },
         inputSchema: smartrecruitWorkflowSpec.inputSchema,
       },
