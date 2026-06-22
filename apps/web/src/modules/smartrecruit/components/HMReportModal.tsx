@@ -39,7 +39,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
         }
       }
     } catch (_err) {
-      toast.error('Không thể lấy danh sách báo cáo');
+      toast.error('Could not load report list');
     } finally {
       setIsLoadingList(false);
     }
@@ -58,7 +58,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
         body: JSON.stringify({ recruiterNote }),
       });
       if (res.ok) {
-        toast.success('Đã xuất báo cáo Shortlist mới thành công!');
+        toast.success('Shortlist report generated successfully!');
         setRecruiterNote('');
         await fetchReportsList();
       } else {
@@ -66,7 +66,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
         throw new Error(data.message || 'Error exporting');
       }
     } catch (err) {
-      toast.error(`Xuất báo cáo thất bại: ${(err as Error).message}`);
+      toast.error(`Report export failed: ${(err as Error).message}`);
     } finally {
       setIsGenerating(false);
     }
@@ -74,7 +74,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
 
   const handleCopyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    toast.success('Đã sao chép báo cáo Markdown vào bộ nhớ tạm!');
+    toast.success('Markdown report copied to clipboard!');
   };
 
   const handleDownloadReport = (report: ReportItem) => {
@@ -86,7 +86,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    toast.success('Đã tải xuống file báo cáo (.md)');
+    toast.success('Markdown report downloaded');
   };
 
   return (
@@ -97,7 +97,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
           <div className="flex items-center gap-2 text-neutral-800">
             <FileText className="w-5 h-5 text-blue-600" />
             <h3 className="text-base font-bold">
-              Xuất & Quản lý Báo cáo Shortlist (Hiring Manager)
+              Export and Manage Shortlist Reports (Hiring Manager)
             </h3>
           </div>
           <button
@@ -115,12 +115,12 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
             {/* Generate Report Form */}
             <div className="p-4 bg-neutral-50 rounded-lg border border-neutral-200">
               <h4 className="text-xs font-bold text-neutral-700 mb-2 uppercase tracking-wide">
-                Tạo Báo cáo mới
+                Create New Report
               </h4>
               <textarea
                 value={recruiterNote}
                 onChange={(e) => setRecruiterNote(e.target.value)}
-                placeholder="Nhập ghi chú hoặc đánh giá chung của Recruiter dành cho Hiring Manager..."
+                placeholder="Optional recruiter note for the Hiring Manager..."
                 className="w-full h-24 p-2 text-xs border border-neutral-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 mb-2 resize-none"
               />
               <Button
@@ -131,12 +131,12 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
                 {isGenerating ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Đang tạo...
+                    Generating...
                   </>
                 ) : (
                   <>
                     <Send className="w-3.5 h-3.5" />
-                    Xuất Báo cáo (Markdown)
+                    Export Report (Markdown)
                   </>
                 )}
               </Button>
@@ -145,7 +145,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
             {/* Reports Version History */}
             <div className="flex-1 flex flex-col">
               <h4 className="text-xs font-bold text-neutral-700 mb-2 uppercase tracking-wide">
-                Lịch sử Báo cáo
+                Report History
               </h4>
               {isLoadingList && reports.length === 0 ? (
                 <div className="flex justify-center py-4">
@@ -153,7 +153,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
                 </div>
               ) : reports.length === 0 ? (
                 <div className="text-center py-6 text-xs text-neutral-400 italic">
-                  Chưa có báo cáo nào được xuất.
+                  No reports have been exported yet.
                 </div>
               ) : (
                 <div className="space-y-2 overflow-y-auto max-h-[220px] pr-1">
@@ -168,13 +168,13 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
                       }`}
                     >
                       <div className="flex justify-between font-semibold text-neutral-700 mb-1">
-                        <span>Bản v{r.version}</span>
+                        <span>Version v{r.version}</span>
                         <span className="text-[10px] text-neutral-400 font-normal">
                           {new Date(r.created_at).toLocaleDateString('vi-VN')}
                         </span>
                       </div>
                       <p className="text-[10px] text-neutral-500 line-clamp-1 italic">
-                        {r.recruiter_note || 'Không có ghi chú.'}
+                        {r.recruiter_note || 'No note.'}
                       </p>
                     </div>
                   ))}
@@ -189,7 +189,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
               <>
                 <div className="px-4 py-2 border-b border-neutral-200 bg-white flex justify-between items-center text-xs">
                   <span className="font-semibold text-neutral-600">
-                    Đang xem: Phiên bản v{selectedReport.version}
+                    Viewing: Version v{selectedReport.version}
                   </span>
                   <div className="flex items-center gap-2">
                     <Button
@@ -199,7 +199,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
                       onClick={() => handleCopyToClipboard(selectedReport.markdown)}
                     >
                       <Copy className="w-3.5 h-3.5" />
-                      Sao chép Markdown
+                      Copy Markdown
                     </Button>
                     <Button
                       variant="secondary"
@@ -208,7 +208,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
                       onClick={() => handleDownloadReport(selectedReport)}
                     >
                       <Download className="w-3.5 h-3.5" />
-                      Tải file .md
+                      Download .md
                     </Button>
                   </div>
                 </div>
@@ -220,7 +220,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
               <div className="flex-1 flex flex-col items-center justify-center text-neutral-400 p-8">
                 <FileText className="w-12 h-12 text-neutral-300 mb-2" />
                 <p className="text-xs italic">
-                  Chọn một phiên bản báo cáo hoặc tạo mới để xem nội dung.
+                  Select a report version or generate a new one to preview it.
                 </p>
               </div>
             )}
@@ -230,7 +230,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
         {/* Footer */}
         <div className="px-6 py-4 border-t border-neutral-100 bg-neutral-50 rounded-b-xl flex justify-end">
           <Button variant="secondary" onClick={onClose} className="text-xs h-9">
-            Đóng
+            Close
           </Button>
         </div>
       </div>

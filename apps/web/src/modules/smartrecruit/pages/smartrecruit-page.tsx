@@ -132,6 +132,34 @@ interface DraftState {
   error_reason: string | null;
 }
 
+type SlaState = 'on_track' | 'due_soon' | 'overdue' | 'submitted' | 'data_error';
+
+interface SlaTrackerItem {
+  id: string;
+  feedbackId: string;
+  candidateName: string;
+  position: string;
+  hiringManager: string;
+  hiringManagerEmail: string | null;
+  shortlistedAt: string;
+  feedbackDueAt: string;
+  slaState: SlaState;
+  remainingSeconds: number | null;
+  feedbackStatus: string;
+  hmDecision: string | null;
+  hmFeedbackText: string | null;
+  reminderAvailable: boolean;
+  reminderStage: 'due_soon' | 'overdue' | null;
+  latestReminder: {
+    id: string;
+    stage: 'due_soon' | 'overdue';
+    status: string;
+    queuedAt: string | null;
+    sentAt: string | null;
+    failureCode: string | null;
+  } | null;
+}
+
 interface CampaignView {
   campaign: {
     id: string;
@@ -173,6 +201,15 @@ async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
   } catch {
     throw new Error(text.slice(0, 300));
   }
+}
+
+function formatSlaDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
 }
 
 export function SmartrecruitPage() {
@@ -256,25 +293,54 @@ export function SmartrecruitPage() {
   const [isConfirmingCriteria, setIsConfirmingCriteria] = useState(false);
   const [isApprovingOutreach, setIsApprovingOutreach] = useState(false);
   const [skillGaps, setSkillGaps] = useState<any | null>(null);
-  const [slaTracker, setSlaTracker] = useState<any[]>([]);
+  const [slaTracker, setSlaTracker] = useState<SlaTrackerItem[]>([]);
   const [slaSearchQuery, setSlaSearchQuery] = useState('');
-  const [slaFilterTab, setSlaFilterTab] = useState<'all' | 'breached' | 'pending'>('all');
+  const [slaFilterTab, setSlaFilterTab] = useState<'all' | 'overdue' | 'due_soon' | 'pending'>(
+    'all',
+  );
   const [remindingIds, setRemindingIds] = useState<Record<string, boolean>>({});
-  const [remindedIds, setRemindedIds] = useState<Record<string, boolean>>({});
 
-  const handleRemindHM = useCallback((item: any) => {
-    const id = item.feedbackId;
-    setRemindingIds((prev) => ({ ...prev, [id]: true }));
+  const fetchSlaTracker = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (slaSearchQuery.trim()) params.set('search', slaSearchQuery.trim());
+      const res = await fetch(`/api/smartrecruit/v1/sla-tracker?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSlaTracker(data.tracker || []);
+      }
+    } catch (_err) {}
+  }, [slaSearchQuery]);
 
-    setTimeout(() => {
-      setRemindingIds((prev) => ({ ...prev, [id]: false }));
-      setRemindedIds((prev) => ({ ...prev, [id]: true }));
+  const handleRemindHM = useCallback(
+    async (item: SlaTrackerItem) => {
+      const id = item.id;
+      setRemindingIds((prev) => ({ ...prev, [id]: true }));
 
-      toast.success('Đã gửi email nhắc nhở tự động!', {
-        description: `Đã nhắc nhở Hiring Manager (${item.hiringManager}) về hồ sơ ứng viên ${item.candidateName}.`,
-      });
-    }, 800);
-  }, []);
+      try {
+        const res = await fetch(`/api/smartrecruit/v1/sla-tracker/${item.id}/reminders/approve`, {
+          method: 'POST',
+        });
+        const data = await readJsonResponse<{ attempt?: { status?: string } }>(res);
+        if (!res.ok) {
+          throw new Error(
+            (data as any)?.message || (data as any)?.error || 'Reminder approval failed.',
+          );
+        }
+        toast.success('Reminder queued for approval delivery.', {
+          description: `A ${item.reminderStage?.replace('_', ' ') ?? 'feedback'} reminder for ${item.hiringManager} is now ${data?.attempt?.status ?? 'queued'}.`,
+        });
+        await fetchSlaTracker();
+      } catch (err) {
+        toast.error('Could not queue reminder.', {
+          description: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        setRemindingIds((prev) => ({ ...prev, [id]: false }));
+      }
+    },
+    [fetchSlaTracker],
+  );
 
   const filteredSlaTracker = useMemo(() => {
     return slaTracker.filter((item) => {
@@ -286,8 +352,9 @@ export function SmartrecruitPage() {
 
       if (!matchesSearch) return false;
 
-      if (slaFilterTab === 'breached') return item.slaBreach;
-      if (slaFilterTab === 'pending') return item.feedbackStatus.toLowerCase() !== 'submitted';
+      if (slaFilterTab === 'overdue') return item.slaState === 'overdue';
+      if (slaFilterTab === 'due_soon') return item.slaState === 'due_soon';
+      if (slaFilterTab === 'pending') return item.slaState !== 'submitted';
 
       return true;
     });
@@ -324,26 +391,28 @@ export function SmartrecruitPage() {
     if (activeCriteria) {
       const jdId = activeCriteria.jd_id || activeCriteria.external_criteria_id;
       if (!jdId) {
-        list.push('Cảnh báo: Không tìm thấy mã liên kết mô tả công việc (jd_id).');
+        list.push('Warning: linked job description ID (jd_id) was not found.');
       } else if (!/^[A-Z]{2,4}-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/.test(jdId) && jdId.length <= 6) {
         list.push(
-          `Cảnh báo: Mã JD liên kết (${jdId}) có thể bị lệch cấu trúc so với định dạng đầy đủ (Ví dụ: JD-AI-SR-001).`,
+          `Warning: linked JD ID (${jdId}) may not match the full expected format (example: JD-AI-SR-001).`,
         );
       }
       if (!activeCriteria.must_have_skills || activeCriteria.must_have_skills.length === 0) {
-        list.push('Cảnh báo: Chưa cấu hình kỹ năng bắt buộc (Must-Have Skills) cho đợt sàng lọc.');
+        list.push('Warning: must-have skills are not configured for this screening run.');
       }
       if (activeCriteria.min_yoe === 0) {
-        list.push('Cảnh báo: Số năm kinh nghiệm tối thiểu đang cấu hình bằng 0.');
+        list.push('Warning: minimum years of experience is configured as 0.');
       }
     }
     for (const cv of uploadedCvs) {
       if (cv.status === 'ready') {
         if (!cv.email) {
-          list.push(`Cảnh báo: Ứng viên "${cv.name || cv.filename}" thiếu địa chỉ email.`);
+          list.push(`Warning: candidate "${cv.name || cv.filename}" is missing an email address.`);
         }
         if (!cv.phone) {
-          list.push(`Cảnh báo: Ứng viên "${cv.name || cv.filename}" thiếu số điện thoại liên hệ.`);
+          list.push(
+            `Warning: candidate "${cv.name || cv.filename}" is missing a contact phone number.`,
+          );
         }
       }
     }
@@ -515,7 +584,7 @@ export function SmartrecruitPage() {
       .map(([id]) => id);
 
     if (selectedIds.length === 0) {
-      toast.error('Vui lòng chọn ít nhất một ứng viên để tiếp cận lại.');
+      toast.error('Select at least one candidate to re-engage.');
       return;
     }
 
@@ -528,13 +597,13 @@ export function SmartrecruitPage() {
       });
 
       if (res.ok) {
-        toast.success('Đã thêm ứng viên từ Talent Pool vào chiến dịch thành công!');
+        toast.success('Talent Pool candidates added to the campaign.');
         await fetchCampaignProgress(campaignId);
         setSelectedPoolIds({});
         await fetchPoolCandidates(campaignId);
       } else {
         const data = await res.json().catch(() => ({}));
-        toast.error(data.message || 'Lỗi khi thêm ứng viên từ Talent Pool.');
+        toast.error(data.message || 'Could not add candidates from Talent Pool.');
       }
     } catch (err) {
       toast.error((err as Error).message);
@@ -593,16 +662,6 @@ export function SmartrecruitPage() {
       setActiveApproval(app || null);
     } catch (_err) {}
   }, [activeRunId]);
-
-  const fetchSlaTracker = useCallback(async () => {
-    try {
-      const res = await fetch('/api/smartrecruit/v1/sla-tracker');
-      if (res.ok) {
-        const data = await res.json();
-        setSlaTracker(data.tracker || []);
-      }
-    } catch (_err) {}
-  }, []);
 
   // Fetch pending runs and criteria list on mount
   useEffect(() => {
@@ -1257,7 +1316,7 @@ export function SmartrecruitPage() {
                   )}
 
                   {candidatesList.filter(
-                    (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 80),
+                    (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
                   ).length > 0 && (
                     <div className="flex flex-col gap-2 mt-2">
                       <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
@@ -1267,7 +1326,7 @@ export function SmartrecruitPage() {
                       <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
                         {candidatesList
                           .filter(
-                            (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 80),
+                            (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
                           )
                           .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
                           .map((cand) => (
@@ -1286,7 +1345,7 @@ export function SmartrecruitPage() {
                               <div className="flex items-center gap-2">
                                 <Badge
                                   className={
-                                    cand.fit_score != null && cand.fit_score >= 80
+                                    cand.fit_score != null && cand.fit_score >= 70
                                       ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
                                       : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
                                   }
@@ -1313,7 +1372,7 @@ export function SmartrecruitPage() {
                       HM Feedback SLA Tracker (DS08)
                     </CardTitle>
                     <CardDescription className="text-eyebrow">
-                      Theo dõi thời hạn phản hồi CV 48h của Hiring Manager.
+                      Track Hiring Manager feedback against the 48-hour SLA.
                     </CardDescription>
                   </CardHeader>
 
@@ -1323,7 +1382,7 @@ export function SmartrecruitPage() {
                       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
                       <Input
                         type="text"
-                        placeholder="Tìm kiếm ứng viên, HM, vị trí..."
+                        placeholder="Search candidate, HM, or position..."
                         className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
                         value={slaSearchQuery}
                         onChange={(e) => setSlaSearchQuery(e.target.value)}
@@ -1332,9 +1391,10 @@ export function SmartrecruitPage() {
                     <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
                       {(
                         [
-                          { id: 'all', label: 'Tất cả' },
-                          { id: 'breached', label: 'Trễ SLA ⚠️' },
-                          { id: 'pending', label: 'Chờ HM' },
+                          { id: 'all', label: 'All' },
+                          { id: 'overdue', label: 'Overdue ⚠️' },
+                          { id: 'due_soon', label: 'Due soon' },
+                          { id: 'pending', label: 'Waiting HM' },
                         ] as const
                       ).map((tab) => (
                         <button
@@ -1349,9 +1409,9 @@ export function SmartrecruitPage() {
                           onClick={() => setSlaFilterTab(tab.id)}
                         >
                           {tab.label}
-                          {tab.id === 'breached' && (
+                          {tab.id === 'overdue' && (
                             <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
-                              {slaTracker.filter((i) => i.slaBreach).length}
+                              {slaTracker.filter((i) => i.slaState === 'overdue').length}
                             </span>
                           )}
                         </button>
@@ -1363,14 +1423,15 @@ export function SmartrecruitPage() {
                     <div className="flex flex-col gap-2.5">
                       {filteredSlaTracker.length === 0 ? (
                         <div className="text-center py-6 text-ink-subtle text-xs">
-                          Không tìm thấy kết quả phù hợp.
+                          No matching feedback requests.
                         </div>
                       ) : (
-                        filteredSlaTracker.map((item: any) => {
-                          const isBreached = item.slaBreach;
-                          const isReminding = remindingIds[item.feedbackId];
-                          const isReminded = remindedIds[item.feedbackId];
-                          const isSubmitted = item.feedbackStatus.toLowerCase() === 'submitted';
+                        filteredSlaTracker.map((item) => {
+                          const isBreached = item.slaState === 'overdue';
+                          const isDueSoon = item.slaState === 'due_soon';
+                          const isReminding = remindingIds[item.id];
+                          const isSubmitted = item.slaState === 'submitted';
+                          const stateLabel = item.slaState.replace('_', ' ');
 
                           return (
                             <div
@@ -1379,7 +1440,9 @@ export function SmartrecruitPage() {
                                 'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
                                 isBreached
                                   ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
-                                  : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
+                                  : isDueSoon
+                                    ? 'border-amber-200/50 border-l-4 border-l-amber-500 bg-amber-50/5 dark:bg-amber-950/5'
+                                    : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
                               )}
                             >
                               <div className="flex items-start justify-between gap-2">
@@ -1389,22 +1452,26 @@ export function SmartrecruitPage() {
                                     {item.candidateName}
                                   </span>
                                   <span className="text-[11px] text-ink-subtle mt-0.5">
-                                    Vị trí:{' '}
+                                    Position:{' '}
                                     <span className="font-medium text-ink/80">{item.position}</span>
                                   </span>
                                 </div>
                                 <div className="flex flex-col items-end gap-1.5 shrink-0">
                                   {isBreached ? (
                                     <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
-                                      SLA Breach
+                                      Overdue
+                                    </Badge>
+                                  ) : isDueSoon ? (
+                                    <Badge className="bg-amber-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
+                                      Due Soon
                                     </Badge>
                                   ) : (
                                     <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                      On Time
+                                      {isSubmitted ? 'Submitted' : 'On Track'}
                                     </Badge>
                                   )}
                                   <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
-                                    {item.feedbackStatus}
+                                    {stateLabel}
                                   </Badge>
                                 </div>
                               </div>
@@ -1420,11 +1487,11 @@ export function SmartrecruitPage() {
                                 </div>
                                 <div className="flex items-center gap-1 text-[11px] text-ink-muted">
                                   <Calendar className="size-3 text-ink-subtle" />
-                                  <span>Shortlist: {item.shortlistedDatetime}</span>
+                                  <span>Shortlisted: {formatSlaDate(item.shortlistedAt)}</span>
                                 </div>
                                 <div className="flex items-center gap-1 text-[11px] text-ink-muted">
                                   <Clock className="size-3 text-ink-subtle" />
-                                  <span>Deadline: {item.feedbackDeadline}</span>
+                                  <span>Deadline: {formatSlaDate(item.feedbackDueAt)}</span>
                                 </div>
                               </div>
 
@@ -1434,28 +1501,21 @@ export function SmartrecruitPage() {
                                 </p>
                               )}
 
-                              {!isSubmitted && (
+                              {!isSubmitted && item.reminderAvailable && (
                                 <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
                                   <Button
                                     size="sm"
-                                    disabled={isReminding || isReminded}
+                                    disabled={isReminding}
                                     className={cn(
                                       'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
-                                      isReminded
-                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50 cursor-default'
-                                        : 'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
+                                      'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
                                     )}
                                     onClick={() => handleRemindHM(item)}
                                   >
                                     {isReminding ? (
                                       <>
                                         <Loader2 className="animate-spin size-3.5" />
-                                        <span>Đang gửi...</span>
-                                      </>
-                                    ) : isReminded ? (
-                                      <>
-                                        <Check className="size-3.5" />
-                                        <span>Đã nhắc nhở</span>
+                                        <span>Queueing...</span>
                                       </>
                                     ) : (
                                       <>
@@ -1831,7 +1891,7 @@ export function SmartrecruitPage() {
                   )}
                   <div className="flex justify-between items-center border-t border-hairline pt-3">
                     <div className="text-body-sm text-ink-subtle">
-                      Báo cáo Shortlist cho Hiring Manager
+                      Shortlist Report for Hiring Manager
                     </div>
                     <Button
                       type="button"
@@ -1839,7 +1899,7 @@ export function SmartrecruitPage() {
                       className="bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5"
                     >
                       <FileText className="size-4" />
-                      Xuất & Quản lý Báo cáo HM
+                      Export and Manage HM Report
                     </Button>
                   </div>
                   <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">
@@ -1889,7 +1949,7 @@ export function SmartrecruitPage() {
                     <AlertTriangle className="size-5 shrink-0 mt-0.5" />
                     <div className="flex-1 flex flex-col gap-1">
                       <span className="font-bold text-body-sm text-amber-800">
-                        Cảnh báo Chất lượng Dữ liệu (Data Quality Warnings)
+                        Data Quality Warnings
                       </span>
                       <ul className="list-disc pl-4 text-body-sm space-y-1">
                         {dataWarnings.map((warning, idx) => (
@@ -2115,12 +2175,12 @@ export function SmartrecruitPage() {
                           <div className="flex items-center gap-2 text-blue-700">
                             <Settings className="size-4 animate-spin-slow" />
                             <span className="font-bold text-body-sm text-blue-800">
-                              Phân tích Khoảng trống Kỹ năng của Đội ngũ (Team Skill Gap Analysis)
+                              Team Skill Gap Analysis
                             </span>
                           </div>
                           <p className="text-body-sm text-ink-subtle">
-                            <strong>Dự án/Team:</strong> {skillGaps.teamName} |{' '}
-                            <strong>Thiếu hụt kỹ năng:</strong>{' '}
+                            <strong>Project/Team:</strong> {skillGaps.teamName} |{' '}
+                            <strong>Skill gaps:</strong>{' '}
                             {skillGaps.skillsGap.length > 0 ? (
                               skillGaps.skillsGap.map((s: string, idx: number) => (
                                 <Badge
@@ -2133,7 +2193,7 @@ export function SmartrecruitPage() {
                               ))
                             ) : (
                               <span className="text-emerald-600 font-semibold">
-                                Không phát hiện khoảng trống lớn
+                                No major gaps detected
                               </span>
                             )}
                           </p>
@@ -2142,7 +2202,7 @@ export function SmartrecruitPage() {
                           </blockquote>
                           <div className="text-body-sm text-ink flex flex-col gap-1 mt-1">
                             <strong className="text-blue-900">
-                              Đề xuất điều chỉnh trọng số sàng lọc:
+                              Recommended screening weight adjustment:
                             </strong>
                             <ul className="list-disc pl-4 space-y-1">
                               {skillGaps.recommendations.map((rec: string, idx: number) => (
@@ -2162,11 +2222,11 @@ export function SmartrecruitPage() {
                         <div className="flex flex-col gap-1">
                           <h3 className="text-body-md font-bold text-ink flex items-center gap-2">
                             <Sparkles className="size-4 text-emerald-600 animate-pulse" />
-                            Đề xuất từ Kho dữ liệu cũ (Talent Pool Recommendations)
+                            Talent Pool Recommendations
                           </h3>
                           <p className="text-body-sm text-ink-subtle">
-                            Tìm thấy bằng Vector Search dựa trên sự tương đồng với JD mới. Chọn để
-                            thêm vào đợt sàng lọc này.
+                            Found by vector search against the new JD. Select candidates to add them
+                            to this screening run.
                           </p>
                         </div>
                         <Button
@@ -2181,12 +2241,12 @@ export function SmartrecruitPage() {
                           {isAddingPoolCandidates ? (
                             <>
                               <Loader2 className="animate-spin size-3.5" />
-                              <span>Đang thêm...</span>
+                              <span>Adding...</span>
                             </>
                           ) : (
                             <>
                               <Mail className="size-3.5" />
-                              <span>Tiếp cận lại ứng viên (Re-engage Candidates)</span>
+                              <span>Re-engage Candidates</span>
                             </>
                           )}
                         </Button>
@@ -2198,7 +2258,7 @@ export function SmartrecruitPage() {
                         </div>
                       ) : poolCandidates.length === 0 ? (
                         <div className="py-6 text-center text-body-sm text-ink-subtle bg-canvas/30 rounded-lg border border-dashed border-hairline">
-                          Không tìm thấy ứng viên phù hợp trong cơ sở dữ liệu.
+                          No matching candidates found in the talent database.
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -2245,7 +2305,7 @@ export function SmartrecruitPage() {
                                 {c.hasRecentOutreach && (
                                   <div className="flex items-start gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 text-[11px] p-2 rounded-lg mt-1 font-semibold leading-normal">
                                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-600 mt-0.5" />
-                                    <span>Cảnh báo Spam: Đã tương tác trong vòng 30 ngày!</span>
+                                    <span>Spam warning: contacted within the last 30 days!</span>
                                   </div>
                                 )}
                               </div>
@@ -2330,7 +2390,7 @@ export function SmartrecruitPage() {
                             : 'border-transparent text-ink-subtle hover:text-ink',
                         )}
                       >
-                        Tất cả ({candidatesList.length})
+                        All ({candidatesList.length})
                       </button>
                       <button
                         type="button"
@@ -2342,7 +2402,7 @@ export function SmartrecruitPage() {
                             : 'border-transparent text-ink-subtle hover:text-ink',
                         )}
                       >
-                        Đạt ({candidatesList.filter((c) => (c.fit_score ?? 0) >= 70).length})
+                        Passed ({candidatesList.filter((c) => (c.fit_score ?? 0) >= 70).length})
                       </button>
                       <button
                         type="button"
@@ -2354,7 +2414,7 @@ export function SmartrecruitPage() {
                             : 'border-transparent text-ink-subtle hover:text-ink',
                         )}
                       >
-                        Không đạt ({candidatesList.filter((c) => (c.fit_score ?? 0) < 70).length})
+                        Not passed ({candidatesList.filter((c) => (c.fit_score ?? 0) < 70).length})
                       </button>
                       <button
                         type="button"
@@ -2366,7 +2426,8 @@ export function SmartrecruitPage() {
                             : 'border-transparent text-ink-subtle hover:text-ink',
                         )}
                       >
-                        Ảo giác ({candidatesList.filter((c) => isHallucinationFail(c.id)).length})
+                        Hallucination (
+                        {candidatesList.filter((c) => isHallucinationFail(c.id)).length})
                       </button>
                     </div>
 
@@ -2375,7 +2436,7 @@ export function SmartrecruitPage() {
                         const isSelected = selectedCandidate?.id === cand.id;
                         const fitScore = cand.fit_score ?? 0;
                         const scoreColor =
-                          fitScore >= 80
+                          fitScore >= 70
                             ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
                             : 'text-amber-500 bg-amber-500/10 border-amber-500/20';
                         const draft = draftsList.find((d) => d.candidate_id === cand.id);
@@ -2506,11 +2567,9 @@ export function SmartrecruitPage() {
                                 <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 flex items-start gap-2.5 text-rose-700 text-body-sm animate-pulse">
                                   <AlertCircle className="size-4 shrink-0 mt-0.5 text-rose-500" />
                                   <div className="flex-grow">
-                                    <span className="font-bold">
-                                      Cảnh báo ảo giác (Hallucination Warning):
-                                    </span>{' '}
-                                    Lớp kiểm duyệt phát hiện thư nháp chứa thông tin không khớp với
-                                    CV gốc. Hãy rà soát kỹ trước khi gửi.
+                                    <span className="font-bold">Hallucination Warning:</span> The
+                                    verification layer found draft content that does not match the
+                                    source CV. Review carefully before sending.
                                   </div>
                                 </div>
                               )}

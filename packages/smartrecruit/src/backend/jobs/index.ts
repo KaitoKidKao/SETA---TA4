@@ -7,7 +7,12 @@ import { campaignCandidates, candidates, outreachDrafts } from '../db/schema.ts'
 import { recomputeCampaignCounters, updateCampaignStatus } from '../domain/campaign.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
+import {
+  scanHmFeedbackReminderDrafts,
+  sendHmFeedbackReminderAttempt,
+} from '../domain/hm-feedback.ts';
 import { screenCv } from '../domain/screen-cv.ts';
+import { isShortlistedScore } from '../domain/shortlist-policy.ts';
 import { campaignJobs } from './campaign-jobs.ts';
 
 const log = pino({ name: 'smartrecruit/jobs' });
@@ -32,11 +37,29 @@ export interface CampaignJobPayload {
   approvedDraftIds?: string[];
 }
 
+export interface HmFeedbackReminderSendPayload {
+  attemptId: string;
+  userId: string;
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 export const smartrecruitJobs: TaskList = {
+  'smartrecruit:hm_feedback_reminder_scan': async () => {
+    const result = await scanHmFeedbackReminderDrafts();
+    log.info({ prepared: result.prepared }, 'hm_feedback_reminder_scan.completed');
+  },
+
+  'smartrecruit:hm_feedback_reminder_send': async (payload: unknown) => {
+    const { attemptId, userId } = payload as HmFeedbackReminderSendPayload;
+    if (!attemptId || !userId) {
+      throw new Error('hm_feedback_reminder_send requires attemptId and userId');
+    }
+    await sendHmFeedbackReminderAttempt({ attemptId, userId });
+  },
+
   'smartrecruit:campaign_screen': async (payload: unknown, _helpers: unknown) => {
     const { campaignId, criteriaId, userId } = payload as CampaignJobPayload;
     if (!campaignId || !criteriaId || !userId) {
@@ -104,7 +127,7 @@ export const smartrecruitJobs: TaskList = {
         await db
           .update(campaignCandidates)
           .set({
-            status: screened.fitScore >= 70 ? 'shortlisted' : 'screened',
+            status: isShortlistedScore(screened.fitScore) ? 'shortlisted' : 'screened',
             fit_score: screened.fitScore,
             screening_report: screened.report,
             error_reason: null,

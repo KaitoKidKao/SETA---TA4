@@ -88,15 +88,15 @@ export function CandidateScorecard({
   const handleSaveReview = async () => {
     const fitScore = Number(reviewScore);
     if (!Number.isInteger(fitScore) || fitScore < 0 || fitScore > 100) {
-      setErrorMsg('Điểm đánh giá phải là số nguyên từ 0 đến 100.');
+      setErrorMsg('Score must be an integer from 0 to 100.');
       return;
     }
     if (!reviewReason.trim()) {
-      setErrorMsg('Lý do ghi đè điểm số là bắt buộc.');
+      setErrorMsg('A score override reason is required.');
       return;
     }
     if (reviewReason.trim().length < 5) {
-      setErrorMsg('Lý do ghi đè phải có ít nhất 5 ký tự.');
+      setErrorMsg('Override reason must be at least 5 characters.');
       return;
     }
 
@@ -121,13 +121,13 @@ export function CandidateScorecard({
         }
       }
       if (!res.ok) {
-        throw new Error(data?.message || data?.error || 'Không thể lưu đánh giá của recruiter.');
+        throw new Error(data?.message || data?.error || 'Could not save recruiter review.');
       }
-      toast.success('Đã lưu điểm số điều chỉnh thành công!');
+      toast.success('Reviewed score saved successfully!');
       await onReviewSaved();
     } catch (err) {
       setErrorMsg((err as Error).message);
-      toast.error('Lỗi khi lưu điểm điều chỉnh');
+      toast.error('Could not save reviewed score');
     } finally {
       setIsSavingReview(false);
     }
@@ -156,12 +156,12 @@ export function CandidateScorecard({
         <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
           <h4 className="text-sm font-bold text-neutral-800 flex items-center gap-2">
             <Award className="w-4 h-4 text-blue-600" />
-            Bảng điểm Chi tiết Phân tích CV (AI Scorecard)
+            AI Candidate Scorecard
           </h4>
           {selectedCandidate.reviewed_fit_score !== null && (
             <Badge className="bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-amber-600" />
-              Đã điều chỉnh bởi Recruiter
+              Reviewed by Recruiter
             </Badge>
           )}
         </div>
@@ -170,7 +170,7 @@ export function CandidateScorecard({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg border border-neutral-200 p-3 shadow-xs">
             <span className="block text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">
-              Kỹ năng bắt buộc
+              Must-have skills
             </span>
             <span className="text-lg font-extrabold text-neutral-800">
               {getScoreBreakdown().mustHaveSkills}%
@@ -178,7 +178,7 @@ export function CandidateScorecard({
           </div>
           <div className="bg-white rounded-lg border border-neutral-200 p-3 shadow-xs">
             <span className="block text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">
-              Kinh nghiệm (YOE)
+              Experience (YOE)
             </span>
             <span className="text-lg font-extrabold text-neutral-800">
               {getScoreBreakdown().yoe}%
@@ -186,7 +186,7 @@ export function CandidateScorecard({
           </div>
           <div className="bg-white rounded-lg border border-neutral-200 p-3 shadow-xs">
             <span className="block text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">
-              Trình độ Tiếng Anh
+              English level
             </span>
             <span className="text-lg font-extrabold text-neutral-800">
               {getScoreBreakdown().english}%
@@ -194,7 +194,7 @@ export function CandidateScorecard({
           </div>
           <div className="bg-white rounded-lg border border-neutral-200 p-3 shadow-xs">
             <span className="block text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">
-              Kỹ năng mong muốn
+              Nice-to-have skills
             </span>
             <span className="text-lg font-extrabold text-neutral-800">
               {getScoreBreakdown().niceToHave}%
@@ -207,8 +207,8 @@ export function CandidateScorecard({
           <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 flex items-start gap-2 text-xs text-amber-800 leading-normal">
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold">Cần rà soát hồ sơ:</span> Phát hiện kỹ năng ứng viên
-              khai báo nhưng không tìm thấy minh chứng (evidence) rõ ràng trong văn bản CV gốc.
+              <span className="font-semibold">Review required:</span> Candidate-claimed skills were
+              found without clear evidence in the source CV.
             </div>
           </div>
         )}
@@ -216,13 +216,13 @@ export function CandidateScorecard({
         {/* Override Form */}
         <div className="border-t border-neutral-100 pt-4 flex flex-col gap-3">
           <h5 className="text-xs font-bold text-neutral-700 uppercase tracking-wide">
-            Điều chỉnh Điểm đánh giá (Score Override)
+            Score Override
           </h5>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
             <div className="md:col-span-3 flex flex-col gap-1">
               <label className="text-xs font-semibold text-neutral-600">
-                Điểm mới (0-100) <span className="text-red-500">*</span>
+                New score (0-100) <span className="text-red-500">*</span>
               </label>
               <Input
                 type="number"
@@ -235,11 +235,11 @@ export function CandidateScorecard({
             </div>
             <div className="md:col-span-6 flex flex-col gap-1">
               <label className="text-xs font-semibold text-neutral-600">
-                Lý do điều chỉnh <span className="text-red-500">*</span>
+                Review reason <span className="text-red-500">*</span>
               </label>
               <Input
                 value={reviewReason}
-                placeholder="Nhập lý do bắt buộc để phục vụ audit log..."
+                placeholder="Enter the required reason for the audit log..."
                 onChange={(e) => setReviewReason(e.target.value)}
                 className="h-9 text-xs border-neutral-300"
               />
@@ -254,10 +254,10 @@ export function CandidateScorecard({
                 {isSavingReview ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Đang lưu...
+                    Saving...
                   </>
                 ) : (
-                  'Lưu Thay đổi'
+                  'Save changes'
                 )}
               </Button>
             </div>
@@ -279,11 +279,11 @@ export function CandidateScorecard({
           <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
             <h4 className="text-sm font-bold text-neutral-850 flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-emerald-600" />
-              Đóng góp năng lực cho Đội ngũ (Team Skill Gap Contribution)
+              Team Skill Gap Contribution
             </h4>
             {report.teamSkillGapBonus && report.teamSkillGapBonus > 0 ? (
               <Badge className="bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold px-2 py-0.5 rounded-full">
-                Cộng điểm thưởng: +{report.teamSkillGapBonus}% Fit Score
+                Score bonus: +{report.teamSkillGapBonus}% Fit Score
               </Badge>
             ) : null}
           </div>
@@ -292,7 +292,7 @@ export function CandidateScorecard({
             <div className="flex flex-col gap-2 bg-emerald-50/20 border border-emerald-100 rounded-xl p-4">
               <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
                 <Check className="w-4 h-4 text-emerald-500" />
-                Đáp ứng khoảng trống kỹ năng của Team
+                Covers team skill gaps
               </span>
               <div className="flex flex-wrap gap-1.5 mt-1">
                 {report.solvedTeamGaps && report.solvedTeamGaps.length > 0 ? (
@@ -307,7 +307,7 @@ export function CandidateScorecard({
                   ))
                 ) : (
                   <span className="text-xs text-neutral-400 italic">
-                    Không đóng góp giải quyết khoảng trống nào.
+                    No team gap contribution recorded.
                   </span>
                 )}
               </div>
@@ -316,7 +316,7 @@ export function CandidateScorecard({
             <div className="flex flex-col gap-2 bg-neutral-100/50 border border-neutral-200 rounded-xl p-4">
               <span className="text-xs font-bold text-neutral-600 uppercase tracking-wider flex items-center gap-1">
                 <XCircle className="w-4 h-4 text-neutral-400" />
-                Chưa đáp ứng khoảng trống của Team
+                Remaining team gaps
               </span>
               <div className="flex flex-wrap gap-1.5 mt-1">
                 {report.missingTeamGaps && report.missingTeamGaps.length > 0 ? (
@@ -329,9 +329,7 @@ export function CandidateScorecard({
                     </Badge>
                   ))
                 ) : (
-                  <span className="text-xs text-neutral-400 italic">
-                    Không có hoặc đã đáp ứng đầy đủ.
-                  </span>
+                  <span className="text-xs text-neutral-400 italic">None or fully covered.</span>
                 )}
               </div>
             </div>
@@ -343,7 +341,7 @@ export function CandidateScorecard({
       <div className="flex flex-col gap-3">
         <h4 className="text-xs font-bold text-neutral-700 uppercase tracking-wider flex items-center gap-1.5">
           <ThumbsUp className="w-4 h-4 text-blue-600" />
-          Ma trận đối khớp kỹ năng (Skills Alignment Matrix)
+          Skills Alignment Matrix
         </h4>
 
         <div className="space-y-3">
@@ -351,7 +349,7 @@ export function CandidateScorecard({
           {report?.mustHaveMatches && report.mustHaveMatches.length > 0 && (
             <div className="flex flex-col gap-2">
               <div className="text-[11px] font-bold text-red-600/90 uppercase tracking-wider bg-red-50 w-fit px-2 py-0.5 rounded">
-                Yêu cầu Bắt buộc (Must-Have)
+                Must-have requirements
               </div>
               <div className="grid grid-cols-1 gap-2.5">
                 {report.mustHaveMatches.map((match, idx) => (
@@ -373,14 +371,13 @@ export function CandidateScorecard({
                     </div>
                     {match.cvSkill && (
                       <div className="text-[11px] text-neutral-500">
-                        Từ khóa trong CV:{' '}
-                        <strong className="text-neutral-700">{match.cvSkill}</strong>
+                        CV keyword: <strong className="text-neutral-700">{match.cvSkill}</strong>
                       </div>
                     )}
                     <p className="text-[11px] text-neutral-600 italic bg-neutral-50/50 p-2 rounded border-l-2 border-neutral-300">
                       {match.evidenceSnippet ||
                         match.justification ||
-                        'Không tìm thấy thông tin/minh chứng trong CV.'}
+                        'No information or evidence found in the CV.'}
                     </p>
                   </div>
                 ))}
@@ -392,7 +389,7 @@ export function CandidateScorecard({
           {report?.niceToHaveMatches && report.niceToHaveMatches.length > 0 && (
             <div className="flex flex-col gap-2 pt-2">
               <div className="text-[11px] font-bold text-blue-600/90 uppercase tracking-wider bg-blue-50 w-fit px-2 py-0.5 rounded">
-                Yêu cầu Mong muốn (Nice-to-Have)
+                Nice-to-have requirements
               </div>
               <div className="grid grid-cols-1 gap-2.5">
                 {report.niceToHaveMatches.map((match, idx) => (
@@ -414,14 +411,13 @@ export function CandidateScorecard({
                     </div>
                     {match.cvSkill && (
                       <div className="text-[11px] text-neutral-500">
-                        Từ khóa trong CV:{' '}
-                        <strong className="text-neutral-700">{match.cvSkill}</strong>
+                        CV keyword: <strong className="text-neutral-700">{match.cvSkill}</strong>
                       </div>
                     )}
                     <p className="text-[11px] text-neutral-600 italic bg-neutral-50/50 p-2 rounded border-l-2 border-neutral-300">
                       {match.evidenceSnippet ||
                         match.justification ||
-                        'Không tìm thấy thông tin/minh chứng trong CV.'}
+                        'No information or evidence found in the CV.'}
                     </p>
                   </div>
                 ))}
@@ -436,13 +432,11 @@ export function CandidateScorecard({
         <div className="flex flex-col gap-2 bg-emerald-50/20 border border-emerald-100 rounded-xl p-4">
           <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
             <Check className="w-4 h-4 text-emerald-500" />
-            Ưu điểm / Điểm mạnh (Pros)
+            Strengths
           </span>
           <ul className="flex flex-col gap-1.5 mt-1">
             {pros.length === 0 ? (
-              <li className="text-xs text-neutral-400 italic">
-                Không có điểm mạnh cụ thể được ghi nhận.
-              </li>
+              <li className="text-xs text-neutral-400 italic">No specific strengths recorded.</li>
             ) : (
               pros.map((pro, idx) => (
                 <li key={idx} className="text-xs text-neutral-700 flex items-start gap-1.5">
@@ -457,13 +451,11 @@ export function CandidateScorecard({
         <div className="flex flex-col gap-2 bg-red-50/20 border border-red-100 rounded-xl p-4">
           <span className="text-xs font-bold text-red-800 uppercase tracking-wider flex items-center gap-1">
             <XCircle className="w-4 h-4 text-red-500" />
-            Khoảng trống Kỹ năng (Gaps)
+            Skill gaps
           </span>
           <ul className="flex flex-col gap-1.5 mt-1">
             {gaps.length === 0 ? (
-              <li className="text-xs text-neutral-400 italic">
-                Không có khoảng trống kỹ năng được ghi nhận.
-              </li>
+              <li className="text-xs text-neutral-400 italic">No skill gaps recorded.</li>
             ) : (
               gaps.map((gap, idx) => (
                 <li key={idx} className="text-xs text-neutral-700 flex items-start gap-1.5">
@@ -479,10 +471,10 @@ export function CandidateScorecard({
       {/* Experience Calculation */}
       <div className="border-t border-neutral-200 pt-3 flex flex-col gap-1">
         <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
-          Phân tích Số năm Kinh nghiệm (YOE Details)
+          YOE Analysis
         </span>
         <p className="text-xs text-neutral-700 italic font-medium leading-relaxed mt-1">
-          {report?.yoeExplanation || 'Không có chi tiết tính toán số năm kinh nghiệm.'}
+          {report?.yoeExplanation || 'No YOE calculation details available.'}
         </p>
       </div>
 
@@ -490,7 +482,7 @@ export function CandidateScorecard({
       {report?.piiMapping && Object.keys(report.piiMapping).length > 0 && (
         <div className="border-t border-neutral-200 pt-4 flex flex-col gap-2">
           <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
-            Thông tin Liên hệ Giải mã (Contact Details)
+            Decoded Contact Details
           </span>
           <div className="grid grid-cols-2 gap-3 p-3 bg-neutral-50 rounded-lg border border-neutral-200 text-xs">
             {Object.entries(report.piiMapping).map(([key, val]) => (

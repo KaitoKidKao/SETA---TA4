@@ -406,6 +406,76 @@ export const teamHireRequests = smartrecruitSchema.table(
   (t) => [index('team_hire_requests_by_tenant_title').on(t.tenant_id, t.position_title)],
 );
 
+export const hmFeedbackRequests = smartrecruitSchema.table(
+  'hm_feedback_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    external_feedback_id: text('external_feedback_id').notNull(),
+    campaign_id: uuid('campaign_id'),
+    candidate_id: uuid('candidate_id'),
+    candidate_name: text('candidate_name').notNull(),
+    position: text('position').notNull(),
+    hiring_manager: text('hiring_manager').notNull(),
+    hiring_manager_email: text('hiring_manager_email'),
+    recruiter_owner_id: uuid('recruiter_owner_id'),
+    recruiter_owner_email: text('recruiter_owner_email'),
+    shortlisted_at: timestamp('shortlisted_at', { withTimezone: true }).notNull(),
+    feedback_due_at: timestamp('feedback_due_at', { withTimezone: true }).notNull(),
+    feedback_status: text('feedback_status').default('Pending').notNull(),
+    submitted_at: timestamp('submitted_at', { withTimezone: true }),
+    hm_decision: text('hm_decision'),
+    hm_feedback_text: text('hm_feedback_text'),
+    source_sla_breach: boolean('source_sla_breach'),
+    source_metadata: jsonb('source_metadata').default({}).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('hm_feedback_requests_tenant_external_id').on(t.tenant_id, t.external_feedback_id),
+    index('hm_feedback_requests_by_tenant_due').on(t.tenant_id, t.feedback_due_at),
+    index('hm_feedback_requests_by_tenant_status').on(t.tenant_id, t.feedback_status),
+    index('hm_feedback_requests_by_campaign').on(t.tenant_id, t.campaign_id),
+  ],
+);
+
+export const hmFeedbackReminderAttempts = smartrecruitSchema.table(
+  'hm_feedback_reminder_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    feedback_request_id: uuid('feedback_request_id').notNull(),
+    stage: text('stage', { enum: ['due_soon', 'overdue'] }).notNull(),
+    channel: text('channel', { enum: ['email'] })
+      .default('email')
+      .notNull(),
+    recipient_email: text('recipient_email'),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    status: text('status', {
+      enum: ['draft', 'queued', 'sent', 'failed', 'canceled'],
+    })
+      .default('draft')
+      .notNull(),
+    idempotency_key: text('idempotency_key').notNull(),
+    retry_number: integer('retry_number').default(0).notNull(),
+    approved_by: uuid('approved_by'),
+    approved_at: timestamp('approved_at', { withTimezone: true }),
+    queued_at: timestamp('queued_at', { withTimezone: true }),
+    sent_at: timestamp('sent_at', { withTimezone: true }),
+    provider_message_id: text('provider_message_id'),
+    failure_code: text('failure_code'),
+    failure_message: text('failure_message'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('hm_feedback_reminders_idempotency').on(t.tenant_id, t.idempotency_key),
+    index('hm_feedback_reminders_by_request').on(t.tenant_id, t.feedback_request_id, t.created_at),
+    index('hm_feedback_reminders_by_status').on(t.tenant_id, t.status),
+  ],
+);
+
 export const interviewSchedules = smartrecruitSchema.table(
   'interview_schedules',
   {

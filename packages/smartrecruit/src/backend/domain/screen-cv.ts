@@ -22,6 +22,7 @@ import {
   SCORING_VERSION,
   SCREENING_PROMPT_VERSION,
 } from './scoring.ts';
+import { isShortlistedScore } from './shortlist-policy.ts';
 import { analyzeSkillGaps } from './skill-gap-analyzer.ts';
 
 // ---------------------------------------------------------------------------
@@ -406,7 +407,7 @@ ${anonymizedCvText}`,
         originalFitScore: deterministic.fitScore,
       };
 
-      const isShortlisted = finalFitScore >= 70;
+      const isShortlisted = isShortlistedScore(finalFitScore);
       const status = isShortlisted ? 'shortlisted' : 'screened';
 
       let savedId!: string;

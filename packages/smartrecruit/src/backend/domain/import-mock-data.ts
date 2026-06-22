@@ -18,6 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../../..');
 
 import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
+import { importHmFeedbackFromWorkbook } from './hm-feedback.ts';
 import {
   normalizeBoolean,
   normalizeEmail,
@@ -39,6 +40,12 @@ export interface ImportSmartrecruitMockDataOutput {
   templates: { created: number; updated: number };
   teamSkillsMatrix?: { created: number; updated: number };
   teamHireRequests?: { created: number; updated: number };
+  hmFeedback?: {
+    created: number;
+    updated: number;
+    skipped: number;
+    invalid: number;
+  };
 }
 
 function readSheetRows(filePath: string, sheetName: string): SheetRow[] {
@@ -445,6 +452,24 @@ export async function importSmartrecruitMockData(
       }
     } catch (err) {
       console.error('Failed to import team hire requests sheet:', err);
+    }
+  }
+
+  if (hasGapsSheets && gapsFilePath) {
+    try {
+      const hmFeedback = await importHmFeedbackFromWorkbook({
+        filePath: gapsFilePath,
+        session: input.session,
+      });
+      result.hmFeedback = {
+        created: hmFeedback.created,
+        updated: hmFeedback.updated,
+        skipped: hmFeedback.skipped,
+        invalid: hmFeedback.invalid.length,
+      };
+    } catch (err) {
+      console.error('Failed to import HM feedback tracker sheet:', err);
+      result.hmFeedback = { created: 0, updated: 0, skipped: 0, invalid: 0 };
     }
   }
 

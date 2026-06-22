@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
-import type { SessionEnv } from '@seta/core';
+import type { SessionEnv, WorkerHandle } from '@seta/core';
 import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
@@ -38,6 +38,11 @@ import {
 } from '../domain/campaign-report.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
+import {
+  approveHmFeedbackReminder,
+  listHmFeedbackTracker,
+  prepareHmFeedbackReminderDraft,
+} from '../domain/hm-feedback.ts';
 import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
@@ -45,7 +50,6 @@ import { reviewCampaignCandidate } from '../domain/review-candidate.ts';
 import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
 import { analyzeSkillGaps } from '../domain/skill-gap-analyzer.ts';
-import { getSLATracker } from '../domain/sla-tracker.ts';
 import {
   getEmbeddingWithFallback,
   getSmartrecruitVectorStore,
@@ -137,7 +141,19 @@ const createReportSchema = z.object({
   recruiterNote: z.string().trim().max(2_000).optional(),
 });
 
-export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
+const slaTrackerQuerySchema = z.object({
+  status: z.enum(['all', 'on_track', 'due_soon', 'overdue', 'submitted', 'data_error']).optional(),
+  search: z.string().trim().max(200).optional(),
+});
+
+export interface SmartrecruitRouteDeps {
+  workers: Pick<WorkerHandle, 'addJob'>;
+}
+
+export function registerSmartrecruitRoutes(
+  app: Hono<SessionEnv>,
+  deps: SmartrecruitRouteDeps,
+): void {
   // Guard all smartrecruit endpoints with access permission
   app.use('/api/smartrecruit/v1/*', async (c, next) => {
     const session = c.get('user');
@@ -880,8 +896,40 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
   });
 
   app.get('/api/smartrecruit/v1/sla-tracker', async (c) => {
-    const result = getSLATracker();
+    const session = c.get('user');
+    const parsed = slaTrackerQuerySchema.safeParse({
+      status: c.req.query('status') ?? 'all',
+      search: c.req.query('search') || undefined,
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+    const result = await listHmFeedbackTracker({
+      tenantId: session.tenant_id,
+      status: parsed.data.status ?? 'all',
+      search: parsed.data.search,
+    });
     return c.json({ tracker: result });
+  });
+
+  app.post('/api/smartrecruit/v1/sla-tracker/:id/reminder-draft', async (c) => {
+    const session = c.get('user');
+    const draft = await prepareHmFeedbackReminderDraft({
+      tenantId: session.tenant_id,
+      feedbackRequestId: c.req.param('id'),
+    });
+    return c.json({ draft });
+  });
+
+  app.post('/api/smartrecruit/v1/sla-tracker/:id/reminders/approve', async (c) => {
+    const session = c.get('user');
+    const attempt = await approveHmFeedbackReminder({
+      tenantId: session.tenant_id,
+      feedbackRequestId: c.req.param('id'),
+      session,
+      addJob: (taskName, payload, opts) => deps.workers.addJob(taskName, payload, opts),
+    });
+    return c.json({ attempt });
   });
 
   // =========================================================================
