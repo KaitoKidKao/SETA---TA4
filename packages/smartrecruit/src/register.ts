@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Mastra } from '@mastra/core';
 import { AgentRegistry } from '@seta/agent-sdk';
 import type { ContributionRegistry } from '@seta/core';
 import { smartrecruitAgentTools } from './backend/agent-tools.ts';
@@ -43,7 +44,7 @@ export function registerSmartrecruitContributions(reg: ContributionRegistry): vo
         id: 'smartrecruit',
         build: (mastra) => {
           // mastra is passed in from agent package buildMastraFull
-          (mastra as any).addWorkflow(smartrecruitWorkflow);
+          (mastra as Mastra).addWorkflow(smartrecruitWorkflow);
         },
         inputSchema: smartrecruitWorkflowSpec.inputSchema,
       },

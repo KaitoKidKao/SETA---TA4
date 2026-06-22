@@ -22,6 +22,7 @@ import {
   SCORING_VERSION,
   SCREENING_PROMPT_VERSION,
 } from './scoring.ts';
+import { analyzeSkillGaps } from './skill-gap-analyzer.ts';
 
 export interface ScreenCvInput {
   existingCandidateId?: string;
@@ -297,6 +298,32 @@ ${anonymizedCvText}`,
           niceToHave: crit.weight_nice_to_have,
         },
       });
+
+      // Get skill gaps of the team and compare with candidate's skills
+      const gapsInfo = await analyzeSkillGaps(crit.job_title, input.session.tenant_id);
+      const teamGaps = gapsInfo.skillsGap || [];
+      const solvedTeamGaps: string[] = [];
+      const missingTeamGaps: string[] = [];
+
+      for (const gap of teamGaps) {
+        const hasSkill = parsed.skills.some(
+          (s) =>
+            s.toLowerCase() === gap.toLowerCase() ||
+            s.toLowerCase().includes(gap.toLowerCase()) ||
+            gap.toLowerCase().includes(s.toLowerCase()),
+        );
+
+        if (hasSkill) {
+          solvedTeamGaps.push(gap);
+        } else {
+          missingTeamGaps.push(gap);
+        }
+      }
+
+      // Calculate bonus: +5% if 1 gap solved, +10% if 2 or more gaps solved.
+      const bonus = solvedTeamGaps.length >= 2 ? 10 : solvedTeamGaps.length === 1 ? 5 : 0;
+      const finalFitScore = Math.min(100, (deterministic.fitScore || 0) + bonus);
+
       const modelRecord = model as unknown as {
         id?: string;
         providerId?: string;
@@ -323,12 +350,19 @@ ${anonymizedCvText}`,
         mustHaveMatches: deterministic.mustHaveMatches,
         niceToHaveMatches: deterministic.niceToHaveMatches,
         englishEvidence: parsed.fitAnalysis.englishEvidence ?? null,
-        scoreBreakdown: deterministic.scoreBreakdown,
+        scoreBreakdown: {
+          ...deterministic.scoreBreakdown,
+          teamSkillGapBonus: bonus,
+        },
         flags: [...new Set([...parsed.fitAnalysis.flags, ...deterministic.flags])],
         piiMapping,
+        solvedTeamGaps,
+        missingTeamGaps,
+        teamSkillGapBonus: bonus,
+        originalFitScore: deterministic.fitScore,
       };
 
-      const isShortlisted = deterministic.fitScore >= 70;
+      const isShortlisted = finalFitScore >= 70;
       const status = isShortlisted ? 'shortlisted' : 'screened';
 
       let savedId!: string;
@@ -350,7 +384,7 @@ ${anonymizedCvText}`,
                 cv_path: input.cvPath ?? null,
                 cv_text: cvContentText,
                 status,
-                fit_score: deterministic.fitScore,
+                fit_score: finalFitScore,
                 screening_report: screeningReport,
                 updated_at: new Date(),
               })
@@ -372,7 +406,7 @@ ${anonymizedCvText}`,
               cv_path: input.cvPath ?? null,
               cv_text: cvContentText,
               status,
-              fit_score: deterministic.fitScore,
+              fit_score: finalFitScore,
               screening_report: screeningReport,
             });
             savedId = id;
@@ -388,7 +422,7 @@ ${anonymizedCvText}`,
           tenant_id: input.session.tenant_id,
           display_name: input.candidateName,
           email: input.candidateEmail,
-          fit_score: deterministic.fitScore,
+          fit_score: finalFitScore,
           cv_skills: parsed.skills.join(', '),
           cv_text: cvContentText,
         }).catch((err) => {
@@ -396,7 +430,7 @@ ${anonymizedCvText}`,
         });
       }
 
-      span.setAttribute('fit_score', deterministic.fitScore);
+      span.setAttribute('fit_score', finalFitScore);
       span.setAttribute('status', status);
 
       span.end();
@@ -405,7 +439,7 @@ ${anonymizedCvText}`,
         displayName: input.candidateName,
         email: input.candidateEmail,
         status,
-        fitScore: deterministic.fitScore,
+        fitScore: finalFitScore,
         totalYoe,
         report: screeningReport,
       };

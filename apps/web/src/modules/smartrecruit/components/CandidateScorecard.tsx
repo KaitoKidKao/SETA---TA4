@@ -46,8 +46,13 @@ interface CandidateState {
       yoe: number;
       english: number;
       niceToHave: number;
+      teamSkillGapBonus?: number;
     };
     flags?: string[];
+    solvedTeamGaps?: string[];
+    missingTeamGaps?: string[];
+    teamSkillGapBonus?: number;
+    originalFitScore?: number;
   } | null;
 }
 
@@ -266,6 +271,73 @@ export function CandidateScorecard({
           )}
         </div>
       </div>
+
+      {/* Team Skill Gap Contribution */}
+      {((report?.solvedTeamGaps && report.solvedTeamGaps.length > 0) ||
+        (report?.missingTeamGaps && report.missingTeamGaps.length > 0)) && (
+        <div className="bg-neutral-50/50 p-5 rounded-xl border border-neutral-200 shadow-sm flex flex-col gap-4">
+          <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
+            <h4 className="text-sm font-bold text-neutral-850 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-600" />
+              Đóng góp năng lực cho Đội ngũ (Team Skill Gap Contribution)
+            </h4>
+            {report.teamSkillGapBonus && report.teamSkillGapBonus > 0 ? (
+              <Badge className="bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold px-2 py-0.5 rounded-full">
+                Cộng điểm thưởng: +{report.teamSkillGapBonus}% Fit Score
+              </Badge>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2 bg-emerald-50/20 border border-emerald-100 rounded-xl p-4">
+              <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+                <Check className="w-4 h-4 text-emerald-500" />
+                Đáp ứng khoảng trống kỹ năng của Team
+              </span>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {report.solvedTeamGaps && report.solvedTeamGaps.length > 0 ? (
+                  report.solvedTeamGaps.map((skill, idx) => (
+                    <Badge
+                      key={idx}
+                      className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-medium py-1 px-2.5 rounded-full flex items-center gap-1"
+                    >
+                      <Check className="w-3 h-3 text-emerald-600" />
+                      {skill}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-xs text-neutral-400 italic">
+                    Không đóng góp giải quyết khoảng trống nào.
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 bg-neutral-100/50 border border-neutral-200 rounded-xl p-4">
+              <span className="text-xs font-bold text-neutral-600 uppercase tracking-wider flex items-center gap-1">
+                <XCircle className="w-4 h-4 text-neutral-400" />
+                Chưa đáp ứng khoảng trống của Team
+              </span>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {report.missingTeamGaps && report.missingTeamGaps.length > 0 ? (
+                  report.missingTeamGaps.map((skill, idx) => (
+                    <Badge
+                      key={idx}
+                      className="bg-neutral-100 text-neutral-500 border border-neutral-200 text-xs font-medium py-1 px-2.5 rounded-full"
+                    >
+                      {skill}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-xs text-neutral-400 italic">
+                    Không có hoặc đã đáp ứng đầy đủ.
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Skills Match Matrix with Evidence Snippets */}
       <div className="flex flex-col gap-3">

@@ -377,3 +377,31 @@ export const interactionHistories = smartrecruitSchema.table(
   },
   (t) => [index('interaction_histories_by_tenant_candidate').on(t.tenant_id, t.candidate_id)],
 );
+
+export const teamSkillsMatrix = smartrecruitSchema.table(
+  'team_skills_matrix',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    team_name: text('team_name').notNull(),
+    proficiency_level: text('proficiency_level'),
+    skill: text('skill').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('team_skills_matrix_by_tenant_team').on(t.tenant_id, t.team_name)],
+);
+
+export const teamHireRequests = smartrecruitSchema.table(
+  'team_hire_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    position_title: text('position_title').notNull(),
+    team_skill_gap_summary: text('team_skill_gap_summary'),
+    business_unit: text('business_unit'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('team_hire_requests_by_tenant_title').on(t.tenant_id, t.position_title)],
+);

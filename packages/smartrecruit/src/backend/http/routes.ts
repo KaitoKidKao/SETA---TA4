@@ -3,7 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv } from '@seta/core';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -13,10 +13,12 @@ import {
   campaigns,
   candidates,
   criteria,
+  interactionHistories,
   outreachDrafts,
   outreachTemplates,
 } from '../db/schema.ts';
 import {
+  addCandidatesToCampaign,
   createSmartrecruitCampaign,
   getCampaignKPIs,
   getCampaignView,
@@ -199,6 +201,92 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     }
 
     return c.json(view);
+  });
+
+  app.post('/api/smartrecruit/v1/campaigns/:id/pool-search', async (c) => {
+    const session = c.get('user');
+    const campaignId = c.req.param('id');
+    const parsed = screenCandidatePoolSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const [camp] = await db
+      .select({ criteria_id: campaigns.criteria_id })
+      .from(campaigns)
+      .where(and(eq(campaigns.id, campaignId), eq(campaigns.tenant_id, session.tenant_id)))
+      .limit(1);
+
+    if (!camp || !camp.criteria_id) {
+      return c.json(
+        { error: 'NOT_FOUND', message: 'Campaign or screening criteria not found' },
+        404,
+      );
+    }
+
+    const poolResults = await screenCandidatePool({
+      criteriaId: camp.criteria_id,
+      limit: parsed.data.limit,
+      includeAlreadyScreened: true,
+      session,
+    });
+
+    const candidateIds = poolResults.results.map((r) => r.id);
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const recentOutreaches =
+      candidateIds.length > 0
+        ? await db
+            .select({ candidate_id: interactionHistories.candidate_id })
+            .from(interactionHistories)
+            .where(
+              and(
+                eq(interactionHistories.tenant_id, session.tenant_id),
+                inArray(interactionHistories.candidate_id, candidateIds),
+                gte(interactionHistories.sent_at, thirtyDaysAgo),
+              ),
+            )
+        : [];
+
+    const recentOutreachSet = new Set(recentOutreaches.map((row) => row.candidate_id));
+
+    const finalResults = poolResults.results.map((r) => ({
+      ...r,
+      hasRecentOutreach: recentOutreachSet.has(r.id),
+    }));
+
+    return c.json({
+      criteriaId: poolResults.criteriaId,
+      screened: poolResults.screened,
+      skipped: poolResults.skipped,
+      results: finalResults,
+    });
+  });
+
+  app.post('/api/smartrecruit/v1/campaigns/:id/add-pool-candidates', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+    const campaignId = c.req.param('id');
+
+    const bodySchema = z.object({
+      candidateIds: z.array(z.string().uuid()),
+    });
+
+    const parsed = bodySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    await addCandidatesToCampaign({
+      campaignId,
+      tenantId: session.tenant_id,
+      candidateIds: parsed.data.candidateIds,
+      source: 'mock_pool',
+    });
+
+    return c.json({ success: true });
   });
 
   app.patch(
@@ -783,8 +871,10 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
   });
 
   app.get('/api/smartrecruit/v1/skill-gaps', async (c) => {
+    const session = c.get('user');
+    const tenantId = session.tenant_id;
     const jobTitle = c.req.query('jobTitle') || '';
-    const result = analyzeSkillGaps(jobTitle);
+    const result = await analyzeSkillGaps(jobTitle, tenantId);
     return c.json(result);
   });
 
