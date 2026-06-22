@@ -219,7 +219,7 @@ ${anonymizedCvText}`;
             structuredOutput: {
               schema: OutreachDraftSchema,
             },
-            modelSettings: { temperature: temp },
+            modelSettings: { temperature: temp, seed: 42 },
             ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
           }),
         );
@@ -274,6 +274,7 @@ ${body}`;
             structuredOutput: {
               schema: VerificationSchema,
             },
+            modelSettings: { temperature: 0, seed: 42 },
             ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
           }),
         );
