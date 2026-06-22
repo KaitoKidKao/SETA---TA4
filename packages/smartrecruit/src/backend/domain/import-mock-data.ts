@@ -5,7 +5,13 @@ import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria, outreachTemplates } from '../db/schema.ts';
 import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
-import { normalizeBoolean, normalizeEnglishLevel } from './normalize-candidate.ts';
+import {
+  normalizeBoolean,
+  normalizeEmail,
+  normalizeEnglishLevel,
+  normalizePhone,
+  normalizeSeniority,
+} from './normalize-candidate.ts';
 
 type SheetRow = Record<string, unknown>;
 
@@ -119,15 +125,17 @@ export async function importSmartrecruitMockData(
     const values = {
       external_candidate_id: externalCandidateId,
       display_name: stringValue(row, 'full_name') || externalCandidateId,
-      email: stringValue(row, 'email') || `${externalCandidateId.toLowerCase()}@mock.local`,
-      phone: nullableString(row, 'phone'),
+      email: normalizeEmail(
+        stringValue(row, 'email') || `${externalCandidateId.toLowerCase()}@mock.local`,
+      ),
+      phone: normalizePhone(nullableString(row, 'phone')),
       location: nullableString(row, 'location'),
       applied_position: nullableString(row, 'applied_position'),
       current_title: nullableString(row, 'current_title'),
       current_company: nullableString(row, 'current_company'),
       past_companies: nullableString(row, 'past_companies'),
       years_of_experience: parseInteger(row, 'years_of_experience'),
-      seniority_level: nullableString(row, 'seniority_level'),
+      seniority_level: normalizeSeniority(nullableString(row, 'seniority_level')),
       domain_experience: nullableString(row, 'domain_experience'),
       employment_history: nullableString(row, 'employment_history'),
       notable_projects: nullableString(row, 'notable_projects'),

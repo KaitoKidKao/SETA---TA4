@@ -1,4 +1,5 @@
 import './otel.ts'; // MUST be first; see otel.ts header comment.
+import { registerAgent, registerAgentContributions } from '@seta/agent/register';
 import { createContributionRegistry } from '@seta/core';
 import { coreDb } from '@seta/core/db';
 import { emit, withEmit } from '@seta/core/events';
@@ -55,6 +56,7 @@ registerNotificationsContributions(reg);
 registerPlannerContributions(reg);
 registerStaffingContributions(reg);
 registerSmartrecruitContributions(reg);
+registerAgentContributions(reg);
 // MODULE_REGISTRATIONS_END — generator inserts new register*Contributions(reg) calls above this comment.
 log.info('contributions registered');
 
@@ -83,6 +85,25 @@ const mailerSendTask = createMailerSendTask({
   log: log.child({ component: 'mailer.worker' }),
 });
 
+async function* stubChatRuntimeNotWired(): AsyncIterable<any> {
+  yield {
+    kind: 'final',
+    result: { message: 'Chat runtime is not configured on this worker build.' },
+  };
+}
+
+const agent = registerAgent({
+  pool: getPool('worker'),
+  databaseUrl: env.DATABASE_URL,
+  reg,
+  log: log.child({ subsystem: 'agent' }),
+  chatOrchestration: () => stubChatRuntimeNotWired(),
+});
+
+const agentSubscribers = reg.collected.subscriberBuilders.map(({ builder }) =>
+  builder({ mastra: agent.mastra }),
+);
+
 const rt = buildRuntime(
   { PORT: 0, DATABASE_URL: env.DATABASE_URL },
   {
@@ -100,6 +121,7 @@ const rt = buildRuntime(
       ...plannerEmbeddingJobs,
       ...plannerMembershipJobs,
     },
+    extraSubscribers: [...agentSubscribers],
     onWorkerStart: ({ workers }) => {
       workerHandleRef = workers;
     },

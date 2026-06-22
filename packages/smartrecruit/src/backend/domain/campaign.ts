@@ -3,7 +3,13 @@ import { withEmit } from '@seta/core/events';
 import { getPool } from '@seta/shared-db';
 import { and, eq, inArray } from 'drizzle-orm';
 import { smartrecruitDb } from '../db/client.ts';
-import { campaignCandidates, campaigns, candidates, outreachDrafts } from '../db/schema.ts';
+import {
+  campaignAiUsage,
+  campaignCandidates,
+  campaigns,
+  candidates,
+  outreachDrafts,
+} from '../db/schema.ts';
 import type { SmartrecruitCandidateInput } from '../workflows/smartrecruit-workflow.ts';
 
 export type CampaignStatus =
@@ -15,6 +21,7 @@ export type CampaignStatus =
   | 'awaiting_outreach_approval'
   | 'sending'
   | 'completed'
+  | 'completed_with_errors'
   | 'failed'
   | 'canceled';
 
@@ -43,7 +50,9 @@ export interface CreateCampaignInput {
 export interface CampaignView {
   campaign: typeof campaigns.$inferSelect;
   candidates: Array<{
-    campaignCandidate: typeof campaignCandidates.$inferSelect;
+    campaignCandidate: typeof campaignCandidates.$inferSelect & {
+      effective_fit_score: number | null;
+    };
     candidate: typeof candidates.$inferSelect | null;
     draft: typeof outreachDrafts.$inferSelect | null;
   }>;
@@ -99,6 +108,7 @@ export async function createSmartrecruitCampaign(
         job_title: input.jobTitle,
         jd_text: input.jdText,
         template_id: input.templateId ?? null,
+        orchestration_version: 2,
         status: 'queued',
         total_candidates: input.cvs.length,
         created_by: input.session.user_id,
@@ -184,7 +194,10 @@ export async function getCampaignView(args: {
   return {
     campaign,
     candidates: campaignRows.map((row) => ({
-      campaignCandidate: row,
+      campaignCandidate: {
+        ...row,
+        effective_fit_score: row.reviewed_fit_score ?? row.fit_score,
+      },
       candidate: candidateById.get(row.candidate_id) ?? null,
       draft: row.draft_id ? (draftById.get(row.draft_id) ?? null) : null,
     })),
@@ -218,7 +231,20 @@ export async function updateCampaignStatus(args: {
       ...(args.criteriaId !== undefined ? { criteria_id: args.criteriaId } : {}),
       ...(args.errorReason !== undefined ? { error_reason: args.errorReason } : {}),
       ...(args.status === 'screening' ? { started_at: new Date() } : {}),
-      ...(args.status === 'completed' || args.status === 'failed' || args.status === 'canceled'
+      ...(args.status === 'screening' ? { screening_started_at: new Date() } : {}),
+      ...(args.status === 'screening_completed' ? { screening_completed_at: new Date() } : {}),
+      ...(args.status === 'drafting' ? { drafting_started_at: new Date() } : {}),
+      ...(args.status === 'awaiting_outreach_approval'
+        ? { drafting_completed_at: new Date() }
+        : {}),
+      ...(args.status === 'sending' ? { sending_started_at: new Date() } : {}),
+      ...(args.status === 'completed' || args.status === 'completed_with_errors'
+        ? { sending_completed_at: new Date() }
+        : {}),
+      ...(args.status === 'completed' ||
+      args.status === 'completed_with_errors' ||
+      args.status === 'failed' ||
+      args.status === 'canceled'
         ? { completed_at: new Date() }
         : {}),
       updated_at: new Date(),
@@ -336,4 +362,78 @@ export async function waitForCampaignStatus(args: {
   }
 
   throw new Error(`Timed out waiting for campaign ${args.campaignId} status.`);
+}
+
+export interface CampaignKPIs {
+  timeToScreenSec: number | null;
+  shortlistRate: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  estimatedCostUsd: number;
+}
+
+export async function getCampaignKPIs(args: {
+  campaignId: string;
+  tenantId: string;
+  tokenPricing?: {
+    inputPricePerMillion: number;
+    outputPricePerMillion: number;
+  };
+}): Promise<CampaignKPIs> {
+  const db = smartrecruitDb();
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, args.campaignId), eq(campaigns.tenant_id, args.tenantId)))
+    .limit(1);
+
+  if (!campaign) throw new Error('Campaign not found');
+
+  let timeToScreenSec: number | null = null;
+  if (campaign.screening_started_at && campaign.screening_completed_at) {
+    timeToScreenSec = Math.max(
+      0,
+      Math.round(
+        (campaign.screening_completed_at.getTime() - campaign.screening_started_at.getTime()) /
+          1000,
+      ),
+    );
+  }
+
+  const total = campaign.total_candidates || 1;
+  const shortlistRate = Math.round(((campaign.shortlisted_count || 0) / total) * 100);
+
+  const usageRows = await db
+    .select({
+      input_tokens: campaignAiUsage.input_tokens,
+      output_tokens: campaignAiUsage.output_tokens,
+    })
+    .from(campaignAiUsage)
+    .where(
+      and(
+        eq(campaignAiUsage.campaign_id, args.campaignId),
+        eq(campaignAiUsage.tenant_id, args.tenantId),
+      ),
+    );
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  for (const row of usageRows) {
+    totalInputTokens += row.input_tokens || 0;
+    totalOutputTokens += row.output_tokens || 0;
+  }
+
+  const inputPrice = args.tokenPricing?.inputPricePerMillion ?? 0.15; // default gpt-4o-mini: $0.15 per 1M tokens
+  const outputPrice = args.tokenPricing?.outputPricePerMillion ?? 0.6; // default gpt-4o-mini: $0.60 per 1M tokens
+
+  const estimatedCostUsd =
+    (totalInputTokens / 1_000_000) * inputPrice + (totalOutputTokens / 1_000_000) * outputPrice;
+
+  return {
+    timeToScreenSec,
+    shortlistRate,
+    totalInputTokens,
+    totalOutputTokens,
+    estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
+  };
 }

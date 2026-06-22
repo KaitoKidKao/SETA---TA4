@@ -16,12 +16,29 @@ import {
   outreachDrafts,
   outreachTemplates,
 } from '../db/schema.ts';
-import { createSmartrecruitCampaign, getCampaignView } from '../domain/campaign.ts';
+import {
+  createSmartrecruitCampaign,
+  getCampaignKPIs,
+  getCampaignView,
+} from '../domain/campaign.ts';
+import {
+  getCampaignMetrics,
+  refreshCampaignWarnings,
+  resolveCampaignWarning,
+} from '../domain/campaign-operations.ts';
+import {
+  type CampaignReportSnapshot,
+  createCampaignReport,
+  getCampaignReport,
+  listCampaignReports,
+  renderCampaignReportPdf,
+} from '../domain/campaign-report.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
+import { reviewCampaignCandidate } from '../domain/review-candidate.ts';
 import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
 import { analyzeSkillGaps } from '../domain/skill-gap-analyzer.ts';
@@ -104,6 +121,19 @@ const updateDraftSchema = z.object({
   body: z.string().min(1),
 });
 
+const reviewCandidateSchema = z.object({
+  fitScore: z.number().int().min(0).max(100),
+  reason: z.string().trim().min(5).max(500),
+});
+
+const resolveWarningSchema = z.object({
+  note: z.string().trim().max(500).optional(),
+});
+
+const createReportSchema = z.object({
+  recruiterNote: z.string().trim().max(2_000).optional(),
+});
+
 export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
   // Guard all smartrecruit endpoints with access permission
   app.use('/api/smartrecruit/v1/*', async (c, next) => {
@@ -169,6 +199,146 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     }
 
     return c.json(view);
+  });
+
+  app.patch(
+    '/api/smartrecruit/v1/campaigns/:campaignId/candidates/:candidateId/review',
+    async (c) => {
+      const session = c.get('user');
+      requirePermission(session, SMARTRECRUIT_WRITE);
+      const parsed = reviewCandidateSchema.safeParse(await c.req.json().catch(() => ({})));
+      if (!parsed.success) {
+        return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+      }
+      const reviewed = await reviewCampaignCandidate({
+        campaignId: c.req.param('campaignId'),
+        candidateId: c.req.param('candidateId'),
+        fitScore: parsed.data.fitScore,
+        reason: parsed.data.reason,
+        session,
+      });
+      if (!reviewed)
+        return c.json({ error: 'NOT_FOUND', message: 'Campaign candidate not found' }, 404);
+      return c.json({
+        campaignCandidate: reviewed,
+        effectiveFitScore: reviewed.reviewed_fit_score,
+      });
+    },
+  );
+
+  app.get('/api/smartrecruit/v1/campaigns/:campaignId/metrics', async (c) => {
+    const session = c.get('user');
+    const metrics = await getCampaignMetrics({
+      campaignId: c.req.param('campaignId'),
+      tenantId: session.tenant_id,
+    });
+    if (!metrics) return c.json({ error: 'NOT_FOUND', message: 'Campaign not found' }, 404);
+    return c.json(metrics);
+  });
+
+  app.get('/api/smartrecruit/v1/campaigns/:campaignId/kpis', async (c) => {
+    const session = c.get('user');
+    const campaignId = c.req.param('campaignId');
+    const inputPrice = c.req.query('inputPrice') ? Number(c.req.query('inputPrice')) : undefined;
+    const outputPrice = c.req.query('outputPrice') ? Number(c.req.query('outputPrice')) : undefined;
+
+    try {
+      const kpis = await getCampaignKPIs({
+        campaignId,
+        tenantId: session.tenant_id,
+        tokenPricing:
+          inputPrice !== undefined && outputPrice !== undefined
+            ? {
+                inputPricePerMillion: inputPrice,
+                outputPricePerMillion: outputPrice,
+              }
+            : undefined,
+      });
+      return c.json(kpis);
+    } catch (err) {
+      return c.json({ error: 'FAILED_TO_GET_KPIS', message: (err as Error).message }, 500);
+    }
+  });
+
+  app.get('/api/smartrecruit/v1/campaigns/:campaignId/warnings', async (c) => {
+    const session = c.get('user');
+    const warnings = await refreshCampaignWarnings({
+      campaignId: c.req.param('campaignId'),
+      tenantId: session.tenant_id,
+    });
+    if (!warnings) return c.json({ error: 'NOT_FOUND', message: 'Campaign not found' }, 404);
+    return c.json({ warnings });
+  });
+
+  app.patch('/api/smartrecruit/v1/campaigns/:campaignId/warnings/:warningId', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+    const parsed = resolveWarningSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success)
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    const warning = await resolveCampaignWarning({
+      campaignId: c.req.param('campaignId'),
+      warningId: c.req.param('warningId'),
+      note: parsed.data.note,
+      session,
+    });
+    if (!warning) return c.json({ error: 'NOT_FOUND', message: 'Warning not found' }, 404);
+    return c.json({ warning });
+  });
+
+  app.post('/api/smartrecruit/v1/campaigns/:campaignId/reports', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+    const parsed = createReportSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success)
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    const report = await createCampaignReport({
+      campaignId: c.req.param('campaignId'),
+      recruiterNote: parsed.data.recruiterNote,
+      session,
+    });
+    if (!report) return c.json({ error: 'NOT_FOUND', message: 'Campaign not found' }, 404);
+    return c.json({ report }, 201);
+  });
+
+  app.get('/api/smartrecruit/v1/campaigns/:campaignId/reports', async (c) => {
+    const session = c.get('user');
+    return c.json({
+      reports: await listCampaignReports({
+        campaignId: c.req.param('campaignId'),
+        tenantId: session.tenant_id,
+      }),
+    });
+  });
+
+  app.get('/api/smartrecruit/v1/campaigns/:campaignId/reports/:reportId', async (c) => {
+    const session = c.get('user');
+    const report = await getCampaignReport({
+      campaignId: c.req.param('campaignId'),
+      reportId: c.req.param('reportId'),
+      tenantId: session.tenant_id,
+    });
+    if (!report) return c.json({ error: 'NOT_FOUND', message: 'Report not found' }, 404);
+    const format = c.req.query('format') ?? 'json';
+    if (format === 'json') return c.json({ report });
+    if (format === 'markdown') {
+      return new Response(report.markdown, {
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': `attachment; filename="shortlist-report-v${report.version}.md"`,
+        },
+      });
+    }
+    if (format === 'pdf') {
+      const pdf = await renderCampaignReportPdf(report.snapshot as CampaignReportSnapshot);
+      return new Response(new Uint8Array(pdf), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="shortlist-report-v${report.version}.pdf"`,
+        },
+      });
+    }
+    return c.json({ error: 'VALIDATION', message: 'format must be json|markdown|pdf' }, 400);
   });
 
   // --- Mock Dataset Import ---

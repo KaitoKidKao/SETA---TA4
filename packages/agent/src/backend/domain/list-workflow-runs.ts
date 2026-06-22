@@ -7,6 +7,7 @@ export type WorkflowRunScope = 'self' | 'group' | 'tenant' | 'instance';
 export type WorkflowRunStatus =
   | 'pending'
   | 'running'
+  | 'waiting'
   | 'paused'
   | 'success'
   | 'failed'

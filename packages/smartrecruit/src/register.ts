@@ -7,6 +7,11 @@ import * as schema from './backend/db/schema.ts';
 import { buildSmartrecruitRoutes } from './backend/http/index.ts';
 import { smartrecruitJobs } from './backend/jobs/index.ts';
 import {
+  buildResumeAfterDraftingSubscriber,
+  buildResumeAfterScreeningSubscriber,
+  buildResumeAfterSendingSubscriber,
+} from './backend/subscribers/resume-campaign-workflow.ts';
+import {
   smartrecruitWorkflow,
   smartrecruitWorkflowSpec,
 } from './backend/workflows/smartrecruit-workflow.ts';
@@ -27,6 +32,11 @@ export function registerSmartrecruitContributions(reg: ContributionRegistry): vo
     rbac: SMARTRECRUIT_PERMISSIONS,
     agentTools: smartrecruitAgentTools,
     jobs: smartrecruitJobs,
+    subscriberBuilders: [
+      buildResumeAfterScreeningSubscriber,
+      buildResumeAfterDraftingSubscriber,
+      buildResumeAfterSendingSubscriber,
+    ],
     routes: { mountAt: '/', build: buildSmartrecruitRoutes },
     workflows: [
       {

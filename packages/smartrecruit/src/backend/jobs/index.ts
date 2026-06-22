@@ -8,6 +8,7 @@ import { recomputeCampaignCounters, updateCampaignStatus } from '../domain/campa
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import { screenCv } from '../domain/screen-cv.ts';
+import { campaignJobs } from './campaign-jobs.ts';
 
 const log = pino({ name: 'smartrecruit/jobs' });
 
@@ -375,4 +376,5 @@ export const smartrecruitJobs: TaskList = {
     }
     log.info('Batch drafting outreach job completed.');
   },
+  ...campaignJobs,
 };
