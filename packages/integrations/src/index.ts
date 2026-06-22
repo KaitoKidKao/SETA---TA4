@@ -1,5 +1,29 @@
 export type { TransportConfigKind, TransportConfigPayload } from './backend/db/schema/index.ts';
 export {
+  type AtsCandidate,
+  type AtsConnectorConfig,
+  type AtsConnectorDeps,
+  AtsConnectorError,
+  type AtsRequisition,
+  type AtsWebhookEventType,
+  type AtsWebhookPayload,
+  handleAtsWebhook,
+  pullCandidatesFromAts,
+  pullRequisitionsFromAts,
+  verifyWebhookSignature,
+} from './backend/domain/ats-connector.ts';
+export {
+  CalendarSchedulerError,
+  cancelInterviewEvent,
+  createInterviewEvent,
+  type FreeBusySlot,
+  type GetFreeBusyInput,
+  type GetFreeBusyResult,
+  getFreeBusySlots,
+  type ScheduleInterviewInput,
+  type ScheduleInterviewResult,
+} from './backend/domain/calendar-scheduler.ts';
+export {
   type DisableMailTransportConfigArgs,
   disableMailTransportConfig,
 } from './backend/domain/disable-mail-transport-config.ts';

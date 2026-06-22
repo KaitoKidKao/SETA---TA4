@@ -405,3 +405,36 @@ export const teamHireRequests = smartrecruitSchema.table(
   },
   (t) => [index('team_hire_requests_by_tenant_title').on(t.tenant_id, t.position_title)],
 );
+
+export const interviewSchedules = smartrecruitSchema.table(
+  'interview_schedules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_candidate_id: uuid('campaign_candidate_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    interviewer_email: text('interviewer_email').notNull(),
+    interviewer_name: text('interviewer_name'),
+    candidate_email: text('candidate_email').notNull(),
+    candidate_name: text('candidate_name'),
+    scheduled_at: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+    duration_minutes: integer('duration_minutes').default(60).notNull(),
+    teams_link: text('teams_link'),
+    graph_event_id: text('graph_event_id'),
+    status: text('status', {
+      enum: ['pending', 'confirmed', 'canceled', 'completed', 'rescheduled'],
+    })
+      .notNull()
+      .default('pending'),
+    notes: text('notes'),
+    created_by: uuid('created_by').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('interview_schedules_by_campaign').on(t.tenant_id, t.campaign_id),
+    index('interview_schedules_by_candidate').on(t.tenant_id, t.candidate_id),
+    index('interview_schedules_by_status').on(t.tenant_id, t.status),
+  ],
+);

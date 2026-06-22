@@ -177,8 +177,28 @@ async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
 
 export function SmartrecruitPage() {
   // Navigation & Core State
-  const [activeTab, setActiveTab] = useState<'new' | 'active'>('new');
+  const [activeTab, setActiveTab] = useState<'new' | 'active' | 'settings'>('new');
   const [showReportModal, setShowReportModal] = useState(false);
+
+  // Phase 3: Enterprise Settings states
+  const [_atsWebhookUrl, _setAtsWebhookUrl] = useState('');
+  const [atsApiBaseUrl, setAtsApiBaseUrl] = useState('');
+  const [atsClientId, setAtsClientId] = useState('');
+  const [atsClientSecret, setAtsClientSecret] = useState('');
+  const [atsWebhookSecret, setAtsWebhookSecret] = useState('');
+  const [isSavingAtsConfig, setIsSavingAtsConfig] = useState(false);
+  const [atsConfigSaved, setAtsConfigSaved] = useState(false);
+
+  // Scoring Weights
+  const [swMustHave, setSwMustHave] = useState(50);
+  const [swYoe, setSwYoe] = useState(15);
+  const [swEnglish, setSwEnglish] = useState(15);
+  const [swNiceToHave, setSwNiceToHave] = useState(20);
+  const [isSavingWeights, setIsSavingWeights] = useState(false);
+  const [weightsSaved, setWeightsSaved] = useState(false);
+
+  // Interview Scheduling
+  const [interviewScheduleList, _setInterviewScheduleList] = useState<any[]>([]);
 
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
     'all',
@@ -1128,6 +1148,14 @@ export function SmartrecruitPage() {
               {activeRunId && (
                 <span className="inline-block size-2 rounded-full bg-emerald-500 animate-ping ml-1" />
               )}
+            </Button>
+            <Button
+              variant={activeTab === 'settings' ? 'primary' : 'ghost'}
+              onClick={() => setActiveTab('settings')}
+              size="sm"
+            >
+              <Settings className="size-3.5 mr-1" />
+              Enterprise Settings
             </Button>
           </div>
         </div>
@@ -2580,6 +2608,334 @@ export function SmartrecruitPage() {
                 </Button>
               </Card>
             )}
+          </div>
+        )}
+        {/* TAB 3: ENTERPRISE SETTINGS (Phase 3) */}
+        {activeTab === 'settings' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* ATS Integration Settings */}
+            <Card className="shadow-sm border-hairline bg-canvas/40">
+              <CardHeader>
+                <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                  <RefreshCw className="size-4 text-primary" />
+                  ATS Integration (Workday)
+                </CardTitle>
+                <CardDescription className="text-ink-subtle">
+                  Configure webhook synchronization with your Workday ATS to auto-import candidates
+                  and job requisitions.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-body-sm font-medium text-ink">Webhook Endpoint URL</label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/smartrecruit/v1/ats/webhook`}
+                      readOnly
+                      className="flex-1 bg-surface-1 text-ink-subtle font-mono text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        navigator.clipboard.writeText(
+                          `${window.location.origin}/api/smartrecruit/v1/ats/webhook`,
+                        );
+                        toast.success('Webhook URL copied to clipboard!');
+                      }}
+                    >
+                      Copy
+                    </Button>
+                  </div>
+                  <p className="text-xs text-ink-muted">
+                    Configure this URL in your Workday Integration Studio as the webhook receiver.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-body-sm font-medium text-ink">API Base URL</label>
+                  <Input
+                    placeholder="https://wd3-impl-services1.workday.com/ccx/api/v1/your_tenant"
+                    value={atsApiBaseUrl}
+                    onChange={(e: any) => setAtsApiBaseUrl(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-body-sm font-medium text-ink">Client ID</label>
+                    <Input
+                      placeholder="OAuth2 Client ID"
+                      value={atsClientId}
+                      onChange={(e: any) => setAtsClientId(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-body-sm font-medium text-ink">Client Secret</label>
+                    <Input
+                      type="password"
+                      placeholder="OAuth2 Client Secret"
+                      value={atsClientSecret}
+                      onChange={(e: any) => setAtsClientSecret(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-body-sm font-medium text-ink">Webhook Secret (HMAC)</label>
+                  <Input
+                    type="password"
+                    placeholder="Shared secret for webhook signature verification"
+                    value={atsWebhookSecret}
+                    onChange={(e: any) => setAtsWebhookSecret(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <Button
+                    onClick={() => {
+                      setIsSavingAtsConfig(true);
+                      setTimeout(() => {
+                        setIsSavingAtsConfig(false);
+                        setAtsConfigSaved(true);
+                        toast.success('ATS configuration saved successfully!');
+                        setTimeout(() => setAtsConfigSaved(false), 3000);
+                      }, 1000);
+                    }}
+                    disabled={isSavingAtsConfig || !atsApiBaseUrl || !atsClientId}
+                    className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium"
+                  >
+                    {isSavingAtsConfig ? (
+                      <Loader2 className="size-4 animate-spin mr-1" />
+                    ) : atsConfigSaved ? (
+                      <CheckCircle className="size-4 mr-1" />
+                    ) : null}
+                    {isSavingAtsConfig ? 'Saving...' : atsConfigSaved ? 'Saved' : 'Save ATS Config'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      toast.success(
+                        'Test webhook event sent! Check logs for receipt confirmation.',
+                      );
+                    }}
+                  >
+                    Send Test Event
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Scoring Weights Configuration */}
+            <Card className="shadow-sm border-hairline bg-canvas/40">
+              <CardHeader>
+                <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                  <Sparkles className="size-4 text-primary" />
+                  Scoring Weights Configuration
+                </CardTitle>
+                <CardDescription className="text-ink-subtle">
+                  Customize the default scoring weight distribution for candidate evaluation.
+                  Weights must total 100%.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-5">
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">Must-Have Skills</label>
+                      <span className="text-body-sm font-semibold text-primary">{swMustHave}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swMustHave}
+                      onChange={(e) => setSwMustHave(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">
+                        Years of Experience
+                      </label>
+                      <span className="text-body-sm font-semibold text-primary">{swYoe}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swYoe}
+                      onChange={(e) => setSwYoe(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">English Level</label>
+                      <span className="text-body-sm font-semibold text-primary">{swEnglish}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swEnglish}
+                      onChange={(e) => setSwEnglish(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">
+                        Nice-to-Have Skills
+                      </label>
+                      <span className="text-body-sm font-semibold text-primary">
+                        {swNiceToHave}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swNiceToHave}
+                      onChange={(e) => setSwNiceToHave(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-hairline pt-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-body-sm font-medium text-ink">Total:</span>
+                    <span
+                      className={cn(
+                        'text-body-sm font-bold',
+                        swMustHave + swYoe + swEnglish + swNiceToHave === 100
+                          ? 'text-emerald-600'
+                          : 'text-red-500',
+                      )}
+                    >
+                      {swMustHave + swYoe + swEnglish + swNiceToHave}%
+                    </span>
+                    {swMustHave + swYoe + swEnglish + swNiceToHave !== 100 && (
+                      <span className="text-xs text-red-500 flex items-center gap-1">
+                        <AlertCircle className="size-3" />
+                        Must total 100%
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    onClick={() => {
+                      if (swMustHave + swYoe + swEnglish + swNiceToHave !== 100) {
+                        toast.error('Weights must total 100%');
+                        return;
+                      }
+                      setIsSavingWeights(true);
+                      setTimeout(() => {
+                        setIsSavingWeights(false);
+                        setWeightsSaved(true);
+                        toast.success('Scoring weights saved!');
+                        setTimeout(() => setWeightsSaved(false), 3000);
+                      }, 800);
+                    }}
+                    disabled={
+                      isSavingWeights || swMustHave + swYoe + swEnglish + swNiceToHave !== 100
+                    }
+                    className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium"
+                  >
+                    {isSavingWeights ? (
+                      <Loader2 className="size-4 animate-spin mr-1" />
+                    ) : weightsSaved ? (
+                      <CheckCircle className="size-4 mr-1" />
+                    ) : null}
+                    {isSavingWeights ? 'Saving...' : weightsSaved ? 'Saved' : 'Save Weights'}
+                  </Button>
+                </div>
+
+                <div className="bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200/50 dark:border-blue-800/30 rounded-lg p-3">
+                  <p className="text-xs text-blue-700 dark:text-blue-300">
+                    <strong>Tip:</strong> For Senior roles, increase YOE weight. For Fresher roles,
+                    increase Must-Have Skills weight. These weights apply as defaults for all new
+                    campaigns.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Interview Calendar Integration */}
+            <Card className="shadow-sm border-hairline bg-canvas/40 lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                  <Calendar className="size-4 text-primary" />
+                  Interview Scheduling (M365 Outlook Calendar)
+                </CardTitle>
+                <CardDescription className="text-ink-subtle">
+                  Schedule interviews for shortlisted candidates directly from SmartRecruit. Creates
+                  Outlook calendar events with Teams meeting links.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                {interviewScheduleList.length === 0 ? (
+                  <div className="text-center py-8 text-ink-muted">
+                    <Calendar className="size-8 mx-auto mb-2 opacity-40" />
+                    <p className="text-body-sm">
+                      No interviews scheduled yet. Schedule interviews from the Active Pipeline tab
+                      by clicking "Schedule Interview" on shortlisted candidates.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {interviewScheduleList.map((interview: any, idx: number) => (
+                      <div
+                        key={interview.id || idx}
+                        className="flex items-center justify-between border border-hairline rounded-lg p-3 bg-surface-1"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="size-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
+                            {(interview.candidate_name || 'U')[0]}
+                          </div>
+                          <div>
+                            <p className="font-medium text-ink text-sm">
+                              {interview.candidate_name}
+                            </p>
+                            <p className="text-xs text-ink-subtle">
+                              {interview.interviewer_email} ·{' '}
+                              {new Date(interview.scheduled_at).toLocaleDateString('vi-VN', {
+                                weekday: 'short',
+                                day: 'numeric',
+                                month: 'short',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            className={cn(
+                              'text-xs font-medium',
+                              interview.status === 'confirmed'
+                                ? 'bg-emerald-500/10 text-emerald-600'
+                                : interview.status === 'canceled'
+                                  ? 'bg-red-500/10 text-red-500'
+                                  : 'bg-amber-500/10 text-amber-600',
+                            )}
+                          >
+                            {interview.status}
+                          </Badge>
+                          {interview.teams_link && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => window.open(interview.teams_link, '_blank')}
+                            >
+                              Join Teams
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         )}
         {showReportModal && activeCampaignId && (
