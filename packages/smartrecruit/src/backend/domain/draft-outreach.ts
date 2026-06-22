@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { trace as otelTrace, type Span } from '@opentelemetry/api';
 import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 
@@ -29,7 +29,12 @@ type OutreachDraftResult = z.infer<typeof OutreachDraftSchema>;
 type VerificationResult = z.infer<typeof VerificationSchema>;
 
 import { smartrecruitDb } from '../db/client.ts';
-import { candidates, outreachDrafts, outreachTemplates } from '../db/schema.ts';
+import {
+  candidates,
+  interactionHistories,
+  outreachDrafts,
+  outreachTemplates,
+} from '../db/schema.ts';
 import { anonymizeCvText, deAnonymizeText } from './anonymize.ts';
 import { getModelConfig } from './model.ts';
 import { withRetry } from './retry.ts';
@@ -75,6 +80,24 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
       if (!cand) {
         throw new Error(`Candidate with ID ${input.candidateId} not found.`);
       }
+
+      // Check for recent outreach in the last 30 days (Anti-Spam check)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const recentInteractions = await db
+        .select()
+        .from(interactionHistories)
+        .where(
+          and(
+            eq(interactionHistories.tenant_id, input.session.tenant_id),
+            eq(interactionHistories.candidate_id, cand.id),
+            gte(interactionHistories.sent_at, thirtyDaysAgo),
+          ),
+        )
+        .limit(1);
+
+      const hasRecentOutreach = recentInteractions.length > 0;
 
       // 2. Fetch template
       let templ: typeof outreachTemplates.$inferSelect | undefined;
@@ -285,9 +308,15 @@ ${body}`;
       }
 
       const checkStatus = verification?.passed ? 'passed' : 'failed';
-      const errorReason = verification?.passed
+      let errorReason = verification?.passed
         ? null
         : `Failed anti-hallucination check: ${verification?.reason}`;
+
+      if (hasRecentOutreach) {
+        errorReason = errorReason
+          ? `${errorReason}. [SPAM_WARNING] Cảnh báo: Ứng viên này đã được liên hệ trong vòng 30 ngày qua.`
+          : `[SPAM_WARNING] Cảnh báo: Ứng viên này đã được liên hệ trong vòng 30 ngày qua.`;
+      }
 
       if (!draftResult) {
         throw new Error('LLM failed to generate a usable outreach draft after all retry attempts.');

@@ -22,6 +22,59 @@ import {
   SCORING_VERSION,
   SCREENING_PROMPT_VERSION,
 } from './scoring.ts';
+import { analyzeSkillGaps } from './skill-gap-analyzer.ts';
+
+// ---------------------------------------------------------------------------
+// Language Detection for bilingual CV support (Phase 3)
+// ---------------------------------------------------------------------------
+
+type CvLanguage = 'vi' | 'en' | 'mixed';
+
+function detectCvLanguage(cvText: string): CvLanguage {
+  // Vietnamese-specific character patterns (diacritics)
+  const viPattern = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/gi;
+  // Common Vietnamese keywords
+  const viKeywords =
+    /\b(và|của|trong|với|cho|này|được|là|các|có|một|những|không|từ|đến|trường|đại học|kinh nghiệm|công ty|chức vụ|kỹ năng)\b/gi;
+
+  const viCharMatches = (cvText.match(viPattern) || []).length;
+  const viKeywordMatches = (cvText.match(viKeywords) || []).length;
+  const totalChars = cvText.length;
+
+  const viRatio = (viCharMatches + viKeywordMatches * 3) / Math.max(totalChars, 1);
+
+  if (viRatio > 0.02) return viKeywordMatches > 5 ? 'vi' : 'mixed';
+  return 'en';
+}
+
+function getBilingualInstructions(cvLanguage: CvLanguage): string {
+  const baseInstructions = `You are an expert technical recruiter matching candidate profiles with approved recruitment criteria.
+
+Your task is to produce an auditable screening report, not a sales summary.
+
+Screening rules:
+1. Extract work history periods from the CV only. Use YYYY-MM when available. Use "present" only when the CV indicates an ongoing role.
+2. Extract technical skills from the CV only. Do not infer a skill unless there is a clear semantic equivalent. Example: PostgreSQL can support SQL; Next.js can support React. Do not treat unrelated adjacent tools as a match.
+3. For every must-have and nice-to-have criterion, return one match row. Each row must include an evidence snippet copied or tightly paraphrased from the CV. If there is no evidence, matched=false, cvSkill=null, and evidenceSnippet=null.
+4. Extract the candidate's English CEFR level and a supporting evidence snippet. Return null when the CV has no evidence.
+5. Do not calculate a final score. The server applies approved deterministic weights.
+6. Apply auto-flag rules and guardrail notes. If a critical missing item is present, include it in flags and gaps.
+7. Do not reward missing information. If the CV does not mention a fact, mark it as unknown or missing.
+8. Keep pros and gaps specific, evidence-based, and useful for a recruiter reviewing Gate 2.`;
+
+  if (cvLanguage === 'en') return baseInstructions;
+
+  // Add bilingual processing instructions for Vietnamese or mixed-language CVs
+  return `${baseInstructions}
+
+IMPORTANT BILINGUAL PROCESSING RULES (Áp dụng cho CV tiếng Việt / song ngữ):
+9. The candidate's CV may be written in Vietnamese or a mix of Vietnamese and English. You MUST understand and extract information from Vietnamese text accurately.
+10. When extracting evidence snippets from a Vietnamese CV, preserve the original Vietnamese text as-is in evidenceSnippet. Do NOT translate evidence snippets.
+11. Map Vietnamese job titles and skills to their English equivalents for matching purposes. For example: "Kỹ sư phần mềm" = "Software Engineer", "Quản lý dự án" = "Project Manager".
+12. Vietnamese university names should be kept in their original form (e.g., "Đại học Bách khoa TP.HCM").
+13. For pros and gaps, write in English for consistency, but reference Vietnamese terms in parentheses when helpful.
+14. Vietnamese date formats (e.g., "Tháng 3/2022", "03/2022") should be normalized to YYYY-MM format.`;
+}
 
 export interface ScreenCvInput {
   existingCandidateId?: string;
@@ -166,22 +219,14 @@ export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
       }
 
       const model = getModelConfig();
+      // Detect CV language for bilingual prompt support (Phase 3)
+      const cvLanguage = detectCvLanguage(cvContentText);
+      span.setAttribute('cv_language', cvLanguage);
+
       const agent = new Agent({
         id: 'smartrecruit.cvScreener',
         name: 'CV Screener',
-        instructions: `You are an expert technical recruiter matching candidate profiles with approved recruitment criteria.
-
-Your task is to produce an auditable screening report, not a sales summary.
-
-Screening rules:
-1. Extract work history periods from the CV only. Use YYYY-MM when available. Use "present" only when the CV indicates an ongoing role.
-2. Extract technical skills from the CV only. Do not infer a skill unless there is a clear semantic equivalent. Example: PostgreSQL can support SQL; Next.js can support React. Do not treat unrelated adjacent tools as a match.
-3. For every must-have and nice-to-have criterion, return one match row. Each row must include an evidence snippet copied or tightly paraphrased from the CV. If there is no evidence, matched=false, cvSkill=null, and evidenceSnippet=null.
-4. Extract the candidate's English CEFR level and a supporting evidence snippet. Return null when the CV has no evidence.
-5. Do not calculate a final score. The server applies approved deterministic weights.
-6. Apply auto-flag rules and guardrail notes. If a critical missing item is present, include it in flags and gaps.
-7. Do not reward missing information. If the CV does not mention a fact, mark it as unknown or missing.
-8. Keep pros and gaps specific, evidence-based, and useful for a recruiter reviewing Gate 2.`,
+        instructions: getBilingualInstructions(cvLanguage),
         model,
       });
 
@@ -297,6 +342,32 @@ ${anonymizedCvText}`,
           niceToHave: crit.weight_nice_to_have,
         },
       });
+
+      // Get skill gaps of the team and compare with candidate's skills
+      const gapsInfo = await analyzeSkillGaps(crit.job_title, input.session.tenant_id);
+      const teamGaps = gapsInfo.skillsGap || [];
+      const solvedTeamGaps: string[] = [];
+      const missingTeamGaps: string[] = [];
+
+      for (const gap of teamGaps) {
+        const hasSkill = parsed.skills.some(
+          (s) =>
+            s.toLowerCase() === gap.toLowerCase() ||
+            s.toLowerCase().includes(gap.toLowerCase()) ||
+            gap.toLowerCase().includes(s.toLowerCase()),
+        );
+
+        if (hasSkill) {
+          solvedTeamGaps.push(gap);
+        } else {
+          missingTeamGaps.push(gap);
+        }
+      }
+
+      // Calculate bonus: +5% if 1 gap solved, +10% if 2 or more gaps solved.
+      const bonus = solvedTeamGaps.length >= 2 ? 10 : solvedTeamGaps.length === 1 ? 5 : 0;
+      const finalFitScore = Math.min(100, (deterministic.fitScore || 0) + bonus);
+
       const modelRecord = model as unknown as {
         id?: string;
         providerId?: string;
@@ -323,12 +394,19 @@ ${anonymizedCvText}`,
         mustHaveMatches: deterministic.mustHaveMatches,
         niceToHaveMatches: deterministic.niceToHaveMatches,
         englishEvidence: parsed.fitAnalysis.englishEvidence ?? null,
-        scoreBreakdown: deterministic.scoreBreakdown,
+        scoreBreakdown: {
+          ...deterministic.scoreBreakdown,
+          teamSkillGapBonus: bonus,
+        },
         flags: [...new Set([...parsed.fitAnalysis.flags, ...deterministic.flags])],
         piiMapping,
+        solvedTeamGaps,
+        missingTeamGaps,
+        teamSkillGapBonus: bonus,
+        originalFitScore: deterministic.fitScore,
       };
 
-      const isShortlisted = deterministic.fitScore >= 70;
+      const isShortlisted = finalFitScore >= 70;
       const status = isShortlisted ? 'shortlisted' : 'screened';
 
       let savedId!: string;
@@ -350,7 +428,7 @@ ${anonymizedCvText}`,
                 cv_path: input.cvPath ?? null,
                 cv_text: cvContentText,
                 status,
-                fit_score: deterministic.fitScore,
+                fit_score: finalFitScore,
                 screening_report: screeningReport,
                 updated_at: new Date(),
               })
@@ -372,7 +450,7 @@ ${anonymizedCvText}`,
               cv_path: input.cvPath ?? null,
               cv_text: cvContentText,
               status,
-              fit_score: deterministic.fitScore,
+              fit_score: finalFitScore,
               screening_report: screeningReport,
             });
             savedId = id;
@@ -388,7 +466,7 @@ ${anonymizedCvText}`,
           tenant_id: input.session.tenant_id,
           display_name: input.candidateName,
           email: input.candidateEmail,
-          fit_score: deterministic.fitScore,
+          fit_score: finalFitScore,
           cv_skills: parsed.skills.join(', '),
           cv_text: cvContentText,
         }).catch((err) => {
@@ -396,7 +474,7 @@ ${anonymizedCvText}`,
         });
       }
 
-      span.setAttribute('fit_score', deterministic.fitScore);
+      span.setAttribute('fit_score', finalFitScore);
       span.setAttribute('status', status);
 
       span.end();
@@ -405,7 +483,7 @@ ${anonymizedCvText}`,
         displayName: input.candidateName,
         email: input.candidateEmail,
         status,
-        fitScore: deterministic.fitScore,
+        fitScore: finalFitScore,
         totalYoe,
         report: screeningReport,
       };

@@ -3,7 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv } from '@seta/core';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -13,10 +13,13 @@ import {
   campaigns,
   candidates,
   criteria,
+  interactionHistories,
+  interviewSchedules,
   outreachDrafts,
   outreachTemplates,
 } from '../db/schema.ts';
 import {
+  addCandidatesToCampaign,
   createSmartrecruitCampaign,
   getCampaignKPIs,
   getCampaignView,
@@ -199,6 +202,92 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     }
 
     return c.json(view);
+  });
+
+  app.post('/api/smartrecruit/v1/campaigns/:id/pool-search', async (c) => {
+    const session = c.get('user');
+    const campaignId = c.req.param('id');
+    const parsed = screenCandidatePoolSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const [camp] = await db
+      .select({ criteria_id: campaigns.criteria_id })
+      .from(campaigns)
+      .where(and(eq(campaigns.id, campaignId), eq(campaigns.tenant_id, session.tenant_id)))
+      .limit(1);
+
+    if (!camp?.criteria_id) {
+      return c.json(
+        { error: 'NOT_FOUND', message: 'Campaign or screening criteria not found' },
+        404,
+      );
+    }
+
+    const poolResults = await screenCandidatePool({
+      criteriaId: camp.criteria_id,
+      limit: parsed.data.limit,
+      includeAlreadyScreened: true,
+      session,
+    });
+
+    const candidateIds = poolResults.results.map((r) => r.id);
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const recentOutreaches =
+      candidateIds.length > 0
+        ? await db
+            .select({ candidate_id: interactionHistories.candidate_id })
+            .from(interactionHistories)
+            .where(
+              and(
+                eq(interactionHistories.tenant_id, session.tenant_id),
+                inArray(interactionHistories.candidate_id, candidateIds),
+                gte(interactionHistories.sent_at, thirtyDaysAgo),
+              ),
+            )
+        : [];
+
+    const recentOutreachSet = new Set(recentOutreaches.map((row) => row.candidate_id));
+
+    const finalResults = poolResults.results.map((r) => ({
+      ...r,
+      hasRecentOutreach: recentOutreachSet.has(r.id),
+    }));
+
+    return c.json({
+      criteriaId: poolResults.criteriaId,
+      screened: poolResults.screened,
+      skipped: poolResults.skipped,
+      results: finalResults,
+    });
+  });
+
+  app.post('/api/smartrecruit/v1/campaigns/:id/add-pool-candidates', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+    const campaignId = c.req.param('id');
+
+    const bodySchema = z.object({
+      candidateIds: z.array(z.string().uuid()),
+    });
+
+    const parsed = bodySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    await addCandidatesToCampaign({
+      campaignId,
+      tenantId: session.tenant_id,
+      candidateIds: parsed.data.candidateIds,
+      source: 'mock_pool',
+    });
+
+    return c.json({ success: true });
   });
 
   app.patch(
@@ -783,13 +872,191 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
   });
 
   app.get('/api/smartrecruit/v1/skill-gaps', async (c) => {
+    const session = c.get('user');
+    const tenantId = session.tenant_id;
     const jobTitle = c.req.query('jobTitle') || '';
-    const result = analyzeSkillGaps(jobTitle);
+    const result = await analyzeSkillGaps(jobTitle, tenantId);
     return c.json(result);
   });
 
   app.get('/api/smartrecruit/v1/sla-tracker', async (c) => {
     const result = getSLATracker();
     return c.json({ tracker: result });
+  });
+
+  // =========================================================================
+  // Interview Scheduling Endpoints (Phase 3)
+  // =========================================================================
+
+  const scheduleInterviewSchema = z.object({
+    campaignCandidateId: z.string().uuid(),
+    candidateId: z.string().uuid(),
+    campaignId: z.string().uuid(),
+    interviewerEmail: z.string().email(),
+    interviewerName: z.string().optional(),
+    candidateEmail: z.string().email(),
+    candidateName: z.string(),
+    scheduledAt: z.string(),
+    durationMinutes: z.number().min(15).max(480).optional(),
+    notes: z.string().optional(),
+  });
+
+  app.post('/api/smartrecruit/v1/interviews/schedule', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const body = await c.req.json();
+    const parsed = scheduleInterviewSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const id = crypto.randomUUID();
+
+    const [created] = await db
+      .insert(interviewSchedules)
+      .values({
+        id,
+        tenant_id: session.tenant_id,
+        campaign_candidate_id: parsed.data.campaignCandidateId,
+        candidate_id: parsed.data.candidateId,
+        campaign_id: parsed.data.campaignId,
+        interviewer_email: parsed.data.interviewerEmail,
+        interviewer_name: parsed.data.interviewerName ?? null,
+        candidate_email: parsed.data.candidateEmail,
+        candidate_name: parsed.data.candidateName,
+        scheduled_at: new Date(parsed.data.scheduledAt),
+        duration_minutes: parsed.data.durationMinutes ?? 60,
+        status: 'pending',
+        notes: parsed.data.notes ?? null,
+        created_by: session.user_id,
+      })
+      .returning();
+
+    return c.json(created, 201);
+  });
+
+  app.get('/api/smartrecruit/v1/interviews', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_ACCESS);
+
+    const campaignId = c.req.query('campaignId');
+    const db = smartrecruitDb();
+
+    const conditions = [eq(interviewSchedules.tenant_id, session.tenant_id)];
+    if (campaignId) {
+      conditions.push(eq(interviewSchedules.campaign_id, campaignId));
+    }
+
+    const results = await db
+      .select()
+      .from(interviewSchedules)
+      .where(and(...conditions))
+      .orderBy(desc(interviewSchedules.scheduled_at));
+
+    return c.json({ interviews: results });
+  });
+
+  app.post('/api/smartrecruit/v1/interviews/:id/cancel', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const interviewId = c.req.param('id');
+    const db = smartrecruitDb();
+
+    const [updated] = await db
+      .update(interviewSchedules)
+      .set({
+        status: 'canceled',
+        updated_at: new Date(),
+      })
+      .where(
+        and(
+          eq(interviewSchedules.id, interviewId),
+          eq(interviewSchedules.tenant_id, session.tenant_id),
+        ),
+      )
+      .returning();
+
+    if (!updated) {
+      return c.json({ error: 'Interview schedule not found' }, 404);
+    }
+
+    return c.json(updated);
+  });
+
+  // =========================================================================
+  // ATS Webhook Endpoint (Phase 3)
+  // =========================================================================
+
+  app.post('/api/smartrecruit/v1/ats/webhook', async (c) => {
+    const body = await c.req.json();
+
+    // Log webhook receipt for audit trail
+    console.info('[ATS Webhook] Received event:', body?.eventType, body?.eventId);
+
+    // In production, verify webhook signature from headers:
+    // const signature = c.req.header('x-workday-signature');
+    // await verifyWebhookSignature(rawBody, signature, config.webhookSecret);
+
+    return c.json({
+      received: true,
+      eventId: body?.eventId || 'unknown',
+      message: 'Webhook received. ATS integration is configured in Enterprise Settings.',
+    });
+  });
+
+  // =========================================================================
+  // Scoring Weights Configuration Endpoint (Phase 3)
+  // =========================================================================
+
+  const updateScoringWeightsSchema = z.object({
+    criteriaId: z.string().uuid(),
+    weightMustHaveSkills: z.number().min(0).max(100),
+    weightYoe: z.number().min(0).max(100),
+    weightEnglish: z.number().min(0).max(100),
+    weightNiceToHave: z.number().min(0).max(100),
+  });
+
+  app.put('/api/smartrecruit/v1/criteria/:id/scoring-weights', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const criteriaId = c.req.param('id');
+    const body = await c.req.json();
+    const parsed = updateScoringWeightsSchema.safeParse({ ...body, criteriaId });
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    const total =
+      parsed.data.weightMustHaveSkills +
+      parsed.data.weightYoe +
+      parsed.data.weightEnglish +
+      parsed.data.weightNiceToHave;
+
+    if (total !== 100) {
+      return c.json({ error: `Scoring weights must sum to 100, got ${total}` }, 400);
+    }
+
+    const db = smartrecruitDb();
+    const [updated] = await db
+      .update(criteria)
+      .set({
+        weight_must_have_skills: parsed.data.weightMustHaveSkills,
+        weight_yoe: parsed.data.weightYoe,
+        weight_english: parsed.data.weightEnglish,
+        weight_nice_to_have: parsed.data.weightNiceToHave,
+        updated_at: new Date(),
+      })
+      .where(and(eq(criteria.id, criteriaId), eq(criteria.tenant_id, session.tenant_id)))
+      .returning();
+
+    if (!updated) {
+      return c.json({ error: 'Criteria not found' }, 404);
+    }
+
+    return c.json(updated);
   });
 }

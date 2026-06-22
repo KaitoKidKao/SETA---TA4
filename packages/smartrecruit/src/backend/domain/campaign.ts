@@ -1,13 +1,14 @@
 import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
 import { getPool } from '@seta/shared-db';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, gte, inArray } from 'drizzle-orm';
 import { smartrecruitDb } from '../db/client.ts';
 import {
   campaignAiUsage,
   campaignCandidates,
   campaigns,
   candidates,
+  interactionHistories,
   outreachDrafts,
 } from '../db/schema.ts';
 import type { SmartrecruitCandidateInput } from '../workflows/smartrecruit-workflow.ts';
@@ -55,6 +56,7 @@ export interface CampaignView {
     };
     candidate: typeof candidates.$inferSelect | null;
     draft: typeof outreachDrafts.$inferSelect | null;
+    hasRecentOutreach?: boolean;
   }>;
 }
 
@@ -188,6 +190,25 @@ export async function getCampaignView(args: {
           )
       : [];
 
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const recentOutreaches =
+    candidateIds.length > 0
+      ? await db
+          .select({ candidate_id: interactionHistories.candidate_id })
+          .from(interactionHistories)
+          .where(
+            and(
+              eq(interactionHistories.tenant_id, args.tenantId),
+              inArray(interactionHistories.candidate_id, candidateIds),
+              gte(interactionHistories.sent_at, thirtyDaysAgo),
+            ),
+          )
+      : [];
+
+  const recentOutreachSet = new Set(recentOutreaches.map((row) => row.candidate_id));
+
   const candidateById = new Map(candidateRows.map((row) => [row.id, row]));
   const draftById = new Map(draftRows.map((row) => [row.id, row]));
 
@@ -200,6 +221,7 @@ export async function getCampaignView(args: {
       },
       candidate: candidateById.get(row.candidate_id) ?? null,
       draft: row.draft_id ? (draftById.get(row.draft_id) ?? null) : null,
+      hasRecentOutreach: recentOutreachSet.has(row.candidate_id),
     })),
   };
 }

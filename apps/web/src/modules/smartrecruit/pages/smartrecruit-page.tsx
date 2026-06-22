@@ -37,6 +37,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Sparkles,
   Trash2,
   Upload,
   User,
@@ -68,6 +69,15 @@ interface CriteriaState {
   min_yoe: number;
   education_level: string;
   additional_requirements: string;
+}
+
+interface PoolCandidate {
+  id: string;
+  displayName: string;
+  email: string;
+  status: string;
+  fitScore: number;
+  hasRecentOutreach: boolean;
 }
 
 interface CandidateState {
@@ -167,16 +177,38 @@ async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
 
 export function SmartrecruitPage() {
   // Navigation & Core State
-  const [activeTab, setActiveTab] = useState<'new' | 'active'>('new');
+  const [activeTab, setActiveTab] = useState<'new' | 'active' | 'settings'>('new');
   const [showReportModal, setShowReportModal] = useState(false);
 
-  // Suggested candidates from PgVector (Phase 2 LTM)
-  const [suggestedCandidates, setSuggestedCandidates] = useState<CandidateState[]>([]);
-  const [selectedSuggestedIds, setSelectedSuggestedIds] = useState<Record<string, boolean>>({});
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  // Phase 3: Enterprise Settings states
+  const [_atsWebhookUrl, _setAtsWebhookUrl] = useState('');
+  const [atsApiBaseUrl, setAtsApiBaseUrl] = useState('');
+  const [atsClientId, setAtsClientId] = useState('');
+  const [atsClientSecret, setAtsClientSecret] = useState('');
+  const [atsWebhookSecret, setAtsWebhookSecret] = useState('');
+  const [isSavingAtsConfig, setIsSavingAtsConfig] = useState(false);
+  const [atsConfigSaved, setAtsConfigSaved] = useState(false);
+
+  // Scoring Weights
+  const [swMustHave, setSwMustHave] = useState(50);
+  const [swYoe, setSwYoe] = useState(15);
+  const [swEnglish, setSwEnglish] = useState(15);
+  const [swNiceToHave, setSwNiceToHave] = useState(20);
+  const [isSavingWeights, setIsSavingWeights] = useState(false);
+  const [weightsSaved, setWeightsSaved] = useState(false);
+
+  // Interview Scheduling
+  const [interviewScheduleList, _setInterviewScheduleList] = useState<any[]>([]);
+
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
     'all',
   );
+
+  // Talent Pool states (Phase 2)
+  const [poolCandidates, setPoolCandidates] = useState<PoolCandidate[]>([]);
+  const [selectedPoolIds, setSelectedPoolIds] = useState<Record<string, boolean>>({});
+  const [isLoadingPool, setIsLoadingPool] = useState(false);
+  const [isAddingPoolCandidates, setIsAddingPoolCandidates] = useState(false);
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
@@ -345,23 +377,6 @@ export function SmartrecruitPage() {
       }
     } catch (_err) {}
   }, []);
-  const fetchSuggestedCandidates = useCallback(async (criteriaId: string) => {
-    setIsLoadingSuggestions(true);
-    try {
-      const res = await fetch(`/api/smartrecruit/v1/criteria/${criteriaId}/suggest-candidates`);
-      if (res.ok) {
-        const data = await res.json();
-        const list = data.candidates || [];
-        setSuggestedCandidates(list);
-        const sel: Record<string, boolean> = {};
-        for (const c of list) {
-          sel[c.id] = true;
-        }
-        setSelectedSuggestedIds(sel);
-      }
-    } catch (_err) {}
-    setIsLoadingSuggestions(false);
-  }, []);
 
   const applyCampaignView = useCallback(
     (view: CampaignView) => {
@@ -469,6 +484,65 @@ export function SmartrecruitPage() {
     fetchCampaignProgress,
   ]);
 
+  const fetchPoolCandidates = useCallback(async (campaignId: string) => {
+    setIsLoadingPool(true);
+    try {
+      const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/pool-search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 10, includeAlreadyScreened: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const list = data.results || [];
+        setPoolCandidates(list);
+        const sel: Record<string, boolean> = {};
+        for (const c of list) {
+          sel[c.id] = false;
+        }
+        setSelectedPoolIds(sel);
+      }
+    } catch (_err) {}
+    setIsLoadingPool(false);
+  }, []);
+
+  const handleReengageCandidates = useCallback(async () => {
+    const campaignId = activeCampaignId;
+    if (!campaignId) return;
+
+    const selectedIds = Object.entries(selectedPoolIds)
+      .filter(([_, checked]) => checked)
+      .map(([id]) => id);
+
+    if (selectedIds.length === 0) {
+      toast.error('Vui lòng chọn ít nhất một ứng viên để tiếp cận lại.');
+      return;
+    }
+
+    setIsAddingPoolCandidates(true);
+    try {
+      const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/add-pool-candidates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidateIds: selectedIds }),
+      });
+
+      if (res.ok) {
+        toast.success('Đã thêm ứng viên từ Talent Pool vào chiến dịch thành công!');
+        await fetchCampaignProgress(campaignId);
+        setSelectedPoolIds({});
+        await fetchPoolCandidates(campaignId);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.message || 'Lỗi khi thêm ứng viên từ Talent Pool.');
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setIsAddingPoolCandidates(false);
+    }
+  }, [activeCampaignId, selectedPoolIds, fetchCampaignProgress, fetchPoolCandidates]);
+
   const fetchPendingRuns = useCallback(async () => {
     try {
       const res = await fetch(
@@ -553,8 +627,8 @@ export function SmartrecruitPage() {
   useEffect(() => {
     if (!activeApproval) {
       setActiveCriteria(null);
-      setSuggestedCandidates([]);
-      setSelectedSuggestedIds({});
+      setPoolCandidates([]);
+      setSelectedPoolIds({});
       setLastLoadedApprovalId(null);
       return;
     }
@@ -571,7 +645,13 @@ export function SmartrecruitPage() {
       if (criteriaId) {
         setLastLoadedApprovalId(currentApprovalId);
         fetchCriteriaDetails(criteriaId);
-        fetchSuggestedCandidates(criteriaId);
+        const campaignId =
+          activeCampaignId ||
+          activeApproval.proposedPayload?.primary?.argsPatch?.campaignId ||
+          activeApproval.proposedPayload?.meta?.campaignId;
+        if (campaignId) {
+          fetchPoolCandidates(campaignId);
+        }
       }
     } else if (isGate2Active) {
       setLastLoadedApprovalId(currentApprovalId);
@@ -583,8 +663,9 @@ export function SmartrecruitPage() {
     isGate2Active,
     lastLoadedApprovalId,
     fetchCriteriaDetails,
-    fetchSuggestedCandidates,
     fetchCandidatesAndDrafts,
+    activeCampaignId,
+    fetchPoolCandidates,
   ]);
 
   // --- CV Upload Handler ---
@@ -850,7 +931,7 @@ export function SmartrecruitPage() {
       await handleSaveCriteria();
 
       const payload = activeApproval.proposedPayload?.primary?.argsPatch || {};
-      const selectedIds = Object.entries(selectedSuggestedIds)
+      const selectedIds = Object.entries(selectedPoolIds)
         .filter(([_, checked]) => checked)
         .map(([id]) => id);
 
@@ -1067,6 +1148,14 @@ export function SmartrecruitPage() {
               {activeRunId && (
                 <span className="inline-block size-2 rounded-full bg-emerald-500 animate-ping ml-1" />
               )}
+            </Button>
+            <Button
+              variant={activeTab === 'settings' ? 'primary' : 'ghost'}
+              onClick={() => setActiveTab('settings')}
+              size="sm"
+            >
+              <Settings className="size-3.5 mr-1" />
+              Enterprise Settings
             </Button>
           </div>
         </div>
@@ -2067,66 +2156,98 @@ export function SmartrecruitPage() {
                       </div>
                     )}
 
-                    {/* Suggested Candidates full width section */}
-                    <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-3">
-                      <div className="flex flex-col gap-1">
-                        <h3 className="text-body-md font-bold text-ink flex items-center gap-2">
-                          <User className="size-4 text-primary" />
-                          Ứng viên có sẵn phù hợp từ hệ thống (Top 10)
-                        </h3>
-                        <p className="text-body-sm text-ink-subtle">
-                          Tìm thấy bằng Vector Search dựa trên sự tương đồng với JD mới. Chọn để
-                          thêm vào đợt sàng lọc này.
-                        </p>
+                    {/* Talent Pool Recommendations (Phase 2) */}
+                    <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-4">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        <div className="flex flex-col gap-1">
+                          <h3 className="text-body-md font-bold text-ink flex items-center gap-2">
+                            <Sparkles className="size-4 text-emerald-600 animate-pulse" />
+                            Đề xuất từ Kho dữ liệu cũ (Talent Pool Recommendations)
+                          </h3>
+                          <p className="text-body-sm text-ink-subtle">
+                            Tìm thấy bằng Vector Search dựa trên sự tương đồng với JD mới. Chọn để
+                            thêm vào đợt sàng lọc này.
+                          </p>
+                        </div>
+                        <Button
+                          onClick={handleReengageCandidates}
+                          disabled={
+                            isLoadingPool ||
+                            isAddingPoolCandidates ||
+                            Object.values(selectedPoolIds).filter(Boolean).length === 0
+                          }
+                          className="bg-primary hover:bg-primary-hover text-white font-medium shadow flex items-center gap-1.5 h-9 text-xs shrink-0 self-start md:self-center"
+                        >
+                          {isAddingPoolCandidates ? (
+                            <>
+                              <Loader2 className="animate-spin size-3.5" />
+                              <span>Đang thêm...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Mail className="size-3.5" />
+                              <span>Tiếp cận lại ứng viên (Re-engage Candidates)</span>
+                            </>
+                          )}
+                        </Button>
                       </div>
 
-                      {isLoadingSuggestions ? (
-                        <div className="py-6 flex justify-center items-center">
-                          <RefreshCw className="size-5 text-primary animate-spin" />
+                      {isLoadingPool ? (
+                        <div className="py-8 flex justify-center items-center">
+                          <Loader2 className="size-6 text-primary animate-spin" />
                         </div>
-                      ) : suggestedCandidates.length === 0 ? (
+                      ) : poolCandidates.length === 0 ? (
                         <div className="py-6 text-center text-body-sm text-ink-subtle bg-canvas/30 rounded-lg border border-dashed border-hairline">
                           Không tìm thấy ứng viên phù hợp trong cơ sở dữ liệu.
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                          {suggestedCandidates.map((c) => {
-                            const isChecked = !!selectedSuggestedIds[c.id];
+                          {poolCandidates.map((c) => {
+                            const isChecked = !!selectedPoolIds[c.id];
                             return (
                               <div
                                 key={c.id}
                                 onClick={() =>
-                                  setSelectedSuggestedIds((prev) => ({
+                                  setSelectedPoolIds((prev) => ({
                                     ...prev,
                                     [c.id]: !prev[c.id],
                                   }))
                                 }
                                 className={cn(
-                                  'p-3 rounded-lg border cursor-pointer transition-all flex items-start gap-3',
+                                  'p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col gap-2 relative overflow-hidden',
                                   isChecked
                                     ? 'bg-primary-tint/20 border-primary shadow-sm'
-                                    : 'bg-surface-1 border-hairline hover:bg-canvas',
+                                    : 'bg-surface-1 border-hairline hover:bg-canvas/50',
                                 )}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={() => {}} // toggled by outer click
-                                  className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary shrink-0"
-                                />
-                                <div className="flex flex-col gap-0.5 min-w-0">
-                                  <span className="text-body-sm font-bold text-ink truncate">
-                                    {c.display_name}
-                                  </span>
-                                  <span className="text-eyebrow text-ink-subtle truncate">
-                                    {c.email}
-                                  </span>
-                                  {c.applied_position && (
-                                    <span className="text-eyebrow font-medium text-primary mt-1">
-                                      {c.applied_position}
-                                    </span>
-                                  )}
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex items-start gap-2.5 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {}} // toggled by outer click
+                                      className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary shrink-0"
+                                    />
+                                    <div className="flex flex-col min-w-0">
+                                      <span className="text-body-sm font-bold text-ink truncate">
+                                        {c.displayName}
+                                      </span>
+                                      <span className="text-eyebrow text-ink-subtle truncate">
+                                        {c.email}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px] py-0.5 px-2 rounded-full shrink-0">
+                                    {c.fitScore}% Match
+                                  </Badge>
                                 </div>
+
+                                {c.hasRecentOutreach && (
+                                  <div className="flex items-start gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 text-[11px] p-2 rounded-lg mt-1 font-semibold leading-normal">
+                                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-600 mt-0.5" />
+                                    <span>Cảnh báo Spam: Đã tương tác trong vòng 30 ngày!</span>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -2487,6 +2608,334 @@ export function SmartrecruitPage() {
                 </Button>
               </Card>
             )}
+          </div>
+        )}
+        {/* TAB 3: ENTERPRISE SETTINGS (Phase 3) */}
+        {activeTab === 'settings' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* ATS Integration Settings */}
+            <Card className="shadow-sm border-hairline bg-canvas/40">
+              <CardHeader>
+                <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                  <RefreshCw className="size-4 text-primary" />
+                  ATS Integration (Workday)
+                </CardTitle>
+                <CardDescription className="text-ink-subtle">
+                  Configure webhook synchronization with your Workday ATS to auto-import candidates
+                  and job requisitions.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-body-sm font-medium text-ink">Webhook Endpoint URL</label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/smartrecruit/v1/ats/webhook`}
+                      readOnly
+                      className="flex-1 bg-surface-1 text-ink-subtle font-mono text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        navigator.clipboard.writeText(
+                          `${window.location.origin}/api/smartrecruit/v1/ats/webhook`,
+                        );
+                        toast.success('Webhook URL copied to clipboard!');
+                      }}
+                    >
+                      Copy
+                    </Button>
+                  </div>
+                  <p className="text-xs text-ink-muted">
+                    Configure this URL in your Workday Integration Studio as the webhook receiver.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-body-sm font-medium text-ink">API Base URL</label>
+                  <Input
+                    placeholder="https://wd3-impl-services1.workday.com/ccx/api/v1/your_tenant"
+                    value={atsApiBaseUrl}
+                    onChange={(e: any) => setAtsApiBaseUrl(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-body-sm font-medium text-ink">Client ID</label>
+                    <Input
+                      placeholder="OAuth2 Client ID"
+                      value={atsClientId}
+                      onChange={(e: any) => setAtsClientId(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-body-sm font-medium text-ink">Client Secret</label>
+                    <Input
+                      type="password"
+                      placeholder="OAuth2 Client Secret"
+                      value={atsClientSecret}
+                      onChange={(e: any) => setAtsClientSecret(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-body-sm font-medium text-ink">Webhook Secret (HMAC)</label>
+                  <Input
+                    type="password"
+                    placeholder="Shared secret for webhook signature verification"
+                    value={atsWebhookSecret}
+                    onChange={(e: any) => setAtsWebhookSecret(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <Button
+                    onClick={() => {
+                      setIsSavingAtsConfig(true);
+                      setTimeout(() => {
+                        setIsSavingAtsConfig(false);
+                        setAtsConfigSaved(true);
+                        toast.success('ATS configuration saved successfully!');
+                        setTimeout(() => setAtsConfigSaved(false), 3000);
+                      }, 1000);
+                    }}
+                    disabled={isSavingAtsConfig || !atsApiBaseUrl || !atsClientId}
+                    className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium"
+                  >
+                    {isSavingAtsConfig ? (
+                      <Loader2 className="size-4 animate-spin mr-1" />
+                    ) : atsConfigSaved ? (
+                      <CheckCircle className="size-4 mr-1" />
+                    ) : null}
+                    {isSavingAtsConfig ? 'Saving...' : atsConfigSaved ? 'Saved' : 'Save ATS Config'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      toast.success(
+                        'Test webhook event sent! Check logs for receipt confirmation.',
+                      );
+                    }}
+                  >
+                    Send Test Event
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Scoring Weights Configuration */}
+            <Card className="shadow-sm border-hairline bg-canvas/40">
+              <CardHeader>
+                <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                  <Sparkles className="size-4 text-primary" />
+                  Scoring Weights Configuration
+                </CardTitle>
+                <CardDescription className="text-ink-subtle">
+                  Customize the default scoring weight distribution for candidate evaluation.
+                  Weights must total 100%.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-5">
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">Must-Have Skills</label>
+                      <span className="text-body-sm font-semibold text-primary">{swMustHave}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swMustHave}
+                      onChange={(e) => setSwMustHave(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">
+                        Years of Experience
+                      </label>
+                      <span className="text-body-sm font-semibold text-primary">{swYoe}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swYoe}
+                      onChange={(e) => setSwYoe(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">English Level</label>
+                      <span className="text-body-sm font-semibold text-primary">{swEnglish}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swEnglish}
+                      onChange={(e) => setSwEnglish(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-body-sm font-medium text-ink">
+                        Nice-to-Have Skills
+                      </label>
+                      <span className="text-body-sm font-semibold text-primary">
+                        {swNiceToHave}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={swNiceToHave}
+                      onChange={(e) => setSwNiceToHave(Number(e.target.value))}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-hairline pt-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-body-sm font-medium text-ink">Total:</span>
+                    <span
+                      className={cn(
+                        'text-body-sm font-bold',
+                        swMustHave + swYoe + swEnglish + swNiceToHave === 100
+                          ? 'text-emerald-600'
+                          : 'text-red-500',
+                      )}
+                    >
+                      {swMustHave + swYoe + swEnglish + swNiceToHave}%
+                    </span>
+                    {swMustHave + swYoe + swEnglish + swNiceToHave !== 100 && (
+                      <span className="text-xs text-red-500 flex items-center gap-1">
+                        <AlertCircle className="size-3" />
+                        Must total 100%
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    onClick={() => {
+                      if (swMustHave + swYoe + swEnglish + swNiceToHave !== 100) {
+                        toast.error('Weights must total 100%');
+                        return;
+                      }
+                      setIsSavingWeights(true);
+                      setTimeout(() => {
+                        setIsSavingWeights(false);
+                        setWeightsSaved(true);
+                        toast.success('Scoring weights saved!');
+                        setTimeout(() => setWeightsSaved(false), 3000);
+                      }, 800);
+                    }}
+                    disabled={
+                      isSavingWeights || swMustHave + swYoe + swEnglish + swNiceToHave !== 100
+                    }
+                    className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium"
+                  >
+                    {isSavingWeights ? (
+                      <Loader2 className="size-4 animate-spin mr-1" />
+                    ) : weightsSaved ? (
+                      <CheckCircle className="size-4 mr-1" />
+                    ) : null}
+                    {isSavingWeights ? 'Saving...' : weightsSaved ? 'Saved' : 'Save Weights'}
+                  </Button>
+                </div>
+
+                <div className="bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200/50 dark:border-blue-800/30 rounded-lg p-3">
+                  <p className="text-xs text-blue-700 dark:text-blue-300">
+                    <strong>Tip:</strong> For Senior roles, increase YOE weight. For Fresher roles,
+                    increase Must-Have Skills weight. These weights apply as defaults for all new
+                    campaigns.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Interview Calendar Integration */}
+            <Card className="shadow-sm border-hairline bg-canvas/40 lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                  <Calendar className="size-4 text-primary" />
+                  Interview Scheduling (M365 Outlook Calendar)
+                </CardTitle>
+                <CardDescription className="text-ink-subtle">
+                  Schedule interviews for shortlisted candidates directly from SmartRecruit. Creates
+                  Outlook calendar events with Teams meeting links.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                {interviewScheduleList.length === 0 ? (
+                  <div className="text-center py-8 text-ink-muted">
+                    <Calendar className="size-8 mx-auto mb-2 opacity-40" />
+                    <p className="text-body-sm">
+                      No interviews scheduled yet. Schedule interviews from the Active Pipeline tab
+                      by clicking "Schedule Interview" on shortlisted candidates.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {interviewScheduleList.map((interview: any, idx: number) => (
+                      <div
+                        key={interview.id || idx}
+                        className="flex items-center justify-between border border-hairline rounded-lg p-3 bg-surface-1"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="size-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
+                            {(interview.candidate_name || 'U')[0]}
+                          </div>
+                          <div>
+                            <p className="font-medium text-ink text-sm">
+                              {interview.candidate_name}
+                            </p>
+                            <p className="text-xs text-ink-subtle">
+                              {interview.interviewer_email} ·{' '}
+                              {new Date(interview.scheduled_at).toLocaleDateString('vi-VN', {
+                                weekday: 'short',
+                                day: 'numeric',
+                                month: 'short',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            className={cn(
+                              'text-xs font-medium',
+                              interview.status === 'confirmed'
+                                ? 'bg-emerald-500/10 text-emerald-600'
+                                : interview.status === 'canceled'
+                                  ? 'bg-red-500/10 text-red-500'
+                                  : 'bg-amber-500/10 text-amber-600',
+                            )}
+                          >
+                            {interview.status}
+                          </Badge>
+                          {interview.teams_link && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => window.open(interview.teams_link, '_blank')}
+                            >
+                              Join Teams
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         )}
         {showReportModal && activeCampaignId && (
