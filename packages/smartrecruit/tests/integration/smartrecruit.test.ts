@@ -193,18 +193,21 @@ describe('SmartRecruit Integration Tests', () => {
                   cvSkill: 'React',
                   matched: true,
                   justification: 'Has React experience',
+                  evidenceSnippet: 'React developer for 3 years',
                 },
                 {
                   jdSkill: 'Node.js',
                   cvSkill: 'Node.js',
                   matched: true,
                   justification: 'Has Node.js experience',
+                  evidenceSnippet: 'Backend Node.js stack',
                 },
                 {
                   jdSkill: 'SQL',
                   cvSkill: 'SQL',
                   matched: true,
                   justification: 'Has SQL experience',
+                  evidenceSnippet: 'using SQL databases',
                 },
               ],
               niceToHaveMatches: [
@@ -213,11 +216,13 @@ describe('SmartRecruit Integration Tests', () => {
                   cvSkill: null,
                   matched: false,
                   justification: 'No Docker experience',
+                  evidenceSnippet: null,
                 },
               ],
               fitScore: 85,
               pros: ['Strong core stack alignment'],
               gaps: ['Lacks Docker experience'],
+              flags: [],
               justification: 'Highly suitable candidate',
             },
           },
@@ -332,7 +337,7 @@ describe('SmartRecruit Integration Tests', () => {
         session,
       });
 
-      expect(cvResult.fitScore).toBe(85);
+      expect(cvResult.fitScore).toBe(80);
       expect(cvResult.totalYoe).toBe(3.1); // 2020-01 to 2023-01 is 37 months ~ 3.1 YOE
       expect(cvResult.status).toBe('shortlisted');
 

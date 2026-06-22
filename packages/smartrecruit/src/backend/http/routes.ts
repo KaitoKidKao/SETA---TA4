@@ -548,6 +548,7 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
             phone: z.string().nullable().describe('Phone number of the candidate'),
           }),
         },
+        modelSettings: { temperature: 0 },
       });
 
       return c.json(

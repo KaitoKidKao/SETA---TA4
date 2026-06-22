@@ -134,6 +134,7 @@ Return the result structured according to the schema.`,
             .describe('Additional notes or soft skill requirements'),
         }),
       },
+      modelSettings: { temperature: 0 },
       abortSignal: input.abortSignal,
     }),
   );

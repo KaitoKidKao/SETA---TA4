@@ -18,6 +18,8 @@ import {
   createSmartrecruitCampaign,
   enqueueSmartrecruitJob,
   getCampaignView,
+  SmartrecruitCandidateInput,
+  SmartrecruitCandidateInputSchema,
   updateCampaignStatus,
   updateCampaignWorkflowRun,
   waitForCampaignStatus,
@@ -25,15 +27,6 @@ import {
 import { getModelConfig } from '../domain/model.ts';
 
 // --- Input/Output Schemas ---
-
-export const SmartrecruitCandidateInputSchema = z.object({
-  candidateName: z.string(),
-  candidateEmail: z.string().email(),
-  candidatePhone: z.string().optional(),
-  cvPath: z.string().optional(),
-  cvText: z.string(),
-});
-export type SmartrecruitCandidateInput = z.infer<typeof SmartrecruitCandidateInputSchema>;
 
 export const SmartrecruitWorkflowInputSchema = z.object({
   campaignId: z.string().uuid().optional(),
@@ -166,6 +159,7 @@ Return the result structured according to the schema.`,
                 .describe('Additional notes or soft skill requirements'),
             }),
           },
+          modelSettings: { temperature: 0 },
         },
       );
 
