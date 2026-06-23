@@ -3,7 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
 import type { SessionEnv, WorkerHandle } from '@seta/core';
-import { and, desc, eq, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -15,11 +15,11 @@ import {
 } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import {
+  campaignCandidates,
   campaigns,
   candidates,
   criteria,
   hmFeedbackReminderAttempts,
-  interactionHistories,
   interviewSchedules,
   outreachDrafts,
   outreachTemplates,
@@ -54,7 +54,7 @@ import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
 import { reviewCampaignCandidate } from '../domain/review-candidate.ts';
-import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
+import { recommendCandidatePool, screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
 import { analyzeSkillGaps } from '../domain/skill-gap-analyzer.ts';
 import {
@@ -115,6 +115,7 @@ function resolveMockDataFilePath(filePath?: string): string {
 const screenCandidatePoolSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
   includeAlreadyScreened: z.boolean().optional(),
+  minSimilarity: z.number().min(0).max(1).optional(),
 });
 
 const draftOutreachSchema = z.object({
@@ -249,43 +250,29 @@ export function registerSmartrecruitRoutes(
       );
     }
 
-    const poolResults = await screenCandidatePool({
+    const existingCampaignCandidates = await db
+      .select({ candidateId: campaignCandidates.candidate_id })
+      .from(campaignCandidates)
+      .where(
+        and(
+          eq(campaignCandidates.tenant_id, session.tenant_id),
+          eq(campaignCandidates.campaign_id, campaignId),
+        ),
+      );
+
+    const poolResults = await recommendCandidatePool({
       criteriaId: camp.criteria_id,
       limit: parsed.data.limit,
-      includeAlreadyScreened: true,
+      minSimilarity: parsed.data.minSimilarity,
+      excludeCandidateIds: existingCampaignCandidates.map((row) => row.candidateId),
+      recentContactDays: 30,
       session,
     });
 
-    const candidateIds = poolResults.results.map((r) => r.id);
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const recentOutreaches =
-      candidateIds.length > 0
-        ? await db
-            .select({ candidate_id: interactionHistories.candidate_id })
-            .from(interactionHistories)
-            .where(
-              and(
-                eq(interactionHistories.tenant_id, session.tenant_id),
-                inArray(interactionHistories.candidate_id, candidateIds),
-                gte(interactionHistories.sent_at, thirtyDaysAgo),
-              ),
-            )
-        : [];
-
-    const recentOutreachSet = new Set(recentOutreaches.map((row) => row.candidate_id));
-
-    const finalResults = poolResults.results.map((r) => ({
-      ...r,
-      hasRecentOutreach: recentOutreachSet.has(r.id),
-    }));
-
     return c.json({
       criteriaId: poolResults.criteriaId,
-      screened: poolResults.screened,
-      skipped: poolResults.skipped,
-      results: finalResults,
+      matched: poolResults.matched,
+      results: poolResults.results,
     });
   });
 
