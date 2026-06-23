@@ -1,8 +1,8 @@
 import type { SessionScope } from '@seta/core';
-import { and, eq, inArray } from 'drizzle-orm';
-import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
+import { and, eq, gte, inArray, ne, notInArray, or, sql } from 'drizzle-orm';
+import { requirePermission, SMARTRECRUIT_ACCESS, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
-import { candidates, criteria } from '../db/schema.ts';
+import { candidates, criteria, interactionHistories } from '../db/schema.ts';
 import {
   getEmbeddingWithFallback,
   getSmartrecruitVectorStore,
@@ -29,6 +29,50 @@ export interface ScreenCandidatePoolOutput {
     status: string;
     fitScore: number;
   }>;
+}
+
+export interface RecommendCandidatePoolInput {
+  criteriaId: string;
+  limit?: number;
+  minSimilarity?: number;
+  excludeCandidateIds?: string[];
+  recentContactDays?: number;
+  session: SessionScope;
+}
+
+export interface RecommendCandidatePoolOutput {
+  criteriaId: string;
+  matched: number;
+  results: Array<{
+    id: string;
+    displayName: string;
+    email: string;
+    status: string;
+    fitScore: number | null;
+    similarityScore: number | null;
+  }>;
+}
+
+export function isCandidateRecommendationEligible(candidate: {
+  id: string;
+  status: string;
+  re_engagement_eligible: boolean;
+  applied_position: string | null;
+  jobTitle: string;
+  excludedCandidateIds: ReadonlySet<string>;
+  recentlyContactedCandidateIds: ReadonlySet<string>;
+  hasVectorSimilarity: boolean;
+}): boolean {
+  if (candidate.excludedCandidateIds.has(candidate.id)) return false;
+  if (candidate.recentlyContactedCandidateIds.has(candidate.id)) return false;
+  if (candidate.status === 'rejected' && !candidate.re_engagement_eligible) return false;
+
+  const positionMatches =
+    candidate.applied_position?.trim().toLowerCase() === candidate.jobTitle.trim().toLowerCase();
+  if (positionMatches || candidate.re_engagement_eligible) return true;
+
+  // Candidates without a historical position are allowed only when vector similarity is available.
+  return !candidate.applied_position && candidate.hasVectorSimilarity;
 }
 
 function buildCandidateCvText(candidate: typeof candidates.$inferSelect): string {
@@ -61,6 +105,133 @@ function isCandidateRelevant(
     candidate.applied_position.toLowerCase() === selectedCriteria.job_title.toLowerCase() ||
     candidate.re_engagement_eligible
   );
+}
+
+export async function recommendCandidatePool(
+  input: RecommendCandidatePoolInput,
+): Promise<RecommendCandidatePoolOutput> {
+  requirePermission(input.session, SMARTRECRUIT_ACCESS);
+
+  const db = smartrecruitDb();
+  const [selectedCriteria] = await db
+    .select()
+    .from(criteria)
+    .where(and(eq(criteria.id, input.criteriaId), eq(criteria.tenant_id, input.session.tenant_id)))
+    .limit(1);
+  if (!selectedCriteria) {
+    throw new Error(`Screening criteria with ID ${input.criteriaId} not found.`);
+  }
+
+  const limit = input.limit ?? 10;
+  const minSimilarity = input.minSimilarity ?? 0.55;
+  const excludedCandidateIds = new Set(input.excludeCandidateIds ?? []);
+  const recentContactCutoff = new Date();
+  recentContactCutoff.setDate(recentContactCutoff.getDate() - (input.recentContactDays ?? 30));
+
+  const recentContacts = await db
+    .select({ candidateId: interactionHistories.candidate_id })
+    .from(interactionHistories)
+    .where(
+      and(
+        eq(interactionHistories.tenant_id, input.session.tenant_id),
+        gte(interactionHistories.sent_at, recentContactCutoff),
+      ),
+    );
+  const recentlyContactedCandidateIds = new Set(recentContacts.map((row) => row.candidateId));
+
+  let candidateRows: (typeof candidates.$inferSelect)[] = [];
+  const similarityByCandidateId = new Map<string, number>();
+  const dbUrl = process.env.DATABASE_URL;
+
+  if (dbUrl) {
+    try {
+      const store = getSmartrecruitVectorStore(dbUrl);
+      const queryVector = await getEmbeddingWithFallback(selectedCriteria.jd_text);
+      const vectorResults = await store.query({
+        indexName: SMARTRECRUIT_VECTOR_INDEX,
+        queryVector,
+        topK: Math.max(limit * 5, 25),
+        filter: { tenant_id: { $eq: input.session.tenant_id } },
+      });
+
+      const candidateIds: string[] = [];
+      for (const row of vectorResults) {
+        const candidateId = (row.metadata as { candidate_id?: unknown })?.candidate_id;
+        const similarity = typeof row.score === 'number' ? row.score : null;
+        if (typeof candidateId !== 'string' || similarity === null || similarity < minSimilarity) {
+          continue;
+        }
+        candidateIds.push(candidateId);
+        similarityByCandidateId.set(candidateId, similarity);
+      }
+
+      if (candidateIds.length > 0) {
+        candidateRows = await db
+          .select()
+          .from(candidates)
+          .where(
+            and(
+              eq(candidates.tenant_id, input.session.tenant_id),
+              inArray(candidates.id, candidateIds),
+            ),
+          );
+        candidateRows.sort(
+          (a, b) =>
+            (similarityByCandidateId.get(b.id) ?? 0) - (similarityByCandidateId.get(a.id) ?? 0),
+        );
+      }
+    } catch (err) {
+      console.warn('Talent Pool vector retrieval failed; using metadata fallback:', err);
+    }
+  }
+
+  // Metadata-only fallback does not invoke an LLM and only accepts exact-position or re-engage rows.
+  if (candidateRows.length === 0) {
+    const fallbackConditions = [
+      eq(candidates.tenant_id, input.session.tenant_id),
+      or(ne(candidates.status, 'rejected'), eq(candidates.re_engagement_eligible, true)),
+      or(
+        sql`lower(trim(${candidates.applied_position})) = lower(trim(${selectedCriteria.job_title}))`,
+        eq(candidates.re_engagement_eligible, true),
+      ),
+    ];
+    if (excludedCandidateIds.size > 0) {
+      fallbackConditions.push(notInArray(candidates.id, [...excludedCandidateIds]));
+    }
+    if (recentlyContactedCandidateIds.size > 0) {
+      fallbackConditions.push(notInArray(candidates.id, [...recentlyContactedCandidateIds]));
+    }
+    candidateRows = await db
+      .select()
+      .from(candidates)
+      .where(and(...fallbackConditions))
+      .limit(Math.max(limit * 3, 25));
+  }
+
+  const results = candidateRows
+    .filter((candidate) =>
+      isCandidateRecommendationEligible({
+        id: candidate.id,
+        status: candidate.status,
+        re_engagement_eligible: candidate.re_engagement_eligible,
+        applied_position: candidate.applied_position,
+        jobTitle: selectedCriteria.job_title,
+        excludedCandidateIds,
+        recentlyContactedCandidateIds,
+        hasVectorSimilarity: similarityByCandidateId.has(candidate.id),
+      }),
+    )
+    .slice(0, limit)
+    .map((candidate) => ({
+      id: candidate.id,
+      displayName: candidate.display_name,
+      email: candidate.email,
+      status: candidate.status,
+      fitScore: candidate.fit_score,
+      similarityScore: similarityByCandidateId.get(candidate.id) ?? null,
+    }));
+
+  return { criteriaId: selectedCriteria.id, matched: results.length, results };
 }
 
 export async function screenCandidatePool(
@@ -98,8 +269,8 @@ export async function screenCandidatePool(
       });
 
       const candidateIds = vectorResults
-        .map((row) => (row.metadata as any)?.candidate_id)
-        .filter(Boolean) as string[];
+        .map((row) => (row.metadata as { candidate_id?: unknown })?.candidate_id)
+        .filter((candidateId): candidateId is string => typeof candidateId === 'string');
 
       if (candidateIds.length > 0) {
         const rows = await db

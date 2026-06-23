@@ -506,3 +506,69 @@ This file records completed implementation steps so another IDE session or agent
 ### Conclusion
 
 - Phase 3 is a UI/helper scaffold, not a completed enterprise implementation. Do not mark Phase 3 complete until the routes invoke real integrations, secrets/configuration are persisted securely, migrations are committed and automated acceptance tests pass.
+
+## 2026-06-23 - Manual Talent Pool Browsing
+
+### Completed
+
+- Removed automatic Talent Pool search when Gate 1 opens.
+- Added an explicit `Browse Existing Candidates` button; vector search and candidate screening now run only after recruiter action.
+- After a search, the button becomes `Refresh Results` so repeated token-consuming searches remain explicit.
+- Kept `Re-engage Candidates` separate and visible only when search results exist.
+- Removed the automatic pool re-search after adding selected candidates; added candidates are removed from the current result list locally.
+- Added distinct not-searched, loading, empty-result and error states.
+- Reset Talent Pool browse state when the approval/run changes or the pipeline is reset.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm --filter=@seta/web typecheck` passed.
+- `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- Code search confirmed `fetchPoolCandidates` is called only by `handleBrowseTalentPool`, not by the Gate 1 effect or re-engagement success path.
+
+### Manual Retest
+
+- Start the dev server and open a campaign at Gate 1.
+- Confirm no `/pool-search` request is made automatically.
+- Click `Browse Existing Candidates` and confirm exactly one request is made.
+- Select candidates and click `Re-engage Candidates`; confirm no second pool-search request is triggered automatically.
+
+## 2026-06-23 - Retrieval-Only Talent Pool Recommendations
+
+### Completed
+
+- Split Talent Pool recommendation from the existing batch-screening operation.
+- Campaign `/pool-search` now uses `recommendCandidatePool` and does not call `screenCv` or any screening LLM.
+- Kept `criteria/:id/screen-candidates` on the existing `screenCandidatePool` path for explicit batch screening.
+- Added a default cosine similarity threshold of `0.55` and return `similarityScore` to the UI.
+- Excluded candidates already present in the campaign.
+- Excluded candidates contacted during the previous 30 days.
+- Excluded rejected candidates unless `re_engagement_eligible` is true.
+- Metadata fallback is LLM-free and accepts only an exact historical position match or explicit re-engagement eligibility.
+- Metadata fallback applies tenant/status/position/exclusion filters in SQL with a bounded result set instead of loading the tenant's full candidate table.
+- Updated Talent Pool cards to show vector similarity rather than a stale fit score from another criteria.
+- Selected candidates continue to enter the campaign as `queued`; normal campaign workers screen only those selected candidates after Gate 1 approval.
+
+### Files
+
+- `packages/smartrecruit/src/backend/domain/screen-candidate-pool.ts`
+- `packages/smartrecruit/src/backend/http/routes.ts`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+- `packages/smartrecruit/tests/unit/candidate-pool-recommendation.test.ts`
+
+### Verification
+
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+- `pnpm --filter=@seta/web typecheck` passed.
+- Biome passed on all four changed implementation/test files.
+- Candidate recommendation unit tests passed: 1 file, 3 tests.
+- Code search confirmed campaign pool search calls `recommendCandidatePool`; only the explicit batch-screening endpoint calls `screenCandidatePool`/`screenCv`.
+
+### Manual Retest
+
+- At Gate 1, click Browse and verify the request returns quickly without screening/LLM logs.
+- Confirm rejected non-reengageable and recently contacted candidates are absent.
+- Select candidates, approve Gate 1 and confirm only selected candidates enter queued/screening states.

@@ -76,8 +76,8 @@ interface PoolCandidate {
   displayName: string;
   email: string;
   status: string;
-  fitScore: number;
-  hasRecentOutreach: boolean;
+  fitScore: number | null;
+  similarityScore: number | null;
 }
 
 interface CandidateState {
@@ -246,6 +246,8 @@ export function SmartrecruitPage() {
   const [selectedPoolIds, setSelectedPoolIds] = useState<Record<string, boolean>>({});
   const [isLoadingPool, setIsLoadingPool] = useState(false);
   const [isAddingPoolCandidates, setIsAddingPoolCandidates] = useState(false);
+  const [hasBrowsedPool, setHasBrowsedPool] = useState(false);
+  const [poolLoadError, setPoolLoadError] = useState<string | null>(null);
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
@@ -555,25 +557,47 @@ export function SmartrecruitPage() {
 
   const fetchPoolCandidates = useCallback(async (campaignId: string) => {
     setIsLoadingPool(true);
+    setHasBrowsedPool(true);
+    setPoolLoadError(null);
     try {
       const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/pool-search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit: 10, includeAlreadyScreened: true }),
+        body: JSON.stringify({ limit: 10, minSimilarity: 0.55 }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        const list = data.results || [];
-        setPoolCandidates(list);
-        const sel: Record<string, boolean> = {};
-        for (const c of list) {
-          sel[c.id] = false;
-        }
-        setSelectedPoolIds(sel);
+      const data = await readJsonResponse<{
+        results?: PoolCandidate[];
+        error?: string;
+        message?: string;
+      }>(res);
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || 'Could not browse the Talent Pool.');
       }
-    } catch (_err) {}
-    setIsLoadingPool(false);
+
+      const list = data?.results ?? [];
+      setPoolCandidates(list);
+      setSelectedPoolIds(Object.fromEntries(list.map((candidate) => [candidate.id, false])));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not browse the Talent Pool.';
+      setPoolCandidates([]);
+      setSelectedPoolIds({});
+      setPoolLoadError(message);
+    } finally {
+      setIsLoadingPool(false);
+    }
   }, []);
+
+  const handleBrowseTalentPool = useCallback(() => {
+    const campaignId =
+      activeCampaignId ||
+      activeApproval?.proposedPayload?.primary?.argsPatch?.campaignId ||
+      activeApproval?.proposedPayload?.meta?.campaignId;
+    if (!campaignId) {
+      toast.error('Campaign is not ready for Talent Pool browsing.');
+      return;
+    }
+    void fetchPoolCandidates(campaignId);
+  }, [activeApproval, activeCampaignId, fetchPoolCandidates]);
 
   const handleReengageCandidates = useCallback(async () => {
     const campaignId = activeCampaignId;
@@ -599,8 +623,9 @@ export function SmartrecruitPage() {
       if (res.ok) {
         toast.success('Talent Pool candidates added to the campaign.');
         await fetchCampaignProgress(campaignId);
+        const addedIds = new Set(selectedIds);
+        setPoolCandidates((current) => current.filter((candidate) => !addedIds.has(candidate.id)));
         setSelectedPoolIds({});
-        await fetchPoolCandidates(campaignId);
       } else {
         const data = await res.json().catch(() => ({}));
         toast.error(data.message || 'Could not add candidates from Talent Pool.');
@@ -610,7 +635,7 @@ export function SmartrecruitPage() {
     } finally {
       setIsAddingPoolCandidates(false);
     }
-  }, [activeCampaignId, selectedPoolIds, fetchCampaignProgress, fetchPoolCandidates]);
+  }, [activeCampaignId, selectedPoolIds, fetchCampaignProgress]);
 
   const fetchPendingRuns = useCallback(async () => {
     try {
@@ -688,6 +713,8 @@ export function SmartrecruitPage() {
       setActiveCriteria(null);
       setPoolCandidates([]);
       setSelectedPoolIds({});
+      setHasBrowsedPool(false);
+      setPoolLoadError(null);
       setLastLoadedApprovalId(null);
       return;
     }
@@ -703,14 +730,11 @@ export function SmartrecruitPage() {
       const criteriaId = activeApproval.proposedPayload?.primary?.argsPatch?.criteriaId;
       if (criteriaId) {
         setLastLoadedApprovalId(currentApprovalId);
+        setPoolCandidates([]);
+        setSelectedPoolIds({});
+        setHasBrowsedPool(false);
+        setPoolLoadError(null);
         fetchCriteriaDetails(criteriaId);
-        const campaignId =
-          activeCampaignId ||
-          activeApproval.proposedPayload?.primary?.argsPatch?.campaignId ||
-          activeApproval.proposedPayload?.meta?.campaignId;
-        if (campaignId) {
-          fetchPoolCandidates(campaignId);
-        }
       }
     } else if (isGate2Active) {
       setLastLoadedApprovalId(currentApprovalId);
@@ -723,8 +747,6 @@ export function SmartrecruitPage() {
     lastLoadedApprovalId,
     fetchCriteriaDetails,
     fetchCandidatesAndDrafts,
-    activeCampaignId,
-    fetchPoolCandidates,
   ]);
 
   // --- CV Upload Handler ---
@@ -1172,6 +1194,10 @@ export function SmartrecruitPage() {
     setDraftsList([]);
     setSelectedCandidate(null);
     setEditingDraft(null);
+    setPoolCandidates([]);
+    setSelectedPoolIds({});
+    setHasBrowsedPool(false);
+    setPoolLoadError(null);
     setActiveTab('new');
   };
 
@@ -2221,40 +2247,70 @@ export function SmartrecruitPage() {
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                         <div className="flex flex-col gap-1">
                           <h3 className="text-body-md font-bold text-ink flex items-center gap-2">
-                            <Sparkles className="size-4 text-emerald-600 animate-pulse" />
+                            <Sparkles className="size-4 text-emerald-600" />
                             Talent Pool Recommendations
                           </h3>
                           <p className="text-body-sm text-ink-subtle">
-                            Found by vector search against the new JD. Select candidates to add them
-                            to this screening run.
+                            Browse existing candidates on demand, then select profiles to add to
+                            this screening run.
                           </p>
                         </div>
-                        <Button
-                          onClick={handleReengageCandidates}
-                          disabled={
-                            isLoadingPool ||
-                            isAddingPoolCandidates ||
-                            Object.values(selectedPoolIds).filter(Boolean).length === 0
-                          }
-                          className="bg-primary hover:bg-primary-hover text-white font-medium shadow flex items-center gap-1.5 h-9 text-xs shrink-0 self-start md:self-center"
-                        >
-                          {isAddingPoolCandidates ? (
-                            <>
+                        <div className="flex items-center gap-2 shrink-0 self-start md:self-center">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={handleBrowseTalentPool}
+                            disabled={isLoadingPool || isAddingPoolCandidates}
+                            className="font-medium flex items-center gap-1.5 h-9 text-xs"
+                          >
+                            {isLoadingPool ? (
                               <Loader2 className="animate-spin size-3.5" />
-                              <span>Adding...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Mail className="size-3.5" />
-                              <span>Re-engage Candidates</span>
-                            </>
+                            ) : hasBrowsedPool ? (
+                              <RefreshCw className="size-3.5" />
+                            ) : (
+                              <Search className="size-3.5" />
+                            )}
+                            <span>
+                              {hasBrowsedPool ? 'Refresh Results' : 'Browse Existing Candidates'}
+                            </span>
+                          </Button>
+                          {hasBrowsedPool && poolCandidates.length > 0 && (
+                            <Button
+                              type="button"
+                              onClick={handleReengageCandidates}
+                              disabled={
+                                isLoadingPool ||
+                                isAddingPoolCandidates ||
+                                Object.values(selectedPoolIds).filter(Boolean).length === 0
+                              }
+                              className="bg-primary hover:bg-primary-hover text-white font-medium shadow flex items-center gap-1.5 h-9 text-xs"
+                            >
+                              {isAddingPoolCandidates ? (
+                                <Loader2 className="animate-spin size-3.5" />
+                              ) : (
+                                <Mail className="size-3.5" />
+                              )}
+                              <span>
+                                {isAddingPoolCandidates ? 'Adding...' : 'Re-engage Candidates'}
+                              </span>
+                            </Button>
                           )}
-                        </Button>
+                        </div>
                       </div>
 
                       {isLoadingPool ? (
-                        <div className="py-8 flex justify-center items-center">
-                          <Loader2 className="size-6 text-primary animate-spin" />
+                        <div className="py-8 flex justify-center items-center gap-2 text-body-sm text-ink-subtle">
+                          <Loader2 className="size-5 text-primary animate-spin" />
+                          Searching the existing candidate pool...
+                        </div>
+                      ) : poolLoadError ? (
+                        <div className="py-6 text-center text-body-sm text-red-600 bg-red-50 rounded-lg border border-red-200">
+                          {poolLoadError}
+                        </div>
+                      ) : !hasBrowsedPool ? (
+                        <div className="py-6 text-center text-body-sm text-ink-subtle bg-canvas/30 rounded-lg border border-dashed border-hairline">
+                          Existing candidates are not searched automatically. Use Browse Existing
+                          Candidates when you want recommendations for this JD.
                         </div>
                       ) : poolCandidates.length === 0 ? (
                         <div className="py-6 text-center text-body-sm text-ink-subtle bg-canvas/30 rounded-lg border border-dashed border-hairline">
@@ -2298,16 +2354,11 @@ export function SmartrecruitPage() {
                                     </div>
                                   </div>
                                   <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px] py-0.5 px-2 rounded-full shrink-0">
-                                    {c.fitScore}% Match
+                                    {c.similarityScore === null
+                                      ? 'Position match'
+                                      : `${Math.round(c.similarityScore * 100)}% Similarity`}
                                   </Badge>
                                 </div>
-
-                                {c.hasRecentOutreach && (
-                                  <div className="flex items-start gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 text-[11px] p-2 rounded-lg mt-1 font-semibold leading-normal">
-                                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-600 mt-0.5" />
-                                    <span>Spam warning: contacted within the last 30 days!</span>
-                                  </div>
-                                )}
                               </div>
                             );
                           })}
