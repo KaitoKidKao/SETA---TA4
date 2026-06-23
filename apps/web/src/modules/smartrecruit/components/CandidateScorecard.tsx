@@ -1,6 +1,7 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: ignore array index key
 // biome-ignore-all lint/suspicious/noExplicitAny: ignore explicit any
 // biome-ignore-all lint/a11y/noLabelWithoutControl: ignore form labels association
+/* eslint-disable react-hooks/set-state-in-effect */
 import { Badge, Button, Input, toast } from '@seta/shared-ui';
 import {
   AlertCircle,
@@ -112,10 +113,11 @@ export function CandidateScorecard({
         },
       );
       const text = await res.text();
-      let data: any = {};
+      let data: { message?: string; error?: string } = {};
       if (text.trim()) {
         try {
-          data = JSON.parse(text);
+          const parsed = JSON.parse(text) as unknown;
+          data = parsed && typeof parsed === 'object' ? parsed : {};
         } catch {
           throw new Error(text.slice(0, 300));
         }

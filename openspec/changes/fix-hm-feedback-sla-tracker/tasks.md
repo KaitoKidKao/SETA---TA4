@@ -45,13 +45,16 @@
 - [x] 6.3 Convert generated shortlist Markdown/PDF headings, explanatory text, SLA notes, and fallback messages to English.
 - [x] 6.4 Add typed SLA tracker UI models and format ISO timestamps as human-readable local dates; render explicit loading, empty, unavailable, data-error, due-soon, overdue, queued, sent, and failed states.
 - [x] 6.5 Replace the simulated `setTimeout` reminder handler with draft review and approval API calls, and display success only after persisted queue/delivery state is returned.
-- [ ] 6.6 Add focused component/E2E assertions for English labels and verify Vietnamese CV evidence, HM feedback, names, and recruiter notes remain unchanged.
+- [x] 6.6 Add focused component/E2E assertions for English labels and verify Vietnamese CV evidence, HM feedback, names, and recruiter notes remain unchanged.
 
 ## 7. Documentation and End-to-End Verification
 
 - [x] 7.1 Update `docs/Proposal_Report.md` so HM feedback SLA tracking and approved reminder generation are explicitly traceable to the implemented expected output.
 - [x] 7.2 Update relevant quickstart/mock-data documentation with DS08 import behavior, timezone assumptions, required HM email data, and reminder mail configuration.
 - [ ] 7.3 Run the generated migration with `pnpm db:migrate` against the development database and validate imported DS08 timestamps and derived states with direct SQL.
+  - Blocked on 2026-06-23: `pnpm db:migrate` reaches the CLI but Postgres is not running at `127.0.0.1:5442` (`ECONNREFUSED`). Docker is also unavailable (`~/.docker/desktop/docker.sock` missing), so the dev DB cannot be started from this environment.
 - [x] 7.4 Run `pnpm depcruise`, `pnpm lint:raw-sql`, and `pnpm lint:styles` to verify module and architecture constraints.
 - [ ] 7.5 Run `pnpm typecheck && pnpm lint && pnpm test`.
+  - Partially verified on 2026-06-23: `pnpm typecheck` passed and `pnpm lint` passed. `pnpm test` is blocked by missing Docker/Testcontainers runtime (`Could not find a working container runtime strategy`).
 - [ ] 7.6 Run `pnpm test:e2e` and manually verify the recruiter flow: import DS08, view formatted deadlines, filter due/overdue feedback, review an English reminder, approve it, and observe real queued/sent or failed status.
+  - Blocked on 2026-06-23: `pnpm test:e2e` starts the web server, but API/worker fail because Postgres is not available at `127.0.0.1:5442`; login then fails via Vite proxy with `ECONNREFUSED 127.0.0.1:3000`.

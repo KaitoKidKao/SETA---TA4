@@ -11,7 +11,6 @@ import {
   interactionHistories,
   outreachDrafts,
 } from '../db/schema.ts';
-import type { SmartrecruitCandidateInput } from '../workflows/smartrecruit-workflow.ts';
 
 export type CampaignStatus =
   | 'queued'
@@ -43,7 +42,13 @@ export type CampaignCandidateStatus =
 export interface CreateCampaignInput {
   jobTitle: string;
   jdText: string;
-  cvs: SmartrecruitCandidateInput[];
+  cvs: Array<{
+    candidateName: string;
+    candidateEmail: string;
+    candidatePhone?: string;
+    cvPath?: string;
+    cvText: string;
+  }>;
   templateId?: string;
   session: SessionScope;
 }

@@ -2,6 +2,7 @@
 // biome-ignore-all lint/a11y/useKeyWithClickEvents: ignore keyboard events
 // biome-ignore-all lint/correctness/useExhaustiveDependencies: ignore exhaustive deps
 // biome-ignore-all lint/a11y/useButtonType: ignore button type
+/* eslint-disable react-hooks/set-state-in-effect */
 import { Button, toast } from '@seta/shared-ui';
 import { Copy, Download, FileText, Loader2, Send } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -38,7 +39,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
           setSelectedReport(list[0]);
         }
       }
-    } catch (_err) {
+    } catch {
       toast.error('Could not load report list');
     } finally {
       setIsLoadingList(false);

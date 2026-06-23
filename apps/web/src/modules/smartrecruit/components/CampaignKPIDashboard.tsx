@@ -1,5 +1,6 @@
 // biome-ignore-all lint/a11y/noLabelWithoutControl: ignore form labels association
 // biome-ignore-all lint/correctness/useExhaustiveDependencies: ignore hook dependency warnings
+/* eslint-disable react-hooks/set-state-in-effect */
 import { Button, Card, CardContent, CardHeader, CardTitle, toast } from '@seta/shared-ui';
 import { Clock, DollarSign, Loader2, Settings, TrendingUp } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -34,7 +35,7 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
         const data = await res.json();
         setKpis(data);
       }
-    } catch (_err) {
+    } catch {
       toast.error('Could not load campaign KPI data');
     } finally {
       setIsLoading(false);

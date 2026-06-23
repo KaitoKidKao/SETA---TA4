@@ -9,6 +9,8 @@
  * - requisition.published: New JD/Job Requisition published in Workday
  */
 
+// rbac: system-only
+
 import type { SessionScope } from '@seta/core';
 
 // ---------------------------------------------------------------------------
