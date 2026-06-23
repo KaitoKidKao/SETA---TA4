@@ -2,6 +2,7 @@ import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
 import { getPool } from '@seta/shared-db';
 import { and, eq, gte, inArray } from 'drizzle-orm';
+import { z } from 'zod';
 import { smartrecruitDb } from '../db/client.ts';
 import {
   campaignAiUsage,
@@ -11,7 +12,15 @@ import {
   interactionHistories,
   outreachDrafts,
 } from '../db/schema.ts';
-import type { SmartrecruitCandidateInput } from '../workflows/smartrecruit-workflow.ts';
+
+export const SmartrecruitCandidateInputSchema = z.object({
+  candidateName: z.string(),
+  candidateEmail: z.string().email(),
+  candidatePhone: z.string().optional(),
+  cvPath: z.string().optional(),
+  cvText: z.string(),
+});
+export type SmartrecruitCandidateInput = z.infer<typeof SmartrecruitCandidateInputSchema>;
 
 export type CampaignStatus =
   | 'queued'
