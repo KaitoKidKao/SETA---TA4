@@ -48,6 +48,28 @@ function actor(session: SessionScope) {
   return { actor: { userId: session.user_id, tenantId: session.tenant_id } };
 }
 
+async function isCampaignCanceled(session: SessionScope, campaignId: string): Promise<boolean> {
+  const [campaign] = await smartrecruitDb()
+    .select({ status: campaigns.status })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.tenant_id, session.tenant_id)))
+    .limit(1);
+  return campaign?.status === 'canceled';
+}
+
+async function isCampaignCanceledTx(
+  tx: NodeTx,
+  session: SessionScope,
+  campaignId: string,
+): Promise<boolean> {
+  const [campaign] = await tx
+    .select({ status: campaigns.status })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.tenant_id, session.tenant_id)))
+    .limit(1);
+  return campaign?.status === 'canceled';
+}
+
 function errorInfo(err: unknown): { code: string; message: string; transient: boolean } {
   const value = err as { code?: unknown; status?: unknown; retryable?: unknown; message?: unknown };
   const message = err instanceof Error ? err.message : String(err);
@@ -216,6 +238,8 @@ async function recordAiUsage(args: {
   latencyMs: number;
   attempt: number;
   ocrSource?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
 }): Promise<void> {
   await smartrecruitDb()
     .insert(campaignAiUsage)
@@ -229,6 +253,8 @@ async function recordAiUsage(args: {
       latency_ms: args.latencyMs,
       attempt: args.attempt,
       ocr_source: args.ocrSource ?? null,
+      input_tokens: args.inputTokens ?? null,
+      output_tokens: args.outputTokens ?? null,
     });
 }
 
@@ -239,6 +265,7 @@ export const campaignJobs: TaskList = {
       throw new Error('campaign_screen requires campaignId, criteriaId and userId');
     }
     const session = await buildActorSession({ user_id: payload.userId });
+    if (await isCampaignCanceled(session, payload.campaignId)) return;
     await updateCampaignStatus({
       campaignId: payload.campaignId,
       tenantId: session.tenant_id,
@@ -282,6 +309,7 @@ export const campaignJobs: TaskList = {
       )
       .limit(1);
     if (!row || TERMINAL.screening.has(row.status)) return;
+    if (await isCampaignCanceled(session, payload.campaignId)) return;
     const [candidate] = await db
       .select()
       .from(candidates)
@@ -320,8 +348,11 @@ export const campaignJobs: TaskList = {
         latencyMs: Date.now() - startedAt,
         attempt: helpers.job.attempts,
         ocrSource: screened.report.ocrSource,
+        inputTokens: screened.inputTokens,
+        outputTokens: screened.outputTokens,
       });
       await withEmit(actor(session), async (tx) => {
+        if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
         await tx
           .update(campaignCandidates)
           .set({
@@ -354,6 +385,7 @@ export const campaignJobs: TaskList = {
         throw err;
       }
       await withEmit(actor(session), async (tx) => {
+        if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
         await tx
           .update(campaignCandidates)
           .set({
@@ -376,6 +408,7 @@ export const campaignJobs: TaskList = {
   'smartrecruit:campaign_draft_outreach': async (raw, helpers: JobHelpers) => {
     const payload = raw as unknown as CoordinatorPayload;
     const session = await buildActorSession({ user_id: payload.userId });
+    if (await isCampaignCanceled(session, payload.campaignId)) return;
     await updateCampaignStatus({
       campaignId: payload.campaignId,
       tenantId: session.tenant_id,
@@ -408,9 +441,16 @@ export const campaignJobs: TaskList = {
     const [row] = await db
       .select()
       .from(campaignCandidates)
-      .where(eq(campaignCandidates.id, payload.campaignCandidateId))
+      .where(
+        and(
+          eq(campaignCandidates.id, payload.campaignCandidateId),
+          eq(campaignCandidates.tenant_id, session.tenant_id),
+          eq(campaignCandidates.campaign_id, payload.campaignId),
+        ),
+      )
       .limit(1);
     if (!row || TERMINAL.drafting.has(row.status)) return;
+    if (await isCampaignCanceled(session, payload.campaignId)) return;
     await db
       .update(campaignCandidates)
       .set({
@@ -430,6 +470,7 @@ export const campaignJobs: TaskList = {
             eq(outreachDrafts.tenant_id, session.tenant_id),
             eq(outreachDrafts.campaign_id, payload.campaignId),
             eq(outreachDrafts.candidate_id, payload.candidateId),
+            inArray(outreachDrafts.status, ['draft', 'approved']),
           ),
         )
         .limit(1);
@@ -440,6 +481,8 @@ export const campaignJobs: TaskList = {
           templateId: payload.templateId,
           session,
         }));
+      const inputTokens = 'inputTokens' in draft ? draft.inputTokens : undefined;
+      const outputTokens = 'outputTokens' in draft ? draft.outputTokens : undefined;
       await recordAiUsage({
         session,
         payload,
@@ -447,8 +490,11 @@ export const campaignJobs: TaskList = {
         promptVersion: 'outreach-v2-grounded',
         latencyMs: Date.now() - startedAt,
         attempt: helpers.job.attempts,
+        inputTokens,
+        outputTokens,
       });
       await withEmit(actor(session), async (tx) => {
+        if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
         await tx
           .update(outreachDrafts)
           .set({ campaign_id: payload.campaignId, updated_at: new Date() })
@@ -484,6 +530,7 @@ export const campaignJobs: TaskList = {
         throw err;
       }
       await withEmit(actor(session), async (tx) => {
+        if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
         await tx
           .update(campaignCandidates)
           .set({
@@ -501,6 +548,7 @@ export const campaignJobs: TaskList = {
   'smartrecruit:campaign_send_outreach': async (raw, helpers: JobHelpers) => {
     const payload = raw as unknown as CoordinatorPayload;
     const session = await buildActorSession({ user_id: payload.userId });
+    if (await isCampaignCanceled(session, payload.campaignId)) return;
     await updateCampaignStatus({
       campaignId: payload.campaignId,
       tenantId: session.tenant_id,
@@ -559,9 +607,16 @@ export const campaignJobs: TaskList = {
     const [row] = await db
       .select()
       .from(campaignCandidates)
-      .where(eq(campaignCandidates.id, payload.campaignCandidateId))
+      .where(
+        and(
+          eq(campaignCandidates.id, payload.campaignCandidateId),
+          eq(campaignCandidates.tenant_id, session.tenant_id),
+          eq(campaignCandidates.campaign_id, payload.campaignId),
+        ),
+      )
       .limit(1);
     if (!row || TERMINAL.sending.has(row.status)) return;
+    if (await isCampaignCanceled(session, payload.campaignId)) return;
     await db
       .update(campaignCandidates)
       .set({
@@ -574,6 +629,7 @@ export const campaignJobs: TaskList = {
     try {
       await executeOutreach({ draftId, session });
       await withEmit(actor(session), async (tx) => {
+        if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
         await tx
           .update(campaignCandidates)
           .set({
@@ -596,6 +652,7 @@ export const campaignJobs: TaskList = {
         throw err;
       }
       await withEmit(actor(session), async (tx) => {
+        if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
         await tx
           .update(campaignCandidates)
           .set({

@@ -13,12 +13,19 @@ import {
   CardHeader,
   CardTitle,
   cn,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Dropzone,
   Input,
   PageChrome,
   Textarea,
   toast,
 } from '@seta/shared-ui';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   AlertTriangle,
@@ -43,6 +50,33 @@ import {
   User,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  smartrecruitApi,
+  useAddPoolCandidates,
+  useApproveSlaReminder,
+  useCampaignMetrics,
+  useCampaignWarnings,
+  useCancelCampaign,
+  useCandidates,
+  useCreateCampaign,
+  useCriteria,
+  useCriteriaById,
+  useImportMockData,
+  useInterviews,
+  useOutreachDrafts,
+  usePendingApprovals,
+  useScreenCandidatesFromPool,
+  useSendOutreachDraft,
+  useSkillGaps,
+  useSlaTracker,
+  useSmartrecruitCampaign,
+  useStartWorkflowRun,
+  useSubmitDecision,
+  useUpdateCriteria,
+  useUpdateOutreachDraft,
+  useWorkflowRun,
+  useWorkflowRuns,
+} from '..';
 import { CampaignKPIDashboard } from '../components/CampaignKPIDashboard';
 import { CandidateScorecard } from '../components/CandidateScorecard';
 import { HMReportModal } from '../components/HMReportModal';
@@ -97,6 +131,11 @@ interface CandidateState {
     yoeExplanation: string;
     overallJustification: string;
     piiMapping?: Record<string, string>;
+    contactDetails?: {
+      name: string;
+      email: string;
+      phone: string | null;
+    };
     mustHaveMatches: Array<{
       jdSkill: string;
       cvSkill: string | null;
@@ -160,49 +199,6 @@ interface SlaTrackerItem {
   } | null;
 }
 
-interface CampaignView {
-  campaign: {
-    id: string;
-    workflow_run_id: string | null;
-    criteria_id: string | null;
-    job_title: string;
-    status: string;
-    total_candidates: number;
-    screened_count: number;
-    shortlisted_count: number;
-    failed_count: number;
-    drafted_count: number;
-    sent_count: number;
-    error_reason: string | null;
-  };
-  candidates: Array<{
-    campaignCandidate: {
-      candidate_id: string;
-      status: string;
-      fit_score: number | null;
-      effective_fit_score: number | null;
-      reviewed_fit_score: number | null;
-      review_reason: string | null;
-      screening_report: CandidateState['screening_report'];
-      draft_id: string | null;
-      error_reason: string | null;
-    };
-    candidate: CandidateState | null;
-    draft: DraftState | null;
-  }>;
-}
-
-async function readJsonResponse<T = any>(res: Response): Promise<T | null> {
-  const text = await res.text();
-  if (!text.trim()) return null;
-
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(text.slice(0, 300));
-  }
-}
-
 function formatSlaDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Invalid date';
@@ -234,9 +230,14 @@ export function SmartrecruitPage() {
   const [isSavingWeights, setIsSavingWeights] = useState(false);
   const [weightsSaved, setWeightsSaved] = useState(false);
 
-  // Interview Scheduling
-  const [interviewScheduleList, _setInterviewScheduleList] = useState<any[]>([]);
+  // State used by query hooks must be declared before those hooks run.
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
+  const [dismissedRunIds, setDismissedRunIds] = useState<Record<string, boolean>>({});
+  const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
+  const [slaSearchQuery, setSlaSearchQuery] = useState('');
 
+  // Local UI State
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
     'all',
   );
@@ -249,14 +250,7 @@ export function SmartrecruitPage() {
   const [hasBrowsedPool, setHasBrowsedPool] = useState(false);
   const [poolLoadError, setPoolLoadError] = useState<string | null>(null);
 
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
-  const [activeCampaign, setActiveCampaign] = useState<CampaignView | null>(null);
-  const [campaignMetrics, setCampaignMetrics] = useState<any | null>(null);
-  const [campaignWarnings, setCampaignWarnings] = useState<any[]>([]);
   const [lastLoadedApprovalId, setLastLoadedApprovalId] = useState<string | null>(null);
-  const [runStatus, setRunStatus] = useState<string | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
 
   // Form inputs
   const [jobTitle, setJobTitle] = useState('AI Engineer');
@@ -270,14 +264,70 @@ export function SmartrecruitPage() {
   const [uploadedCvs, setUploadedCvs] = useState<UploadedCv[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [criteriaOptions, setCriteriaOptions] = useState<CriteriaState[]>([]);
-  const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
   const [isImportingMockData, setIsImportingMockData] = useState(false);
   const [isScreeningMockPool, setIsScreeningMockPool] = useState(false);
   const [mockDataSummary, setMockDataSummary] = useState<string | null>(null);
+  const [showDemoTools, setShowDemoTools] = useState(false);
+  const [showCancelPipelineDialog, setShowCancelPipelineDialog] = useState(false);
 
-  // Workflow run poll states
-  const [activeApproval, setActiveApproval] = useState<any | null>(null);
+  // Gate 1: Criteria State
+  const [activeCriteria, setActiveCriteria] = useState<CriteriaState | null>(null);
+  const [newMustHave, setNewMustHave] = useState('');
+  const [newNiceToHave, setNewNiceToHave] = useState('');
+  const [isSavingCriteria, setIsSavingCriteria] = useState(false);
+  const [isConfirmingCriteria, setIsConfirmingCriteria] = useState(false);
+  const [isApprovingOutreach, setIsApprovingOutreach] = useState(false);
+  const [slaFilterTab, setSlaFilterTab] = useState<'all' | 'overdue' | 'due_soon' | 'pending'>(
+    'all',
+  );
+  const [remindingIds, setRemindingIds] = useState<Record<string, boolean>>({});
+
+  // Gate 2: Candidate Scorecard & Email workspace
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidateState | null>(null);
+  const [editingDraft, setEditingDraft] = useState<DraftState | null>(null);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
+
+  // React Query Client & Queries
+  const queryClient = useQueryClient();
+
+  // Queries
+  const criteriaQuery = useCriteria();
+  const criteriaOptions = criteriaQuery.data?.criteria ?? [];
+
+  const activeCampaignQuery = useSmartrecruitCampaign(activeCampaignId, {
+    refetchInterval: activeRunId ? 2000 : undefined,
+  });
+  const activeCampaign = activeCampaignQuery.data ?? null;
+  const canCancelActiveCampaign =
+    !!activeCampaign &&
+    !['completed', 'completed_with_errors', 'canceled'].includes(activeCampaign.campaign.status);
+
+  const campaignMetricsQuery = useCampaignMetrics(activeCampaignId);
+  const campaignMetrics = campaignMetricsQuery.data ?? null;
+
+  const campaignWarningsQuery = useCampaignWarnings(activeCampaignId);
+  const campaignWarnings = campaignWarningsQuery.data?.warnings ?? [];
+
+  const workflowRunsQuery = useWorkflowRuns('smartrecruit.workflow', 'self', {
+    refetchInterval: activeRunId ? 2000 : undefined,
+  });
+
+  const activeRunQuery = useWorkflowRun(activeRunId, {
+    refetchInterval: activeRunId ? 2000 : undefined,
+  });
+  const runStatus = activeRunQuery.data?.status ?? null;
+  const runError =
+    activeRunQuery.data?.status === 'failed'
+      ? (activeRunQuery.data?.errorSummary ?? 'Run failed.')
+      : null;
+
+  const pendingApprovalsQuery = usePendingApprovals({
+    refetchInterval: activeRunId ? 2000 : undefined,
+  });
+  const activeApproval = useMemo(() => {
+    return pendingApprovalsQuery.data?.find((a: any) => a.runId === activeRunId) || null;
+  }, [pendingApprovalsQuery.data, activeRunId]);
 
   const isGate1Active =
     activeApproval?.stepId === 'smartrecruit.parseJd' ||
@@ -287,32 +337,35 @@ export function SmartrecruitPage() {
     activeApproval?.stepId === 'smartrecruit.draftOutreach' ||
     activeApproval?.proposedPayload?.meta?.toolId === 'smartrecruit_draftOutreach';
 
-  // Gate 1: Criteria State
-  const [activeCriteria, setActiveCriteria] = useState<CriteriaState | null>(null);
-  const [newMustHave, setNewMustHave] = useState('');
-  const [newNiceToHave, setNewNiceToHave] = useState('');
-  const [isSavingCriteria, setIsSavingCriteria] = useState(false);
-  const [isConfirmingCriteria, setIsConfirmingCriteria] = useState(false);
-  const [isApprovingOutreach, setIsApprovingOutreach] = useState(false);
-  const [skillGaps, setSkillGaps] = useState<any | null>(null);
-  const [slaTracker, setSlaTracker] = useState<SlaTrackerItem[]>([]);
-  const [slaSearchQuery, setSlaSearchQuery] = useState('');
-  const [slaFilterTab, setSlaFilterTab] = useState<'all' | 'overdue' | 'due_soon' | 'pending'>(
-    'all',
-  );
-  const [remindingIds, setRemindingIds] = useState<Record<string, boolean>>({});
+  const criteriaIdToLoad = isGate1Active
+    ? activeApproval?.proposedPayload?.primary?.argsPatch?.criteriaId || null
+    : selectedCriteriaId || null;
 
-  const fetchSlaTracker = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (slaSearchQuery.trim()) params.set('search', slaSearchQuery.trim());
-      const res = await fetch(`/api/smartrecruit/v1/sla-tracker?${params.toString()}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSlaTracker(data.tracker || []);
-      }
-    } catch (_err) {}
-  }, [slaSearchQuery]);
+  const criteriaDetailsQuery = useCriteriaById(criteriaIdToLoad);
+  const skillGapsQuery = useSkillGaps(criteriaDetailsQuery.data?.job_title ?? '');
+  const skillGaps = skillGapsQuery.data ?? null;
+
+  const slaTrackerQuery = useSlaTracker({ search: slaSearchQuery });
+  const slaTracker = slaTrackerQuery.data?.tracker ?? [];
+
+  const candidatesQuery = useCandidates();
+  const draftsQuery = useOutreachDrafts();
+
+  const interviewsQuery = useInterviews(activeCampaignId || undefined);
+  const interviewScheduleList = interviewsQuery.data?.interviews ?? [];
+
+  // Mutations
+  const createCampaignMutation = useCreateCampaign();
+  const cancelCampaignMutation = useCancelCampaign();
+  const startWorkflowMutation = useStartWorkflowRun();
+  const importMockDataMutation = useImportMockData();
+  const screenCandidatesFromPoolMutation = useScreenCandidatesFromPool();
+  const updateCriteriaMutation = useUpdateCriteria();
+  const submitDecisionMutation = useSubmitDecision();
+  const addPoolCandidatesMutation = useAddPoolCandidates();
+  const updateOutreachDraftMutation = useUpdateOutreachDraft();
+  const sendOutreachDraftMutation = useSendOutreachDraft();
+  const approveSlaReminderMutation = useApproveSlaReminder();
 
   const handleRemindHM = useCallback(
     async (item: SlaTrackerItem) => {
@@ -320,19 +373,10 @@ export function SmartrecruitPage() {
       setRemindingIds((prev) => ({ ...prev, [id]: true }));
 
       try {
-        const res = await fetch(`/api/smartrecruit/v1/sla-tracker/${item.id}/reminders/approve`, {
-          method: 'POST',
-        });
-        const data = await readJsonResponse<{ attempt?: { status?: string } }>(res);
-        if (!res.ok) {
-          throw new Error(
-            (data as any)?.message || (data as any)?.error || 'Reminder approval failed.',
-          );
-        }
+        await approveSlaReminderMutation.mutateAsync(item.id);
         toast.success('Reminder queued for approval delivery.', {
-          description: `A ${item.reminderStage?.replace('_', ' ') ?? 'feedback'} reminder for ${item.hiringManager} is now ${data?.attempt?.status ?? 'queued'}.`,
+          description: `A ${item.reminderStage?.replace('_', ' ') ?? 'feedback'} reminder for ${item.hiringManager} is now queued.`,
         });
-        await fetchSlaTracker();
       } catch (err) {
         toast.error('Could not queue reminder.', {
           description: err instanceof Error ? err.message : String(err),
@@ -341,7 +385,7 @@ export function SmartrecruitPage() {
         setRemindingIds((prev) => ({ ...prev, [id]: false }));
       }
     },
-    [fetchSlaTracker],
+    [approveSlaReminderMutation],
   );
 
   const filteredSlaTracker = useMemo(() => {
@@ -362,13 +406,47 @@ export function SmartrecruitPage() {
     });
   }, [slaTracker, slaSearchQuery, slaFilterTab]);
 
-  // Gate 2: Candidate Scorecard & Email workspace
-  const [candidatesList, setCandidatesList] = useState<CandidateState[]>([]);
-  const [draftsList, setDraftsList] = useState<DraftState[]>([]);
-  const [selectedCandidate, setSelectedCandidate] = useState<CandidateState | null>(null);
-  const [editingDraft, setEditingDraft] = useState<DraftState | null>(null);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
-  const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
+  const candidatesList = useMemo(() => {
+    if (activeCampaignId && activeCampaignQuery.data) {
+      return activeCampaignQuery.data.candidates
+        .map(({ campaignCandidate, candidate }: any) => {
+          if (!candidate) return null;
+          return {
+            ...candidate,
+            status: campaignCandidate.status,
+            fit_score: campaignCandidate.fit_score ?? candidate.fit_score,
+            effective_fit_score:
+              campaignCandidate.effective_fit_score ??
+              campaignCandidate.fit_score ??
+              candidate.fit_score,
+            reviewed_fit_score: campaignCandidate.reviewed_fit_score,
+            review_reason: campaignCandidate.review_reason,
+            screening_report: campaignCandidate.screening_report ?? candidate.screening_report,
+          };
+        })
+        .filter(Boolean) as CandidateState[];
+    }
+    const cands = candidatesQuery.data?.candidates ?? [];
+    let currentCriteriaId = activeCriteria?.id || '';
+    if (!currentCriteriaId && cands.length > 0) {
+      const firstWithReport = cands.find((c: any) => c.screening_report?.criteriaId);
+      if (firstWithReport) {
+        currentCriteriaId = firstWithReport.screening_report.criteriaId;
+      }
+    }
+    return currentCriteriaId
+      ? cands.filter((c: any) => c.screening_report?.criteriaId === currentCriteriaId)
+      : cands;
+  }, [activeCampaignId, activeCampaignQuery.data, candidatesQuery.data, activeCriteria?.id]);
+
+  const draftsList = useMemo(() => {
+    if (activeCampaignId && activeCampaignQuery.data) {
+      return activeCampaignQuery.data.candidates
+        .map((row: any) => row.draft)
+        .filter(Boolean) as DraftState[];
+    }
+    return draftsQuery.data?.drafts ?? [];
+  }, [activeCampaignId, activeCampaignQuery.data, draftsQuery.data]);
 
   const isHallucinationFail = useCallback(
     (candidateId: string) => {
@@ -391,18 +469,6 @@ export function SmartrecruitPage() {
   const dataWarnings = useMemo(() => {
     const list: string[] = [];
     if (activeCriteria) {
-      if (!activeCriteria.jd_id) {
-        if (activeCriteria.external_criteria_id) {
-          list.push('Warning: linked job description ID (jd_id) was not found.');
-        }
-      } else {
-        const jdId = activeCriteria.jd_id;
-        if (!/^[A-Z]{2,4}-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/.test(jdId) && jdId.length <= 6) {
-          list.push(
-            `Warning: linked JD ID (${jdId}) may not match the full expected format (example: JD-AI-SR-001).`,
-          );
-        }
-      }
       if (!activeCriteria.must_have_skills || activeCriteria.must_have_skills.length === 0) {
         list.push('Warning: must-have skills are not configured for this screening run.');
       }
@@ -425,159 +491,38 @@ export function SmartrecruitPage() {
     return list;
   }, [activeCriteria, uploadedCvs]);
 
-  const fetchCriteriaList = useCallback(async () => {
-    try {
-      const res = await fetch('/api/smartrecruit/v1/criteria');
-      if (!res.ok) return;
-      const data = await res.json();
-      const rows = data.criteria ?? [];
-      setCriteriaOptions(rows);
-      setSelectedCriteriaId((current) => current || rows[0]?.id || '');
-    } catch (_err) {}
-  }, []);
-
   const fetchCriteriaDetails = useCallback(async (criteriaId: string) => {
-    try {
-      const res = await fetch(`/api/smartrecruit/v1/criteria/${criteriaId}`);
-      const data = await res.json();
-      setActiveCriteria(data);
-      if (data.job_title) {
-        const gapRes = await fetch(
-          `/api/smartrecruit/v1/skill-gaps?jobTitle=${encodeURIComponent(data.job_title)}`,
-        );
-        if (gapRes.ok) {
-          const gapData = await gapRes.json();
-          setSkillGaps(gapData);
-        }
-      }
-    } catch (_err) {}
+    setSelectedCriteriaId(criteriaId);
   }, []);
-
-  const applyCampaignView = useCallback(
-    (view: CampaignView) => {
-      setActiveCampaign(view);
-      const cands = view.candidates
-        .map(({ campaignCandidate, candidate }) => {
-          if (!candidate) return null;
-          return {
-            ...candidate,
-            status: campaignCandidate.status,
-            fit_score: campaignCandidate.fit_score ?? candidate.fit_score,
-            effective_fit_score:
-              campaignCandidate.effective_fit_score ??
-              campaignCandidate.fit_score ??
-              candidate.fit_score,
-            reviewed_fit_score: campaignCandidate.reviewed_fit_score,
-            review_reason: campaignCandidate.review_reason,
-            screening_report: campaignCandidate.screening_report ?? candidate.screening_report,
-          };
-        })
-        .filter(Boolean) as CandidateState[];
-      const drafts = view.candidates.map((row) => row.draft).filter(Boolean) as DraftState[];
-      setCandidatesList(cands);
-      setDraftsList(drafts);
-      if (selectedCandidate) {
-        const refreshedSelection = cands.find((candidate) => candidate.id === selectedCandidate.id);
-        if (refreshedSelection) setSelectedCandidate(refreshedSelection);
-      }
-
-      const firstCandidate = cands[0];
-      if (firstCandidate && !selectedCandidate) {
-        setSelectedCandidate(firstCandidate);
-        setEditingDraft(drafts.find((d) => d.candidate_id === firstCandidate.id) || null);
-      }
-    },
-    [selectedCandidate],
-  );
 
   const fetchCampaignProgress = useCallback(
-    async (campaignId: string) => {
-      const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}`);
-      const data = await readJsonResponse<CampaignView & { error?: string; message?: string }>(res);
-      if (!res.ok || !data) {
-        throw new Error(data?.message || data?.error || 'Failed to load campaign progress.');
-      }
-      applyCampaignView(data);
-      const [metricsRes, warningsRes] = await Promise.all([
-        fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/metrics`),
-        fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/warnings`),
-      ]);
-      if (metricsRes.ok) setCampaignMetrics(await readJsonResponse(metricsRes));
-      if (warningsRes.ok) {
-        const warningData = await readJsonResponse<{ warnings?: any[] }>(warningsRes);
-        setCampaignWarnings(warningData?.warnings ?? []);
-      }
-      return data;
+    async (_campaignId: string) => {
+      await activeCampaignQuery.refetch();
+      await campaignMetricsQuery.refetch();
+      await campaignWarningsQuery.refetch();
     },
-    [applyCampaignView],
+    [activeCampaignQuery, campaignMetricsQuery, campaignWarningsQuery],
   );
 
   const fetchCandidatesAndDrafts = useCallback(async () => {
-    try {
-      if (activeCampaignId) {
-        await fetchCampaignProgress(activeCampaignId);
-        return;
-      }
-
-      const resCand = await fetch('/api/smartrecruit/v1/candidates');
-      const dataCand = await resCand.json();
-      const cands = dataCand.candidates || [];
-
-      const resDraft = await fetch('/api/smartrecruit/v1/outreach/drafts');
-      const dataDraft = await resDraft.json();
-      const drafts = dataDraft.drafts || [];
-
-      let currentCriteriaId = activeCriteria?.id || '';
-      if (!currentCriteriaId && cands.length > 0) {
-        const firstWithReport = cands.find((c: any) => c.screening_report?.criteriaId);
-        if (firstWithReport) {
-          currentCriteriaId = firstWithReport.screening_report.criteriaId;
-          fetchCriteriaDetails(currentCriteriaId);
-        }
-      }
-
-      const filteredCands = currentCriteriaId
-        ? cands.filter((c: any) => c.screening_report?.criteriaId === currentCriteriaId)
-        : cands;
-
-      setCandidatesList(filteredCands);
-      setDraftsList(drafts);
-
-      if (filteredCands.length > 0 && !selectedCandidate) {
-        setSelectedCandidate(filteredCands[0]);
-        const matchedDraft = drafts.find((d: any) => d.candidate_id === filteredCands[0].id);
-        setEditingDraft(matchedDraft || null);
-      }
-    } catch (err) {
-      setErrorMsg((err as Error).message);
+    if (activeCampaignId) {
+      await fetchCampaignProgress(activeCampaignId);
+    } else {
+      await candidatesQuery.refetch();
+      await draftsQuery.refetch();
     }
-  }, [
-    selectedCandidate,
-    activeCriteria,
-    fetchCriteriaDetails,
-    activeCampaignId,
-    fetchCampaignProgress,
-  ]);
+  }, [activeCampaignId, fetchCampaignProgress, candidatesQuery, draftsQuery]);
 
+  // Talent Pool re-engagement helpers (Phase 2)
   const fetchPoolCandidates = useCallback(async (campaignId: string) => {
     setIsLoadingPool(true);
     setHasBrowsedPool(true);
     setPoolLoadError(null);
     try {
-      const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/pool-search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit: 10, minSimilarity: 0.55 }),
+      const data = await smartrecruitApi.searchPoolCandidates(campaignId, {
+        limit: 10,
+        minSimilarity: 0.55,
       });
-      const data = await readJsonResponse<{
-        results?: PoolCandidate[];
-        error?: string;
-        message?: string;
-      }>(res);
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || 'Could not browse the Talent Pool.');
-      }
-
       const list = data?.results ?? [];
       setPoolCandidates(list);
       setSelectedPoolIds(Object.fromEntries(list.map((candidate) => [candidate.id, false])));
@@ -618,103 +563,85 @@ export function SmartrecruitPage() {
 
     setIsAddingPoolCandidates(true);
     try {
-      const res = await fetch(`/api/smartrecruit/v1/campaigns/${campaignId}/add-pool-candidates`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidateIds: selectedIds }),
-      });
-
-      if (res.ok) {
-        toast.success('Talent Pool candidates added to the campaign.');
-        await fetchCampaignProgress(campaignId);
-        const addedIds = new Set(selectedIds);
-        setPoolCandidates((current) => current.filter((candidate) => !addedIds.has(candidate.id)));
-        setSelectedPoolIds({});
-      } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.message || 'Could not add candidates from Talent Pool.');
-      }
+      await addPoolCandidatesMutation.mutateAsync({ campaignId, candidateIds: selectedIds });
+      toast.success('Talent Pool candidates added to the campaign.');
+      const addedIds = new Set(selectedIds);
+      setPoolCandidates((current) => current.filter((candidate) => !addedIds.has(candidate.id)));
+      setSelectedPoolIds({});
     } catch (err) {
-      toast.error((err as Error).message);
+      toast.error(
+        err instanceof Error ? err.message : 'Could not add candidates from Talent Pool.',
+      );
     } finally {
       setIsAddingPoolCandidates(false);
     }
-  }, [activeCampaignId, selectedPoolIds, fetchCampaignProgress]);
+  }, [activeCampaignId, selectedPoolIds, addPoolCandidatesMutation]);
 
-  const fetchPendingRuns = useCallback(async () => {
-    try {
-      const res = await fetch(
-        '/api/agent/v1/workflows/runs?workflowId=smartrecruit.workflow&scope=self',
+  // Synchronize candidate selection and email draft
+  useEffect(() => {
+    if (candidatesList.length === 0) {
+      setSelectedCandidate(null);
+      setEditingDraft(null);
+      return;
+    }
+
+    const current = selectedCandidate
+      ? (candidatesList.find((candidate) => candidate.id === selectedCandidate.id) ?? null)
+      : null;
+    const currentDraft = current
+      ? (draftsList.find((draft) => draft.candidate_id === current.id) ?? null)
+      : null;
+    const preferredDraft = currentDraft ?? draftsList[0] ?? null;
+    const preferredCandidate =
+      current ??
+      (preferredDraft
+        ? candidatesList.find((candidate) => candidate.id === preferredDraft.candidate_id)
+        : null) ??
+      candidatesList[0];
+
+    if (
+      preferredCandidate.id !== selectedCandidate?.id ||
+      preferredCandidate.status !== selectedCandidate?.status ||
+      preferredCandidate.fit_score !== selectedCandidate?.fit_score
+    ) {
+      setSelectedCandidate(preferredCandidate);
+    }
+
+    const matchingDraft =
+      draftsList.find((draft) => draft.candidate_id === preferredCandidate.id) ?? null;
+    setEditingDraft((existing) =>
+      existing?.id && existing.id === matchingDraft?.id ? existing : matchingDraft,
+    );
+  }, [candidatesList, draftsList, selectedCandidate]);
+
+  // Sync activeCriteria from loaded details
+  useEffect(() => {
+    if (criteriaIdToLoad && criteriaDetailsQuery.data) {
+      setActiveCriteria(criteriaDetailsQuery.data);
+    } else if (!criteriaIdToLoad) {
+      setActiveCriteria(null);
+    }
+  }, [criteriaDetailsQuery.data, criteriaIdToLoad]);
+
+  // Sync pending run on mount / change
+  useEffect(() => {
+    if (workflowRunsQuery.data?.rows && !activeRunId) {
+      const running = workflowRunsQuery.data.rows.find(
+        (r: any) =>
+          !dismissedRunIds[r.runId] &&
+          (r.status === 'paused' || r.status === 'running' || r.status === 'waiting'),
       );
-      const data = await res.json();
-      if (data.rows && data.rows.length > 0) {
-        const running = data.rows.find(
-          (r: any) => r.status === 'paused' || r.status === 'running' || r.status === 'waiting',
-        );
-        if (running) {
-          setActiveRunId(running.runId);
-          setActiveCampaignId(running.inputSummary?.campaignId ?? null);
-          setRunStatus(running.status);
-          setActiveTab('active');
-        }
+      if (running) {
+        setActiveRunId(running.runId);
+        setActiveCampaignId(running.inputSummary?.campaignId ?? null);
+        setActiveTab('active');
       }
-    } catch (_err) {}
-  }, []);
+    }
+  }, [workflowRunsQuery.data, activeRunId, dismissedRunIds]);
 
-  const pollRunStatus = useCallback(async () => {
-    if (!activeRunId) return;
-    try {
-      const res = await fetch(`/api/agent/v1/workflows/runs/${activeRunId}`);
-      if (res.status === 404) {
-        setActiveRunId(null);
-        setRunStatus(null);
-        return;
-      }
-      const data = await res.json();
-      setRunStatus(data.status);
-      if (activeCampaignId) {
-        await fetchCampaignProgress(activeCampaignId);
-      }
-      if (data.status === 'success') {
-        fetchCandidatesAndDrafts();
-      } else if (data.status === 'failed') {
-        setRunError(data.errorSummary ?? 'Run failed.');
-      }
-    } catch (_err) {}
-  }, [activeRunId, fetchCandidatesAndDrafts, activeCampaignId, fetchCampaignProgress]);
-
-  const fetchPendingApprovals = useCallback(async () => {
-    try {
-      const res = await fetch('/api/agent/v1/workflows/my-pending-approvals');
-      const data = await res.json();
-      const app = data.find((a: any) => a.runId === activeRunId);
-      setActiveApproval(app || null);
-    } catch (_err) {}
-  }, [activeRunId]);
-
-  // Fetch pending runs and criteria list on mount
-  useEffect(() => {
-    fetchCriteriaList();
-    fetchPendingRuns();
-    fetchSlaTracker();
-  }, [fetchPendingRuns, fetchCriteriaList, fetchSlaTracker]);
-
-  // Poll active run and pending approvals if a run is running
-  useEffect(() => {
-    if (!activeRunId) return;
-
-    const interval = setInterval(() => {
-      pollRunStatus();
-      fetchPendingApprovals();
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [activeRunId, pollRunStatus, fetchPendingApprovals]);
-
-  // Trigger loading details when Gate 1 or Gate 2 is active
+  // Synchronize loading details when Gate 1 or Gate 2 is active
   useEffect(() => {
     if (!activeApproval) {
-      setActiveCriteria(null);
       setPoolCandidates([]);
       setSelectedPoolIds({});
       setHasBrowsedPool(false);
@@ -770,32 +697,14 @@ export function SmartrecruitPage() {
     setUploadedCvs((prev) => [...prev, newUpload]);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('/api/smartrecruit/v1/upload-cv', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        throw new Error('Upload CV file failed.');
-      }
-
-      const data = await res.json();
+      const data = await smartrecruitApi.uploadCv(file);
 
       setUploadedCvs((prev) =>
         prev.map((c) => (c.id === tempId ? { ...c, text: data.text, status: 'extracting' } : c)),
       );
 
       // Extract candidate details via LLM
-      const resInfo = await fetch('/api/smartrecruit/v1/extract-candidate-info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cvText: data.text }),
-      });
-
-      const dataInfo = await resInfo.json();
+      const dataInfo = await smartrecruitApi.extractCandidateInfo(data.text);
       setUploadedCvs((prev) =>
         prev.map((c) =>
           c.id === tempId
@@ -849,56 +758,40 @@ export function SmartrecruitPage() {
     const readyCvs = uploadedCvs.filter((c) => c.status === 'ready');
 
     try {
-      const campaignRes = await fetch('/api/smartrecruit/v1/campaigns', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jobTitle,
-          jdText,
-          cvs: readyCvs.map((c) => ({
-            candidateName: c.name,
-            candidateEmail: c.email,
-            candidatePhone: c.phone,
-            cvText: c.text,
-          })),
-        }),
-      });
-      const campaignData = await readJsonResponse<
-        CampaignView & { error?: string; message?: string }
-      >(campaignRes);
-      if (!campaignRes.ok || !campaignData?.campaign?.id) {
-        throw new Error(
-          campaignData?.message || campaignData?.error || 'Failed to create recruitment campaign.',
-        );
-      }
-
-      const res = await fetch('/api/agent/v1/workflows/runs/smartrecruit/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          campaignId: campaignData.campaign.id,
-          jobTitle,
-          jdText,
-          cvs: [],
-        }),
+      setErrorMsg(null);
+      const campaignData = await createCampaignMutation.mutateAsync({
+        jobTitle,
+        jdText,
+        cvs: readyCvs.map((c) => ({
+          candidateName: c.name,
+          candidateEmail: c.email,
+          candidatePhone: c.phone,
+          cvText: c.text,
+        })),
       });
 
-      if (!res.ok) {
-        throw new Error('Failed to initiate recruitment agentic workflow');
+      if (!campaignData?.campaign?.id) {
+        throw new Error('Failed to create recruitment campaign.');
       }
 
-      const data = await readJsonResponse<{ runId?: string; error?: string; message?: string }>(
-        res,
-      );
+      const data = await startWorkflowMutation.mutateAsync({
+        campaignId: campaignData.campaign.id,
+        jobTitle,
+        jdText,
+      });
+
       if (!data?.runId) {
-        throw new Error(data?.message || data?.error || 'Workflow start returned no run ID.');
+        throw new Error('Workflow start returned no run ID.');
       }
-      applyCampaignView(campaignData);
+
       setActiveCampaignId(campaignData.campaign.id);
       setActiveRunId(data.runId);
-      setRunStatus('running');
-      setRunError(null);
       setActiveTab('active');
+      void fetchCampaignProgress(campaignData.campaign.id).catch((err) => {
+        toast.error('Campaign started, but the first progress refresh failed.', {
+          description: err instanceof Error ? err.message : String(err),
+        });
+      });
     } catch (err) {
       setErrorMsg((err as Error).message);
     }
@@ -909,22 +802,7 @@ export function SmartrecruitPage() {
     setErrorMsg(null);
     setMockDataSummary(null);
     try {
-      const res = await fetch('/api/smartrecruit/v1/mock-data/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-
-      const data = await readJsonResponse<{
-        error?: string;
-        message?: string;
-        candidates?: { created: number; updated: number };
-        criteria?: { created: number; updated: number };
-        templates?: { created: number; updated: number };
-      }>(res);
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || 'Failed to import mock dataset.');
-      }
+      const data = await importMockDataMutation.mutateAsync(undefined);
       if (!data?.candidates || !data.criteria || !data.templates) {
         throw new Error('Import mock dataset returned an empty or invalid response.');
       }
@@ -932,8 +810,9 @@ export function SmartrecruitPage() {
       setMockDataSummary(
         `Imported ${data.candidates.created} new and ${data.candidates.updated} updated candidates, ${data.criteria.created} new and ${data.criteria.updated} updated criteria, ${data.templates.created} new and ${data.templates.updated} updated templates.`,
       );
-      await fetchCriteriaList();
-      await fetchCandidatesAndDrafts();
+      await criteriaQuery.refetch();
+      await candidatesQuery.refetch();
+      await draftsQuery.refetch();
     } catch (err) {
       setErrorMsg((err as Error).message);
     } finally {
@@ -951,24 +830,11 @@ export function SmartrecruitPage() {
     setErrorMsg(null);
     setMockDataSummary(null);
     try {
-      const res = await fetch(
-        `/api/smartrecruit/v1/criteria/${selectedCriteriaId}/screen-candidates`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ limit: 25, includeAlreadyScreened: true }),
-        },
-      );
-
-      const data = await readJsonResponse<{
-        error?: string;
-        message?: string;
-        screened?: number;
-        skipped?: number;
-      }>(res);
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || 'Failed to screen candidate pool.');
-      }
+      const data = await screenCandidatesFromPoolMutation.mutateAsync({
+        criteriaId: selectedCriteriaId,
+        limit: 25,
+        includeAlreadyScreened: true,
+      });
       if (!data) {
         throw new Error('Candidate pool screening returned an empty response.');
       }
@@ -989,20 +855,14 @@ export function SmartrecruitPage() {
     if (!activeCriteria) return;
     setIsSavingCriteria(true);
     try {
-      const res = await fetch(`/api/smartrecruit/v1/criteria/${activeCriteria.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mustHaveSkills: activeCriteria.must_have_skills,
-          niceToHaveSkills: activeCriteria.nice_to_have_skills,
-          minYoe: activeCriteria.min_yoe,
-          educationLevel: activeCriteria.education_level,
-          additionalRequirements: activeCriteria.additional_requirements,
-        }),
+      await updateCriteriaMutation.mutateAsync({
+        id: activeCriteria.id,
+        mustHaveSkills: activeCriteria.must_have_skills,
+        niceToHaveSkills: activeCriteria.nice_to_have_skills,
+        minYoe: activeCriteria.min_yoe,
+        educationLevel: activeCriteria.education_level,
+        additionalRequirements: activeCriteria.additional_requirements,
       });
-      if (res.ok) {
-        fetchCriteriaDetails(activeCriteria.id);
-      }
     } catch (_err) {}
     setIsSavingCriteria(false);
   };
@@ -1020,28 +880,14 @@ export function SmartrecruitPage() {
         .filter(([_, checked]) => checked)
         .map(([id]) => id);
 
-      const res = await fetch(
-        `/api/agent/v1/workflows/approvals/${activeApproval.approvalId}/decide`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            decision: 'approve',
-            argsPatch: {
-              ...payload,
-              additionalCandidateIds: selectedIds,
-            },
-          }),
+      await submitDecisionMutation.mutateAsync({
+        approvalId: activeApproval.approvalId,
+        decision: 'approve',
+        argsPatch: {
+          ...payload,
+          additionalCandidateIds: selectedIds,
         },
-      );
-
-      if (res.ok) {
-        setActiveApproval(null);
-        setRunStatus('running');
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setErrorMsg(data.message || 'Failed to confirm criteria.');
-      }
+      });
     } catch (err) {
       setErrorMsg((err as Error).message);
     } finally {
@@ -1052,25 +898,13 @@ export function SmartrecruitPage() {
   const handleDeclineWorkflow = async () => {
     if (!activeApproval) return;
     try {
-      const res = await fetch(
-        `/api/agent/v1/workflows/approvals/${activeApproval.approvalId}/decide`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            decision: 'reject',
-          }),
-        },
-      );
-      if (res.ok) {
-        setActiveApproval(null);
-        setActiveRunId(null);
-        setRunStatus(null);
-        setActiveTab('new');
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setErrorMsg(data.message || 'Failed to decline workflow.');
-      }
+      await submitDecisionMutation.mutateAsync({
+        approvalId: activeApproval.approvalId,
+        decision: 'reject',
+      });
+      setActiveRunId(null);
+      setActiveCampaignId(null);
+      setActiveTab('new');
     } catch (err) {
       setErrorMsg((err as Error).message);
     }
@@ -1121,18 +955,11 @@ export function SmartrecruitPage() {
     if (!editingDraft) return;
     setIsSavingDraft(true);
     try {
-      const res = await fetch(`/api/smartrecruit/v1/outreach/drafts/${editingDraft.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subject: editingDraft.subject,
-          body: editingDraft.body,
-        }),
+      await updateOutreachDraftMutation.mutateAsync({
+        id: editingDraft.id,
+        subject: editingDraft.subject,
+        body: editingDraft.body,
       });
-      if (res.ok) {
-        const data = await res.json();
-        setDraftsList((prev) => prev.map((d) => (d.id === data.id ? data : d)));
-      }
     } catch (_err) {}
     setIsSavingDraft(false);
   };
@@ -1140,12 +967,7 @@ export function SmartrecruitPage() {
   const handleSendIndividualEmail = async (draftId: string) => {
     setSentDrafts((prev) => ({ ...prev, [draftId]: true }));
     try {
-      const res = await fetch(`/api/smartrecruit/v1/outreach/drafts/${draftId}/send`, {
-        method: 'POST',
-      });
-      if (res.ok) {
-        fetchCandidatesAndDrafts();
-      }
+      await sendOutreachDraftMutation.mutateAsync(draftId);
     } catch (_err) {}
   };
 
@@ -1159,27 +981,11 @@ export function SmartrecruitPage() {
       }
 
       const payload = activeApproval.proposedPayload?.primary?.argsPatch || {};
-      const res = await fetch(
-        `/api/agent/v1/workflows/approvals/${activeApproval.approvalId}/decide`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ decision: 'approve', argsPatch: payload }),
-        },
-      );
-      if (res.ok) {
-        setActiveApproval(null);
-        setRunStatus('running');
-        await Promise.all([
-          pollRunStatus(),
-          fetchPendingApprovals(),
-          activeCampaignId ? fetchCampaignProgress(activeCampaignId) : Promise.resolve(),
-        ]);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        const details = data.details ? ` (${JSON.stringify(data.details)})` : '';
-        setErrorMsg(`${data.message || data.error || 'Failed to approve outreach.'}${details}`);
-      }
+      await submitDecisionMutation.mutateAsync({
+        approvalId: activeApproval.approvalId,
+        decision: 'approve',
+        argsPatch: payload,
+      });
     } catch (err) {
       setErrorMsg((err as Error).message);
     } finally {
@@ -1190,12 +996,7 @@ export function SmartrecruitPage() {
   const resetPipeline = () => {
     setActiveRunId(null);
     setActiveCampaignId(null);
-    setActiveCampaign(null);
-    setRunStatus(null);
-    setRunError(null);
     setUploadedCvs([]);
-    setCandidatesList([]);
-    setDraftsList([]);
     setSelectedCandidate(null);
     setEditingDraft(null);
     setPoolCandidates([]);
@@ -1203,6 +1004,39 @@ export function SmartrecruitPage() {
     setHasBrowsedPool(false);
     setPoolLoadError(null);
     setActiveTab('new');
+    queryClient.invalidateQueries({ queryKey: ['smartrecruit'] });
+    queryClient.invalidateQueries({ queryKey: ['agent'] });
+  };
+
+  const handleCancelActiveCampaign = async () => {
+    if (!activeCampaignId || cancelCampaignMutation.isPending) return;
+
+    try {
+      const runIdToCancel = activeRunId;
+      if (activeRunId) {
+        setDismissedRunIds((prev) => ({ ...prev, [activeRunId]: true }));
+      }
+      await cancelCampaignMutation.mutateAsync({
+        campaignId: activeCampaignId,
+        reason: 'Canceled from SmartRecruit UI after an incorrect or stale run.',
+      });
+      if (runIdToCancel) {
+        await smartrecruitApi.cancelWorkflowRun(runIdToCancel).catch((err) => {
+          toast.warning('Campaign canceled, but workflow run cancel was not confirmed.', {
+            description: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      toast.success('Pipeline canceled.', {
+        description: 'Pending SmartRecruit jobs for this campaign will be ignored.',
+      });
+      setShowCancelPipelineDialog(false);
+      resetPipeline();
+    } catch (err) {
+      toast.error('Could not cancel pipeline.', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   return (
@@ -1289,291 +1123,29 @@ export function SmartrecruitPage() {
                 </CardContent>
               </Card>
 
-              <Card className="shadow-sm border-hairline bg-canvas/40">
-                <CardHeader>
-                  <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                    <RefreshCw className="size-4 text-primary" />
-                    Mock Dataset Mode
-                  </CardTitle>
-                  <CardDescription className="text-eyebrow">
-                    Import DS-06 candidates, DS-07 criteria, and DS-08 outreach templates from the
-                    assignment workbook.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2">
-                    <Button
-                      onClick={handleImportMockData}
-                      disabled={isImportingMockData || isScreeningMockPool}
-                      variant="secondary"
-                      className="w-full justify-center gap-2"
-                    >
-                      <Upload className="size-4" />
-                      {isImportingMockData ? 'Importing dataset...' : 'Import Mock Dataset'}
-                    </Button>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-body-sm font-medium text-ink">Screening Criteria</label>
-                    <select
-                      value={selectedCriteriaId}
-                      onChange={(e) => setSelectedCriteriaId(e.target.value)}
-                      className="h-10 rounded-md border border-hairline bg-surface px-3 text-body-sm text-ink"
-                    >
-                      <option value="">Select criteria</option>
-                      {criteriaOptions.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.external_criteria_id ? `${item.external_criteria_id} - ` : ''}
-                          {item.job_title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <Button
-                    onClick={handleScreenMockPool}
-                    disabled={!selectedCriteriaId || isImportingMockData || isScreeningMockPool}
-                    className="w-full justify-center gap-2"
-                  >
-                    <Play className="size-4 fill-current" />
-                    {isScreeningMockPool ? 'Screening candidate pool...' : 'Run Pool Screening'}
-                  </Button>
-
-                  {mockDataSummary && (
-                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
-                      {mockDataSummary}
-                    </div>
-                  )}
-
-                  {candidatesList.filter(
-                    (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
-                  ).length > 0 && (
-                    <div className="flex flex-col gap-2 mt-2">
-                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
-                        <CheckCircle className="size-4 text-emerald-500" />
-                        Passed Candidates (Shortlisted)
-                      </h3>
-                      <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
-                        {candidatesList
-                          .filter(
-                            (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
-                          )
-                          .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
-                          .map((cand) => (
-                            <div
-                              key={cand.id}
-                              className="p-3 flex items-center justify-between transition-colors hover:bg-canvas"
-                            >
-                              <div className="flex flex-col gap-0.5 min-w-0">
-                                <span className="text-body-sm font-bold text-ink truncate">
-                                  {cand.display_name}
-                                </span>
-                                <span className="text-eyebrow text-ink-subtle truncate">
-                                  {cand.email}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Badge
-                                  className={
-                                    cand.fit_score != null && cand.fit_score >= 70
-                                      ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
-                                      : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
-                                  }
-                                >
-                                  {cand.fit_score != null
-                                    ? `${cand.fit_score}% Fit`
-                                    : 'Pre-screened'}
-                                </Badge>
-                              </div>
-                            </div>
-                          ))}
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Hiring Manager SLA Tracker Card */}
-              {slaTracker.length > 0 && (
-                <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[450px] overflow-hidden flex flex-col">
-                  <CardHeader className="pb-3 shrink-0">
-                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                      <Mail className="size-4 text-rose-500" />
-                      HM Feedback SLA Tracker (DS08)
-                    </CardTitle>
-                    <CardDescription className="text-eyebrow">
-                      Track Hiring Manager feedback against the 48-hour SLA.
-                    </CardDescription>
-                  </CardHeader>
-
-                  {/* Search and Filters */}
-                  <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
-                      <Input
-                        type="text"
-                        placeholder="Search candidate, HM, or position..."
-                        className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
-                        value={slaSearchQuery}
-                        onChange={(e) => setSlaSearchQuery(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
-                      {(
-                        [
-                          { id: 'all', label: 'All' },
-                          { id: 'overdue', label: 'Overdue ⚠️' },
-                          { id: 'due_soon', label: 'Due soon' },
-                          { id: 'pending', label: 'Waiting HM' },
-                        ] as const
-                      ).map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          className={cn(
-                            'flex-1 py-1 rounded-sm font-medium transition-all',
-                            slaFilterTab === tab.id
-                              ? 'bg-surface text-ink shadow-sm'
-                              : 'text-ink-subtle hover:text-ink hover:bg-surface-1',
-                          )}
-                          onClick={() => setSlaFilterTab(tab.id)}
-                        >
-                          {tab.label}
-                          {tab.id === 'overdue' && (
-                            <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
-                              {slaTracker.filter((i) => i.slaState === 'overdue').length}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <CardContent className="flex-1 overflow-y-auto pt-0">
-                    <div className="flex flex-col gap-2.5">
-                      {filteredSlaTracker.length === 0 ? (
-                        <div className="text-center py-6 text-ink-subtle text-xs">
-                          No matching feedback requests.
-                        </div>
-                      ) : (
-                        filteredSlaTracker.map((item) => {
-                          const isBreached = item.slaState === 'overdue';
-                          const isDueSoon = item.slaState === 'due_soon';
-                          const isReminding = remindingIds[item.id];
-                          const isSubmitted = item.slaState === 'submitted';
-                          const stateLabel = item.slaState.replace('_', ' ');
-
-                          return (
-                            <div
-                              key={item.feedbackId}
-                              className={cn(
-                                'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
-                                isBreached
-                                  ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
-                                  : isDueSoon
-                                    ? 'border-amber-200/50 border-l-4 border-l-amber-500 bg-amber-50/5 dark:bg-amber-950/5'
-                                    : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
-                              )}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex flex-col">
-                                  <span className="font-bold text-ink text-sm flex items-center gap-1.5">
-                                    <User className="size-3.5 text-ink-subtle" />
-                                    {item.candidateName}
-                                  </span>
-                                  <span className="text-[11px] text-ink-subtle mt-0.5">
-                                    Position:{' '}
-                                    <span className="font-medium text-ink/80">{item.position}</span>
-                                  </span>
-                                </div>
-                                <div className="flex flex-col items-end gap-1.5 shrink-0">
-                                  {isBreached ? (
-                                    <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
-                                      Overdue
-                                    </Badge>
-                                  ) : isDueSoon ? (
-                                    <Badge className="bg-amber-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                      Due Soon
-                                    </Badge>
-                                  ) : (
-                                    <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                      {isSubmitted ? 'Submitted' : 'On Track'}
-                                    </Badge>
-                                  )}
-                                  <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
-                                    {stateLabel}
-                                  </Badge>
-                                </div>
-                              </div>
-
-                              <div className="text-xs text-ink-subtle flex flex-col gap-1 border-t border-hairline/50 pt-2 mt-1">
-                                <div className="flex justify-between items-center">
-                                  <span>
-                                    HM:{' '}
-                                    <span className="font-medium text-ink">
-                                      {item.hiringManager}
-                                    </span>
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1 text-[11px] text-ink-muted">
-                                  <Calendar className="size-3 text-ink-subtle" />
-                                  <span>Shortlisted: {formatSlaDate(item.shortlistedAt)}</span>
-                                </div>
-                                <div className="flex items-center gap-1 text-[11px] text-ink-muted">
-                                  <Clock className="size-3 text-ink-subtle" />
-                                  <span>Deadline: {formatSlaDate(item.feedbackDueAt)}</span>
-                                </div>
-                              </div>
-
-                              {item.hmFeedbackText && (
-                                <p className="text-[11px] text-ink-subtle bg-canvas/40 p-2 rounded italic border-l-2 border-primary/30 mt-1">
-                                  HM Feedback: "{item.hmFeedbackText}"
-                                </p>
-                              )}
-
-                              {!isSubmitted && item.reminderAvailable && (
-                                <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
-                                  <Button
-                                    size="sm"
-                                    disabled={isReminding}
-                                    className={cn(
-                                      'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
-                                      'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
-                                    )}
-                                    onClick={() => handleRemindHM(item)}
-                                  >
-                                    {isReminding ? (
-                                      <>
-                                        <Loader2 className="animate-spin size-3.5" />
-                                        <span>Queueing...</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Bell className="size-3.5" />
-                                        <span>Remind HM</span>
-                                      </>
-                                    )}
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
               {/* Start Campaign Trigger */}
               <div className="flex flex-col gap-2">
                 <Button
                   onClick={handleStartPipeline}
-                  disabled={isUploading || isAnyCvNotReady || uploadedCvs.length === 0}
+                  disabled={
+                    isUploading ||
+                    isAnyCvNotReady ||
+                    uploadedCvs.length === 0 ||
+                    createCampaignMutation.isPending ||
+                    startWorkflowMutation.isPending
+                  }
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium shadow-md flex items-center justify-center gap-2 h-11"
                 >
-                  <Play className="size-4 fill-current" />
-                  Launch Screening Pipeline
+                  {createCampaignMutation.isPending || startWorkflowMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Play className="size-4 fill-current" />
+                  )}
+                  {createCampaignMutation.isPending
+                    ? 'Creating campaign...'
+                    : startWorkflowMutation.isPending
+                      ? 'Starting workflow...'
+                      : 'Launch Screening Pipeline'}
                 </Button>
                 {errorMsg && (
                   <div className="flex items-center gap-2 bg-destructive-tint/20 border border-destructive/20 text-destructive text-body-sm p-3 rounded-lg">
@@ -1582,6 +1154,316 @@ export function SmartrecruitPage() {
                   </div>
                 )}
               </div>
+
+              <Card className="shadow-sm border-hairline bg-canvas/40">
+                <button
+                  type="button"
+                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left"
+                  onClick={() => setShowDemoTools((value) => !value)}
+                >
+                  <div>
+                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                      <RefreshCw className="size-4 text-primary" />
+                      Demo & Operations Tools
+                    </CardTitle>
+                    <CardDescription className="text-eyebrow mt-1">
+                      Optional mock dataset, pool screening, shortlisted candidates, and HM SLA
+                      utilities.
+                    </CardDescription>
+                  </div>
+                  <ChevronRight
+                    className={cn(
+                      'size-4 text-ink-subtle transition-transform',
+                      showDemoTools && 'rotate-90',
+                    )}
+                  />
+                </button>
+              </Card>
+
+              {showDemoTools && (
+                <>
+                  <Card className="shadow-sm border-hairline bg-canvas/40">
+                    <CardHeader>
+                      <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                        <RefreshCw className="size-4 text-primary" />
+                        Mock Dataset Mode
+                      </CardTitle>
+                      <CardDescription className="text-eyebrow">
+                        Import DS-06 candidates, DS-07 criteria, and DS-08 outreach templates from
+                        the assignment workbook.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          onClick={handleImportMockData}
+                          disabled={isImportingMockData || isScreeningMockPool}
+                          variant="secondary"
+                          className="w-full justify-center gap-2"
+                        >
+                          <Upload className="size-4" />
+                          {isImportingMockData ? 'Importing dataset...' : 'Import Mock Dataset'}
+                        </Button>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-body-sm font-medium text-ink">
+                          Screening Criteria
+                        </label>
+                        <select
+                          value={selectedCriteriaId}
+                          onChange={(e) => setSelectedCriteriaId(e.target.value)}
+                          className="h-10 rounded-md border border-hairline bg-surface px-3 text-body-sm text-ink"
+                        >
+                          <option value="">Select criteria</option>
+                          {criteriaOptions.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.external_criteria_id ? `${item.external_criteria_id} - ` : ''}
+                              {item.job_title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <Button
+                        onClick={handleScreenMockPool}
+                        disabled={!selectedCriteriaId || isImportingMockData || isScreeningMockPool}
+                        className="w-full justify-center gap-2"
+                      >
+                        <Play className="size-4 fill-current" />
+                        {isScreeningMockPool ? 'Screening candidate pool...' : 'Run Pool Screening'}
+                      </Button>
+
+                      {mockDataSummary && (
+                        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
+                          {mockDataSummary}
+                        </div>
+                      )}
+
+                      {candidatesList.filter(
+                        (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
+                      ).length > 0 && (
+                        <div className="flex flex-col gap-2 mt-2">
+                          <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                            <CheckCircle className="size-4 text-emerald-500" />
+                            Passed Candidates (Shortlisted)
+                          </h3>
+                          <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
+                            {candidatesList
+                              .filter(
+                                (c) =>
+                                  c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
+                              )
+                              .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
+                              .map((cand) => (
+                                <div
+                                  key={cand.id}
+                                  className="p-3 flex items-center justify-between transition-colors hover:bg-canvas"
+                                >
+                                  <div className="flex flex-col gap-0.5 min-w-0">
+                                    <span className="text-body-sm font-bold text-ink truncate">
+                                      {cand.display_name}
+                                    </span>
+                                    <span className="text-eyebrow text-ink-subtle truncate">
+                                      {cand.email}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge
+                                      className={
+                                        cand.fit_score != null && cand.fit_score >= 70
+                                          ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
+                                          : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
+                                      }
+                                    >
+                                      {cand.fit_score != null
+                                        ? `${cand.fit_score}% Fit`
+                                        : 'Pre-screened'}
+                                    </Badge>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Hiring Manager SLA Tracker Card */}
+                  {slaTracker.length > 0 && (
+                    <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[450px] overflow-hidden flex flex-col">
+                      <CardHeader className="pb-3 shrink-0">
+                        <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                          <Mail className="size-4 text-rose-500" />
+                          HM Feedback SLA Tracker (DS08)
+                        </CardTitle>
+                        <CardDescription className="text-eyebrow">
+                          Track Hiring Manager feedback against the 48-hour SLA.
+                        </CardDescription>
+                      </CardHeader>
+
+                      {/* Search and Filters */}
+                      <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
+                          <Input
+                            type="text"
+                            placeholder="Search candidate, HM, or position..."
+                            className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
+                            value={slaSearchQuery}
+                            onChange={(e) => setSlaSearchQuery(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
+                          {(
+                            [
+                              { id: 'all', label: 'All' },
+                              { id: 'overdue', label: 'Overdue ⚠️' },
+                              { id: 'due_soon', label: 'Due soon' },
+                              { id: 'pending', label: 'Waiting HM' },
+                            ] as const
+                          ).map((tab) => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              className={cn(
+                                'flex-1 py-1 rounded-sm font-medium transition-all',
+                                slaFilterTab === tab.id
+                                  ? 'bg-surface text-ink shadow-sm'
+                                  : 'text-ink-subtle hover:text-ink hover:bg-surface-1',
+                              )}
+                              onClick={() => setSlaFilterTab(tab.id)}
+                            >
+                              {tab.label}
+                              {tab.id === 'overdue' && (
+                                <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
+                                  {slaTracker.filter((i) => i.slaState === 'overdue').length}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <CardContent className="flex-1 overflow-y-auto pt-0">
+                        <div className="flex flex-col gap-2.5">
+                          {filteredSlaTracker.length === 0 ? (
+                            <div className="text-center py-6 text-ink-subtle text-xs">
+                              No matching feedback requests.
+                            </div>
+                          ) : (
+                            filteredSlaTracker.map((item) => {
+                              const isBreached = item.slaState === 'overdue';
+                              const isDueSoon = item.slaState === 'due_soon';
+                              const isReminding = remindingIds[item.id];
+                              const isSubmitted = item.slaState === 'submitted';
+                              const stateLabel = item.slaState.replace('_', ' ');
+
+                              return (
+                                <div
+                                  key={item.feedbackId}
+                                  className={cn(
+                                    'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
+                                    isBreached
+                                      ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
+                                      : isDueSoon
+                                        ? 'border-amber-200/50 border-l-4 border-l-amber-500 bg-amber-50/5 dark:bg-amber-950/5'
+                                        : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
+                                  )}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex flex-col">
+                                      <span className="font-bold text-ink text-sm flex items-center gap-1.5">
+                                        <User className="size-3.5 text-ink-subtle" />
+                                        {item.candidateName}
+                                      </span>
+                                      <span className="text-[11px] text-ink-subtle mt-0.5">
+                                        Position:{' '}
+                                        <span className="font-medium text-ink/80">
+                                          {item.position}
+                                        </span>
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                      {isBreached ? (
+                                        <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
+                                          Overdue
+                                        </Badge>
+                                      ) : isDueSoon ? (
+                                        <Badge className="bg-amber-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
+                                          Due Soon
+                                        </Badge>
+                                      ) : (
+                                        <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
+                                          {isSubmitted ? 'Submitted' : 'On Track'}
+                                        </Badge>
+                                      )}
+                                      <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
+                                        {stateLabel}
+                                      </Badge>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-xs text-ink-subtle flex flex-col gap-1 border-t border-hairline/50 pt-2 mt-1">
+                                    <div className="flex justify-between items-center">
+                                      <span>
+                                        HM:{' '}
+                                        <span className="font-medium text-ink">
+                                          {item.hiringManager}
+                                        </span>
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+                                      <Calendar className="size-3 text-ink-subtle" />
+                                      <span>Shortlisted: {formatSlaDate(item.shortlistedAt)}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+                                      <Clock className="size-3 text-ink-subtle" />
+                                      <span>Deadline: {formatSlaDate(item.feedbackDueAt)}</span>
+                                    </div>
+                                  </div>
+
+                                  {item.hmFeedbackText && (
+                                    <p className="text-[11px] text-ink-subtle bg-canvas/40 p-2 rounded italic border-l-2 border-primary/30 mt-1">
+                                      HM Feedback: "{item.hmFeedbackText}"
+                                    </p>
+                                  )}
+
+                                  {!isSubmitted && item.reminderAvailable && (
+                                    <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
+                                      <Button
+                                        size="sm"
+                                        disabled={isReminding}
+                                        className={cn(
+                                          'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
+                                          'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
+                                        )}
+                                        onClick={() => handleRemindHM(item)}
+                                      >
+                                        {isReminding ? (
+                                          <>
+                                            <Loader2 className="animate-spin size-3.5" />
+                                            <span>Queueing...</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Bell className="size-3.5" />
+                                            <span>Remind HM</span>
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
+              )}
             </div>
 
             {/* Right Side: CV Uploader Center */}
@@ -1828,12 +1710,31 @@ export function SmartrecruitPage() {
                         {activeCampaign.campaign.job_title} · {activeCampaign.campaign.status}
                       </CardDescription>
                     </div>
-                    <Badge
-                      variant={activeCampaign.campaign.failed_count > 0 ? 'warning' : 'success'}
-                    >
-                      {activeCampaign.campaign.screened_count}/
-                      {activeCampaign.campaign.total_candidates} screened
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={activeCampaign.campaign.failed_count > 0 ? 'warning' : 'success'}
+                      >
+                        {activeCampaign.campaign.screened_count}/
+                        {activeCampaign.campaign.total_candidates} screened
+                      </Badge>
+                      {canCancelActiveCampaign && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={cancelCampaignMutation.isPending}
+                          onClick={() => setShowCancelPipelineDialog(true)}
+                          className="text-destructive hover:bg-destructive-tint/10"
+                        >
+                          {cancelCampaignMutation.isPending ? (
+                            <Loader2 className="size-3.5 mr-1 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5 mr-1" />
+                          )}
+                          Cancel Pipeline
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3">
@@ -1933,7 +1834,7 @@ export function SmartrecruitPage() {
                     </Button>
                   </div>
                   <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">
-                    {activeCampaign.candidates.map(({ campaignCandidate, candidate }) => (
+                    {activeCampaign.candidates.map(({ campaignCandidate, candidate }: any) => (
                       <div
                         key={campaignCandidate.candidate_id}
                         className="flex items-center justify-between gap-3 p-3 bg-canvas/30"
@@ -2204,15 +2105,19 @@ export function SmartrecruitPage() {
                       <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-3">
                         <div className="bg-blue-500/5 border border-blue-500/20 p-4 rounded-xl flex flex-col gap-2">
                           <div className="flex items-center gap-2 text-blue-700">
-                            <Settings className="size-4 animate-spin-slow" />
+                            <Settings className="size-4" />
                             <span className="font-bold text-body-sm text-blue-800">
                               Team Skill Gap Analysis
                             </span>
+                            <Badge variant="secondary" className="ml-auto text-[10px] uppercase">
+                              {skillGaps.source === 'none' ? 'No source' : skillGaps.source}
+                            </Badge>
                           </div>
                           <p className="text-body-sm text-ink-subtle">
-                            <strong>Project/Team:</strong> {skillGaps.teamName} |{' '}
+                            <strong>Project/Team:</strong>{' '}
+                            {skillGaps.teamName || 'No matching team'} |{' '}
                             <strong>Skill gaps:</strong>{' '}
-                            {skillGaps.skillsGap.length > 0 ? (
+                            {skillGaps.dataStatus === 'gaps_found' ? (
                               skillGaps.skillsGap.map((s: string, idx: number) => (
                                 <Badge
                                   key={idx}
@@ -2222,27 +2127,40 @@ export function SmartrecruitPage() {
                                   {s}
                                 </Badge>
                               ))
-                            ) : (
+                            ) : skillGaps.dataStatus === 'no_gap_detected' ? (
                               <span className="text-emerald-600 font-semibold">
-                                No major gaps detected
+                                No gap recorded in linked team data
+                              </span>
+                            ) : (
+                              <span className="text-amber-700 font-semibold">
+                                Insufficient matching team data
                               </span>
                             )}
                           </p>
                           <blockquote className="border-l-2 border-hairline-strong pl-3 italic text-body-sm text-ink-subtle my-1">
                             "{skillGaps.summary}"
                           </blockquote>
-                          <div className="text-body-sm text-ink flex flex-col gap-1 mt-1">
-                            <strong className="text-blue-900">
-                              Recommended screening weight adjustment:
-                            </strong>
-                            <ul className="list-disc pl-4 space-y-1">
-                              {skillGaps.recommendations.map((rec: string, idx: number) => (
-                                <li key={idx} className="text-ink-subtle">
-                                  {rec}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+                          {skillGaps.dataStatus === 'gaps_found' &&
+                          skillGaps.recommendations.length > 0 ? (
+                            <div className="text-body-sm text-ink flex flex-col gap-1 mt-1">
+                              <strong className="text-blue-900">
+                                Screening guidance from verified gaps:
+                              </strong>
+                              <ul className="list-disc pl-4 space-y-1">
+                                {skillGaps.recommendations.map((rec: string, idx: number) => (
+                                  <li key={idx} className="text-ink-subtle">
+                                    {rec}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <p className="text-body-sm text-ink-subtle">
+                              {skillGaps.dataStatus === 'no_gap_detected'
+                                ? 'No skill-gap scoring adjustment is applied.'
+                                : 'Skill-gap scoring is disabled until a matching hire request and team matrix are available.'}
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -3053,6 +2971,58 @@ export function SmartrecruitPage() {
             </Card>
           </div>
         )}
+        <Dialog open={showCancelPipelineDialog} onOpenChange={setShowCancelPipelineDialog}>
+          <DialogContent hideClose={cancelCampaignMutation.isPending} className="max-w-md">
+            <DialogHeader>
+              <div className="flex items-start gap-3">
+                <div className="size-10 rounded-full bg-destructive-tint/20 text-destructive flex items-center justify-center shrink-0">
+                  <AlertTriangle className="size-5" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <DialogTitle>Cancel screening pipeline?</DialogTitle>
+                  <DialogDescription>
+                    This stops the current SmartRecruit campaign. Pending jobs will be ignored, and
+                    unsent candidates will be marked as rejected so the run no longer stays pending.
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+            {activeCampaign?.campaign && (
+              <div className="rounded-lg border border-hairline bg-surface-1 p-3 text-body-sm">
+                <div className="font-medium text-ink truncate">
+                  {activeCampaign.campaign.job_title}
+                </div>
+                <div className="text-ink-subtle">
+                  Status: {activeCampaign.campaign.status} - Campaign ID:{' '}
+                  {activeCampaign.campaign.id.slice(0, 8)}
+                </div>
+              </div>
+            )}
+            <DialogFooter className="gap-2 sm:space-x-0">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={cancelCampaignMutation.isPending}
+                onClick={() => setShowCancelPipelineDialog(false)}
+              >
+                Keep Pipeline
+              </Button>
+              <Button
+                type="button"
+                disabled={cancelCampaignMutation.isPending}
+                onClick={handleCancelActiveCampaign}
+                className="bg-destructive text-white hover:bg-destructive/90"
+              >
+                {cancelCampaignMutation.isPending ? (
+                  <Loader2 className="size-4 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4 mr-2" />
+                )}
+                Cancel Pipeline
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         {showReportModal && activeCampaignId && (
           <HMReportModal campaignId={activeCampaignId} onClose={() => setShowReportModal(false)} />
         )}

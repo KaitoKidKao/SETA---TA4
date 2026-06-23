@@ -53,6 +53,8 @@ export interface DraftOutreachOutput {
   body: string;
   hallucinationCheckStatus: 'passed' | 'failed';
   errorReason: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOutreachOutput> {
@@ -64,6 +66,8 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
 
     try {
       const db = smartrecruitDb();
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
 
       // 1. Fetch candidate
       const [cand] = await db
@@ -224,6 +228,9 @@ ${anonymizedCvText}`;
           }),
         );
 
+        totalInputTokens += res.usage?.inputTokens ?? 0;
+        totalOutputTokens += res.usage?.outputTokens ?? 0;
+
         return res.object;
       };
 
@@ -278,6 +285,9 @@ ${body}`;
             ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
           }),
         );
+
+        totalInputTokens += ver.usage?.inputTokens ?? 0;
+        totalOutputTokens += ver.usage?.outputTokens ?? 0;
 
         return ver.object;
       };
@@ -362,6 +372,8 @@ ${body}`;
         body: finalBody,
         hallucinationCheckStatus: checkStatus as 'passed' | 'failed',
         errorReason,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
       };
     } catch (err) {
       span.recordException(err as Error);

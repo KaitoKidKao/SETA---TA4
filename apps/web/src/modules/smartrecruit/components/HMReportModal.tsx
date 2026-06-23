@@ -6,6 +6,8 @@
 import { Button, toast } from '@seta/shared-ui';
 import { Copy, Download, FileText, Loader2, Send } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface HMReportModalProps {
   campaignId: string;
@@ -26,6 +28,7 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
   const [selectedReport, setSelectedReport] = useState<ReportItem | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isLoadingList, setIsLoadingList] = useState(false);
+  const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview');
 
   const fetchReportsList = async () => {
     setIsLoadingList(true);
@@ -188,10 +191,34 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
           <div className="md:col-span-8 flex flex-col min-h-0 border border-neutral-200 rounded-lg overflow-hidden bg-neutral-50">
             {selectedReport ? (
               <>
-                <div className="px-4 py-2 border-b border-neutral-200 bg-white flex justify-between items-center text-xs">
-                  <span className="font-semibold text-neutral-600">
-                    Viewing: Version v{selectedReport.version}
-                  </span>
+                <div className="px-4 py-2 border-b border-neutral-200 bg-white flex justify-between items-center text-xs gap-4 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold text-neutral-700">
+                      Version v{selectedReport.version}
+                    </span>
+                    <div className="flex items-center gap-1 bg-neutral-100 p-0.5 rounded-lg border border-neutral-200">
+                      <button
+                        onClick={() => setViewMode('preview')}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
+                          viewMode === 'preview'
+                            ? 'bg-white text-neutral-800 shadow-sm border border-neutral-200/50'
+                            : 'text-neutral-500 hover:text-neutral-700 border border-transparent'
+                        }`}
+                      >
+                        Preview
+                      </button>
+                      <button
+                        onClick={() => setViewMode('raw')}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all cursor-pointer ${
+                          viewMode === 'raw'
+                            ? 'bg-white text-neutral-800 shadow-sm border border-neutral-200/50'
+                            : 'text-neutral-500 hover:text-neutral-700 border border-transparent'
+                        }`}
+                      >
+                        Source
+                      </button>
+                    </div>
+                  </div>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="secondary"
@@ -213,9 +240,74 @@ export function HMReportModal({ campaignId, onClose }: HMReportModalProps) {
                     </Button>
                   </div>
                 </div>
-                <div className="flex-1 p-4 bg-white overflow-y-auto font-mono text-xs whitespace-pre-wrap text-neutral-800 leading-relaxed border-t border-neutral-100 selection:bg-blue-100">
-                  {selectedReport.markdown}
-                </div>
+                {viewMode === 'preview' ? (
+                  <div className="flex-1 p-6 bg-white overflow-y-auto border-t border-neutral-100 selection:bg-blue-100 prose prose-neutral max-w-none">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h1: ({ node: _node, ...props }) => (
+                          <h1
+                            className="text-lg font-bold text-neutral-900 mb-4 border-b border-neutral-200 pb-2 flex items-center gap-2"
+                            {...props}
+                          />
+                        ),
+                        h2: ({ node: _node, ...props }) => (
+                          <h2
+                            className="text-xs font-bold uppercase tracking-wider text-neutral-500 mt-6 mb-3 border-b border-neutral-200 pb-1"
+                            {...props}
+                          />
+                        ),
+                        h3: ({ node: _node, ...props }) => (
+                          <h3
+                            className="text-xs font-bold text-neutral-800 mt-5 mb-2.5 bg-neutral-50 px-3 py-1.5 rounded-lg border border-neutral-200/60 flex justify-between items-center"
+                            {...props}
+                          />
+                        ),
+                        p: ({ node: _node, ...props }) => (
+                          <p className="text-xs text-neutral-600 mb-3 leading-relaxed" {...props} />
+                        ),
+                        ul: ({ node: _node, ...props }) => (
+                          <ul
+                            className="list-disc pl-5 mb-4 text-xs text-neutral-600 space-y-1.5"
+                            {...props}
+                          />
+                        ),
+                        ol: ({ node: _node, ...props }) => (
+                          <ol
+                            className="list-decimal pl-5 mb-4 text-xs text-neutral-600 space-y-1.5"
+                            {...props}
+                          />
+                        ),
+                        blockquote: ({ node: _node, ...props }) => (
+                          <blockquote
+                            className="border-l-4 border-blue-500 pl-4 py-2.5 italic text-neutral-700 bg-blue-50/30 rounded-r my-4 text-xs leading-relaxed"
+                            {...props}
+                          />
+                        ),
+                        hr: ({ node: _node, ...props }) => (
+                          <hr className="border-neutral-200 my-4" {...props} />
+                        ),
+                        code: ({ node: _node, children, ...props }) => (
+                          <code
+                            className="bg-neutral-100 px-1 py-0.5 rounded text-[11px] font-mono text-neutral-800"
+                            {...props}
+                          >
+                            {children}
+                          </code>
+                        ),
+                        strong: ({ node: _node, ...props }) => (
+                          <strong className="font-semibold text-neutral-900" {...props} />
+                        ),
+                      }}
+                    >
+                      {selectedReport.markdown}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="flex-1 p-4 bg-white overflow-y-auto font-mono text-xs whitespace-pre-wrap text-neutral-800 leading-relaxed border-t border-neutral-100 selection:bg-blue-100">
+                    {selectedReport.markdown}
+                  </div>
+                )}
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-neutral-400 p-8">

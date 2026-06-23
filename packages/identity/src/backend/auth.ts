@@ -136,7 +136,12 @@ export const auth = betterAuth({
       }
     : undefined,
 
-  rateLimit: { enabled: true, storage: 'database', window: 60, max: 100 },
+  rateLimit: {
+    enabled: process.env.NODE_ENV === 'production',
+    storage: 'database',
+    window: 60,
+    max: 100,
+  },
 
   databaseHooks: {
     user: {

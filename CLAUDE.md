@@ -51,7 +51,7 @@ Declared via `"setaTier"` in `package.json` (informational, not a separate enfor
 
 ## Project-specific workflow
 
-- **Tests run against real Postgres via `testcontainers`** — do not introduce DB mocks. Write the failing test first.
+- **Tests run against real Postgres via `testcontainers`** (or a local PostgreSQL fallback using `LOCAL_PG_URL=postgresql://user:pass@localhost:port` if Docker is unavailable) — do not introduce DB mocks. Write the failing test first.
 - **Verify before claiming done**: `pnpm typecheck && pnpm lint && pnpm test` (and `pnpm test:e2e` if UI changed).
 - **Install deps via CLI only**: `pnpm add <pkg>` with no version specifier so the registry resolves latest. Never hand-edit `package.json` versions or `pnpm-lock.yaml`.
 - **Generate migrations via CLI only**: `pnpm --filter @seta/<module> db:generate`, then `pnpm db:migrate`. Never hand-edit files under `drizzle/`.
