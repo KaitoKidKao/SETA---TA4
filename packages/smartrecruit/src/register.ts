@@ -33,6 +33,7 @@ export function registerSmartrecruitContributions(reg: ContributionRegistry): vo
     rbac: SMARTRECRUIT_PERMISSIONS,
     agentTools: smartrecruitAgentTools,
     jobs: smartrecruitJobs,
+    crontab: '*/5 * * * * smartrecruit:hm_feedback_reminder_scan',
     subscriberBuilders: [
       buildResumeAfterScreeningSubscriber,
       buildResumeAfterDraftingSubscriber,

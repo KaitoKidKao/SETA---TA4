@@ -1,5 +1,6 @@
 // biome-ignore-all lint/a11y/noLabelWithoutControl: ignore form labels association
 // biome-ignore-all lint/correctness/useExhaustiveDependencies: ignore hook dependency warnings
+/* eslint-disable react-hooks/set-state-in-effect */
 import { Button, Card, CardContent, CardHeader, CardTitle, toast } from '@seta/shared-ui';
 import { Clock, DollarSign, Loader2, Settings, TrendingUp } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -34,8 +35,8 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
         const data = await res.json();
         setKpis(data);
       }
-    } catch (_err) {
-      toast.error('Không thể tải dữ liệu KPI của chiến dịch');
+    } catch {
+      toast.error('Could not load campaign KPI data');
     } finally {
       setIsLoading(false);
     }
@@ -47,17 +48,17 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
 
   const formatDuration = (seconds: number | null): string => {
     if (seconds === null) return 'N/A';
-    if (seconds < 60) return `${seconds} giây`;
+    if (seconds < 60) return `${seconds} seconds`;
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins} phút ${secs} giây`;
+    return `${mins} minutes ${secs} seconds`;
   };
 
   return (
     <Card className="mb-6 shadow-sm border border-neutral-200">
       <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
         <div>
-          <CardTitle className="text-base font-bold">Chỉ số Hiệu năng Chiến dịch (KPIs)</CardTitle>
+          <CardTitle className="text-base font-bold">Campaign Performance KPIs</CardTitle>
         </div>
         <Button
           variant="secondary"
@@ -66,14 +67,14 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
           onClick={() => setShowConfig(!showConfig)}
         >
           <Settings className="w-3.5 h-3.5" />
-          {showConfig ? 'Đóng cấu hình' : 'Cấu hình giá Token'}
+          {showConfig ? 'Close settings' : 'Token pricing'}
         </Button>
       </CardHeader>
       <CardContent>
         {showConfig && (
           <div className="mb-4 p-3 bg-neutral-50 rounded-lg border border-neutral-200 text-xs space-y-3">
             <h4 className="font-semibold text-neutral-700">
-              Cấu hình giá API Token ($ per 1 Million tokens):
+              API token pricing ($ per 1 million tokens):
             </h4>
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -127,7 +128,7 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
                 <TrendingUp className="w-5 h-5" />
               </div>
               <div>
-                <span className="block text-xs text-neutral-500 font-medium">Tỷ lệ Shortlist</span>
+                <span className="block text-xs text-neutral-500 font-medium">Shortlist rate</span>
                 <span className="text-sm font-bold text-neutral-800">
                   {kpis ? `${kpis.shortlistRate}%` : 'N/A'}
                 </span>
@@ -140,7 +141,7 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
               </div>
               <div>
                 <span className="block text-xs text-neutral-500 font-medium">
-                  Ước tính Chi phí API
+                  Estimated API cost
                 </span>
                 <span className="text-sm font-bold text-neutral-800">
                   {kpis ? `$${kpis.estimatedCostUsd.toFixed(4)}` : 'N/A'}

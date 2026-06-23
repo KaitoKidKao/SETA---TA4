@@ -18,6 +18,7 @@ import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import { SCREENING_PROMPT_VERSION } from '../domain/scoring.ts';
 import { screenCv } from '../domain/screen-cv.ts';
+import { isShortlistedScore } from '../domain/shortlist-policy.ts';
 
 const log = pino({ name: 'smartrecruit/campaign-jobs' });
 
@@ -324,7 +325,7 @@ export const campaignJobs: TaskList = {
         await tx
           .update(campaignCandidates)
           .set({
-            status: screened.fitScore >= 70 ? 'shortlisted' : 'screened',
+            status: isShortlistedScore(screened.fitScore) ? 'shortlisted' : 'screened',
             fit_score: screened.fitScore,
             screening_report: screened.report,
             error_reason: null,

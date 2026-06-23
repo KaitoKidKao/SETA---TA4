@@ -31,4 +31,19 @@ export const SMARTRECRUIT_EVENTS: Record<string, z.ZodSchema> = {
     version: z.number().int().positive(),
     contentHash: z.string().min(1),
   }),
+  'smartrecruit.hm_feedback.reminder_queued': z.object({
+    feedbackRequestId: z.string().uuid(),
+    reminderAttemptId: z.string().uuid(),
+    stage: z.enum(['due_soon', 'overdue']),
+  }),
+  'smartrecruit.hm_feedback.reminder_sent': z.object({
+    feedbackRequestId: z.string().uuid(),
+    reminderAttemptId: z.string().uuid(),
+    providerMessageId: z.string().nullable(),
+  }),
+  'smartrecruit.hm_feedback.reminder_failed': z.object({
+    feedbackRequestId: z.string().uuid(),
+    reminderAttemptId: z.string().uuid(),
+    failureCode: z.string().nullable(),
+  }),
 } as const;

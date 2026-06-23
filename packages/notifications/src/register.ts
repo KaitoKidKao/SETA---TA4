@@ -5,6 +5,11 @@ import type { SubscriberDef } from '@seta/shared-types';
 import * as schema from './backend/db/schema/index.ts';
 import { NotificationStreamHub } from './backend/stream/hub.ts';
 import { notifierSubscriber } from './backend/subscribers/notifier.ts';
+import {
+  smartrecruitHmFeedbackReminderFailedSubscriber,
+  smartrecruitHmFeedbackReminderQueuedSubscriber,
+  smartrecruitHmFeedbackReminderSentSubscriber,
+} from './backend/subscribers/smartrecruit-notifier.ts';
 import { workflowApprovalNotifierSubscriber } from './backend/subscribers/workflow-approval-notifier.ts';
 import { NOTIFICATIONS_EVENTS } from './events.ts';
 import { NOTIFICATIONS_PERMISSIONS } from './rbac.ts';
@@ -38,6 +43,9 @@ export function registerNotificationsContributions(reg: ContributionRegistry): v
     subscribers: [
       notifierSubscriber() as SubscriberDef,
       workflowApprovalNotifierSubscriber() as SubscriberDef,
+      smartrecruitHmFeedbackReminderQueuedSubscriber() as SubscriberDef,
+      smartrecruitHmFeedbackReminderSentSubscriber() as SubscriberDef,
+      smartrecruitHmFeedbackReminderFailedSubscriber() as SubscriberDef,
     ],
     stream: buildNotificationStreamHub,
   });

@@ -7,6 +7,8 @@
  * - Send meeting invitations to candidates and interviewers
  */
 
+// rbac: system-only
+
 import type { Client } from '@microsoft/microsoft-graph-client';
 
 // ---------------------------------------------------------------------------

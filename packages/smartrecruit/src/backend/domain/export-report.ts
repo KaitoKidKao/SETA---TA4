@@ -50,20 +50,20 @@ export async function generateShortlistReport(opts: ExportReportOptions): Promis
 
   const overridesByCandidate = new Map(overrides.map((o) => [o.candidate_id, o]));
 
-  let markdown = `# BÁO CÁO ỨNG VIÊN RÚT GỌN (SHORTLIST REPORT)\n`;
-  markdown += `**Vị trí tuyển dụng:** ${campaign.job_title}\n`;
-  markdown += `**Chiến dịch ID:** \`${campaign.id}\`\n`;
-  markdown += `**Ngày xuất báo cáo:** ${new Date().toLocaleDateString('vi-VN')}\n\n`;
+  let markdown = `# Shortlist Report\n`;
+  markdown += `**Hiring position:** ${campaign.job_title}\n`;
+  markdown += `**Campaign ID:** \`${campaign.id}\`\n`;
+  markdown += `**Generated at:** ${new Date().toLocaleDateString('en-US')}\n\n`;
 
   if (opts.recruiterNote) {
-    markdown += `### Ghi chú của Recruiter\n`;
+    markdown += `### Recruiter Note\n`;
     markdown += `${opts.recruiterNote}\n\n`;
   }
 
-  markdown += `## DANH SÁCH ỨNG VIÊN ĐỀ XUẤT (${shortlistedCandidates.length})\n\n`;
+  markdown += `## Recommended Candidates (${shortlistedCandidates.length})\n\n`;
 
   if (shortlistedCandidates.length === 0) {
-    markdown += `*Không có ứng viên nào đạt tiêu chuẩn shortlist trong chiến dịch này.*\n`;
+    markdown += `*No candidates met the shortlist threshold for this campaign.*\n`;
     return markdown;
   }
 
@@ -78,11 +78,11 @@ export async function generateShortlistReport(opts: ExportReportOptions): Promis
     const fitScore = cc.effective_fit_score ?? 0;
     const isOverridden = cc.reviewed_fit_score !== null;
 
-    markdown += `### ${i + 1}. ${cand.display_name} - Điểm tương thích: **${fitScore}%** ${isOverridden ? '*(Đã được Recruiter điều chỉnh)*' : ''}\n`;
+    markdown += `### ${i + 1}. ${cand.display_name} - Fit score: **${fitScore}%** ${isOverridden ? '*(reviewed by Recruiter)*' : ''}\n`;
     markdown += `- **Email:** ${cand.email}\n`;
-    markdown += `- **Số điện thoại:** ${cand.phone || 'N/A'}\n`;
-    markdown += `- **Số năm kinh nghiệm:** ${cand.years_of_experience !== null ? `${cand.years_of_experience} năm` : 'N/A'}\n`;
-    markdown += `- **Trình độ Tiếng Anh:** ${cand.english_level || 'N/A'}\n`;
+    markdown += `- **Phone:** ${cand.phone || 'N/A'}\n`;
+    markdown += `- **Years of experience:** ${cand.years_of_experience !== null ? `${cand.years_of_experience} years` : 'N/A'}\n`;
+    markdown += `- **English level:** ${cand.english_level || 'N/A'}\n`;
 
     const report = cc.screening_report as {
       pros?: string[];
@@ -92,32 +92,32 @@ export async function generateShortlistReport(opts: ExportReportOptions): Promis
 
     if (report) {
       if (report.pros && report.pros.length > 0) {
-        markdown += `- **Điểm mạnh (Pros):**\n`;
+        markdown += `- **Strengths:**\n`;
         for (const pro of report.pros) {
           markdown += `  * ${pro}\n`;
         }
       }
       if (report.gaps && report.gaps.length > 0) {
-        markdown += `- **Điểm yếu / Khoảng trống (Gaps):**\n`;
+        markdown += `- **Gaps:**\n`;
         for (const gap of report.gaps) {
           markdown += `  * ${gap}\n`;
         }
       }
       if (report.yoeExplanation) {
-        markdown += `- **Chi tiết kinh nghiệm:** ${report.yoeExplanation}\n`;
+        markdown += `- **Experience details:** ${report.yoeExplanation}\n`;
       }
     }
 
     if (override) {
-      markdown += `- **Nhận xét & Lý do điều chỉnh điểm:** *"${override.reason}"*\n`;
+      markdown += `- **Recruiter review reason:** *"${override.reason}"*\n`;
     }
 
     markdown += `\n---\n\n`;
   }
 
   // Add SLA Section
-  markdown += `## THEO DÕI PHẢN HỒI (SLA TRACKING)\n`;
-  markdown += `> **Lưu ý dành cho Hiring Manager:** Vui lòng phản hồi kết quả duyệt shortlist này trong vòng **48 giờ** kể từ khi nhận được báo cáo để đảm bảo tiến độ tuyển dụng.\n`;
+  markdown += `## Feedback SLA Tracking\n`;
+  markdown += `> **Note for Hiring Managers:** Please submit shortlist feedback within **48 hours** of receiving this report so the hiring process stays on schedule.\n`;
 
   return markdown;
 }

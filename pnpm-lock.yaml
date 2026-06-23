@@ -938,6 +938,9 @@ importers:
       '@seta/core':
         specifier: workspace:^
         version: link:../core
+      '@seta/identity':
+        specifier: workspace:^
+        version: link:../identity
       '@seta/shared-db':
         specifier: workspace:^
         version: link:../shared-db

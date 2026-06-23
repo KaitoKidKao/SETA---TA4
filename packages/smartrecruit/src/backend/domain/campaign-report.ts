@@ -34,38 +34,38 @@ export interface CampaignReportSnapshot {
 
 function markdownFor(snapshot: CampaignReportSnapshot): string {
   const lines = [
-    `# BÁO CÁO ỨNG VIÊN RÚT GỌN (SHORTLIST REPORT): ${snapshot.campaign.jobTitle}`,
+    `# Shortlist Report: ${snapshot.campaign.jobTitle}`,
     '',
-    `Chiến dịch ID: \`${snapshot.campaign.id}\``,
-    `Trạng thái: ${snapshot.campaign.status}`,
-    `Ngày tạo báo cáo: ${new Date(snapshot.generatedAt).toLocaleDateString('vi-VN')}`,
+    `Campaign ID: \`${snapshot.campaign.id}\``,
+    `Status: ${snapshot.campaign.status}`,
+    `Generated at: ${new Date(snapshot.generatedAt).toLocaleDateString('en-US')}`,
     '',
-    '## Tiêu chí Tuyển dụng đã Duyệt',
-    `- Kỹ năng yêu cầu (Must-have): ${snapshot.criteria.mustHaveSkills.join(', ') || 'Không có'}`,
-    `- Kỹ năng mong muốn (Nice-to-have): ${snapshot.criteria.niceToHaveSkills.join(', ') || 'Không có'}`,
-    ...(snapshot.recruiterNote ? ['', '## Ghi chú của Recruiter', snapshot.recruiterNote] : []),
+    '## Approved Screening Criteria',
+    `- Must-have skills: ${snapshot.criteria.mustHaveSkills.join(', ') || 'None'}`,
+    `- Nice-to-have skills: ${snapshot.criteria.niceToHaveSkills.join(', ') || 'None'}`,
+    ...(snapshot.recruiterNote ? ['', '## Recruiter Note', snapshot.recruiterNote] : []),
     '',
-    '## Danh sách Ứng viên Đề xuất',
+    '## Recommended Candidates',
   ];
   snapshot.candidates.forEach((candidate, index) => {
     lines.push(
       '',
       `### ${index + 1}. ${candidate.name}`,
-      `- Điểm tương thích: **${candidate.effectiveFitScore ?? 'N/A'}%** (AI Score: ${candidate.aiFitScore ?? 'N/A'}%)`,
+      `- Fit score: **${candidate.effectiveFitScore ?? 'N/A'}%** (AI score: ${candidate.aiFitScore ?? 'N/A'}%)`,
       `- Email: ${candidate.email}`,
-      `- Số năm kinh nghiệm: ${candidate.yearsOfExperience !== null ? `${candidate.yearsOfExperience} năm` : 'N/A'}`,
-      `- Trình độ Tiếng Anh: ${candidate.englishLevel || 'N/A'}`,
-      `- Điểm mạnh: ${candidate.pros.join('; ') || 'Không ghi nhận'}`,
-      `- Điểm yếu / Khoảng trống: ${candidate.gaps.join('; ') || 'Không ghi nhận'}`,
+      `- Years of experience: ${candidate.yearsOfExperience !== null ? `${candidate.yearsOfExperience} years` : 'N/A'}`,
+      `- English level: ${candidate.englishLevel || 'N/A'}`,
+      `- Strengths: ${candidate.pros.join('; ') || 'None recorded'}`,
+      `- Gaps: ${candidate.gaps.join('; ') || 'None recorded'}`,
       ...(candidate.reviewReason
-        ? [`- Ý kiến & Lý do điều chỉnh của Recruiter: *"${candidate.reviewReason}"*`]
+        ? [`- Recruiter review reason: *"${candidate.reviewReason}"*`]
         : []),
     );
   });
   lines.push(
     '',
-    '## THEO DÕI PHẢN HỒI (SLA TRACKING)',
-    '> **Lưu ý dành cho Hiring Manager:** Vui lòng phản hồi kết quả duyệt shortlist này trong vòng **48 giờ** kể từ khi nhận được báo cáo để đảm bảo tiến độ tuyển dụng.',
+    '## Feedback SLA Tracking',
+    '> **Note for Hiring Managers:** Please submit shortlist feedback within **48 hours** of receiving this report so the hiring process stays on schedule.',
   );
   return lines.join('\n');
 }

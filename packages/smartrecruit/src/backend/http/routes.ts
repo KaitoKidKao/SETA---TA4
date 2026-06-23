@@ -2,17 +2,23 @@ import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
-import type { SessionEnv } from '@seta/core';
+import type { SessionEnv, WorkerHandle } from '@seta/core';
 import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
-import { requirePermission, SMARTRECRUIT_ACCESS, SMARTRECRUIT_WRITE } from '../../rbac.ts';
+import {
+  requirePermission,
+  SMARTRECRUIT_ACCESS,
+  SMARTRECRUIT_HM_FEEDBACK_APPROVE,
+  SMARTRECRUIT_WRITE,
+} from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import {
   campaigns,
   candidates,
   criteria,
+  hmFeedbackReminderAttempts,
   interactionHistories,
   interviewSchedules,
   outreachDrafts,
@@ -38,6 +44,12 @@ import {
 } from '../domain/campaign-report.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
+import {
+  approveHmFeedbackReminder,
+  importHmFeedbackFromWorkbook,
+  listHmFeedbackTracker,
+  prepareHmFeedbackReminderDraft,
+} from '../domain/hm-feedback.ts';
 import { importSmartrecruitMockData } from '../domain/import-mock-data.ts';
 import { getModelConfig } from '../domain/model.ts';
 import { parseJd } from '../domain/parse-jd.ts';
@@ -45,7 +57,6 @@ import { reviewCampaignCandidate } from '../domain/review-candidate.ts';
 import { screenCandidatePool } from '../domain/screen-candidate-pool.ts';
 import { screenCv } from '../domain/screen-cv.ts';
 import { analyzeSkillGaps } from '../domain/skill-gap-analyzer.ts';
-import { getSLATracker } from '../domain/sla-tracker.ts';
 import {
   getEmbeddingWithFallback,
   getSmartrecruitVectorStore,
@@ -137,7 +148,19 @@ const createReportSchema = z.object({
   recruiterNote: z.string().trim().max(2_000).optional(),
 });
 
-export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
+const slaTrackerQuerySchema = z.object({
+  status: z.enum(['all', 'on_track', 'due_soon', 'overdue', 'submitted', 'data_error']).optional(),
+  search: z.string().trim().max(200).optional(),
+});
+
+export interface SmartrecruitRouteDeps {
+  workers: Pick<WorkerHandle, 'addJob'>;
+}
+
+export function registerSmartrecruitRoutes(
+  app: Hono<SessionEnv>,
+  deps: SmartrecruitRouteDeps,
+): void {
   // Guard all smartrecruit endpoints with access permission
   app.use('/api/smartrecruit/v1/*', async (c, next) => {
     const session = c.get('user');
@@ -880,11 +903,6 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     return c.json(result);
   });
 
-  app.get('/api/smartrecruit/v1/sla-tracker', async (c) => {
-    const result = getSLATracker();
-    return c.json({ tracker: result });
-  });
-
   // =========================================================================
   // Interview Scheduling Endpoints (Phase 3)
   // =========================================================================
@@ -1057,6 +1075,224 @@ export function registerSmartrecruitRoutes(app: Hono<SessionEnv>): void {
     if (!updated) {
       return c.json({ error: 'Criteria not found' }, 404);
     }
+
+    return c.json(updated);
+  });
+
+  // =========================================================================
+  // HM Feedback SLA Tracker & Reminder Endpoints (Task 4.4)
+  // =========================================================================
+
+  /**
+   * GET /api/smartrecruit/v1/sla-tracker
+   * Returns the tenant-scoped HM feedback SLA tracker list.
+   * Optional query params: status, search.
+   */
+  app.get('/api/smartrecruit/v1/sla-tracker', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_ACCESS);
+
+    const parsed = slaTrackerQuerySchema.safeParse({
+      status: c.req.query('status'),
+      search: c.req.query('search'),
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const tracker = await listHmFeedbackTracker({
+      tenantId: session.tenant_id,
+      status: parsed.data.status,
+      search: parsed.data.search,
+    });
+    return c.json({ tracker });
+  });
+
+  /**
+   * POST /api/smartrecruit/v1/sla-tracker/import
+   * Imports HM feedback data from a DS08 workbook path.
+   */
+  app.post('/api/smartrecruit/v1/sla-tracker/import', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = importMockDataSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const result = await importHmFeedbackFromWorkbook({
+      filePath: resolveMockDataFilePath(parsed.data.filePath),
+      session,
+    });
+    return c.json(result);
+  });
+
+  const hmFeedbackReminderUpdateSchema = z.object({
+    subject: z.string().min(1),
+    body: z.string().min(1),
+  });
+
+  /**
+   * POST /api/smartrecruit/v1/sla-tracker/:id/reminder-draft
+   * Prepares a reminder draft for the given feedback request.
+   * Requires write permission. Idempotent per stage/deadline.
+   */
+  app.post('/api/smartrecruit/v1/sla-tracker/:id/reminder-draft', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const feedbackRequestId = c.req.param('id');
+    const draft = await prepareHmFeedbackReminderDraft({
+      tenantId: session.tenant_id,
+      feedbackRequestId,
+    });
+    return c.json({ draft });
+  });
+
+  /**
+   * GET /api/smartrecruit/v1/sla-tracker/reminders/:attemptId
+   * Inspects a tenant-scoped reminder draft/attempt.
+   */
+  app.get('/api/smartrecruit/v1/sla-tracker/reminders/:attemptId', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_ACCESS);
+
+    const [attempt] = await smartrecruitDb()
+      .select()
+      .from(hmFeedbackReminderAttempts)
+      .where(
+        and(
+          eq(hmFeedbackReminderAttempts.id, c.req.param('attemptId')),
+          eq(hmFeedbackReminderAttempts.tenant_id, session.tenant_id),
+        ),
+      )
+      .limit(1);
+
+    if (!attempt) return c.json({ error: 'Reminder attempt not found.' }, 404);
+    return c.json({ attempt });
+  });
+
+  /**
+   * PATCH /api/smartrecruit/v1/sla-tracker/reminders/:attemptId
+   * Edits a tenant-scoped reminder draft before approval.
+   */
+  app.patch('/api/smartrecruit/v1/sla-tracker/reminders/:attemptId', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = hmFeedbackReminderUpdateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const [existing] = await smartrecruitDb()
+      .select()
+      .from(hmFeedbackReminderAttempts)
+      .where(
+        and(
+          eq(hmFeedbackReminderAttempts.id, c.req.param('attemptId')),
+          eq(hmFeedbackReminderAttempts.tenant_id, session.tenant_id),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) return c.json({ error: 'Reminder attempt not found.' }, 404);
+    if (existing.status !== 'draft') {
+      return c.json({ error: 'Only draft reminders can be edited.' }, 409);
+    }
+
+    const [updated] = await smartrecruitDb()
+      .update(hmFeedbackReminderAttempts)
+      .set({
+        subject: parsed.data.subject,
+        body: parsed.data.body,
+        updated_at: new Date(),
+      })
+      .where(eq(hmFeedbackReminderAttempts.id, existing.id))
+      .returning();
+
+    return c.json({ attempt: updated });
+  });
+
+  /**
+   * POST /api/smartrecruit/v1/sla-tracker/:id/reminders/approve
+   * Approves and queues the reminder for delivery.
+   * Requires SMARTRECRUIT_HM_FEEDBACK_APPROVE permission.
+   * Uses withEmit transaction — idempotent on repeated approval.
+   */
+  app.post('/api/smartrecruit/v1/sla-tracker/:id/reminders/approve', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_HM_FEEDBACK_APPROVE);
+
+    const feedbackRequestId = c.req.param('id');
+    const attempt = await approveHmFeedbackReminder({
+      tenantId: session.tenant_id,
+      feedbackRequestId,
+      session,
+      addJob: deps.workers.addJob,
+    });
+    return c.json({ attempt });
+  });
+
+  /**
+   * POST /api/smartrecruit/v1/sla-tracker/reminders/:attemptId/retry
+   * Explicitly retries a failed reminder attempt.
+   * Resets the attempt to 'queued' and re-queues the worker job.
+   * Requires SMARTRECRUIT_HM_FEEDBACK_APPROVE permission.
+   */
+  app.post('/api/smartrecruit/v1/sla-tracker/reminders/:attemptId/retry', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_HM_FEEDBACK_APPROVE);
+
+    const attemptId = c.req.param('attemptId');
+    const db = smartrecruitDb();
+    const [existing] = await db
+      .select()
+      .from(hmFeedbackReminderAttempts)
+      .where(
+        and(
+          eq(hmFeedbackReminderAttempts.id, attemptId),
+          eq(hmFeedbackReminderAttempts.tenant_id, session.tenant_id),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) {
+      return c.json({ error: 'Reminder attempt not found.' }, 404);
+    }
+    if (existing.status !== 'failed') {
+      return c.json(
+        {
+          error: `Cannot retry attempt in status '${existing.status}'. Only 'failed' attempts can be retried.`,
+        },
+        409,
+      );
+    }
+
+    const now = new Date();
+    const [updated] = await db
+      .update(hmFeedbackReminderAttempts)
+      .set({
+        status: 'queued',
+        failure_code: null,
+        failure_message: null,
+        queued_at: now,
+        updated_at: now,
+      })
+      .where(eq(hmFeedbackReminderAttempts.id, attemptId))
+      .returning();
+
+    if (!updated) {
+      return c.json({ error: 'Failed to reset reminder attempt.' }, 500);
+    }
+
+    await deps.workers.addJob(
+      'smartrecruit:hm_feedback_reminder_send',
+      { attemptId: updated.id, userId: session.user_id },
+      { jobKey: `${updated.id}:retry:${now.getTime()}`, maxAttempts: 3 },
+    );
 
     return c.json(updated);
   });

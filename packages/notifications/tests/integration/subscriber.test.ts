@@ -1,7 +1,12 @@
-import { withEmit } from '@seta/core/events';
+import { emit, withEmit } from '@seta/core/events';
 import type { SubscriberDef } from '@seta/shared-types';
 import { describe, expect, it } from 'vitest';
 import { resetNotificationsDb } from '../../src/backend/db/client.ts';
+import {
+  smartrecruitHmFeedbackReminderFailedSubscriber,
+  smartrecruitHmFeedbackReminderQueuedSubscriber,
+  smartrecruitHmFeedbackReminderSentSubscriber,
+} from '../../src/backend/subscribers/smartrecruit-notifier.ts';
 import { notifierSubscriber, requestNotification } from '../../src/index.ts';
 import { waitFor, withDispatcher, withNotificationsTestDb } from './test-helpers.ts';
 

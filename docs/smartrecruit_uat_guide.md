@@ -80,6 +80,16 @@ The Advisory Board will act as end users to test Team 4's multi-agent product (*
   2. Approve the criteria at Gate 1 to trigger screening.
 * **Expected Output:** The workflow does not crash. The 2 valid CVs are screened successfully. At Gate 2, all 3 candidate rows are displayed, with the failed CV marked as **Screening Failed** with a clear error explanation (e.g., *"Unable to extract text"*), allowing you to approve the outreach for the 2 valid candidates.
 
+##### Scenario C2: Hiring Manager Feedback SLA Tracker (DS08)
+* **Input:** Mock data imported from `03_ta_hire_request_jd_generation.xlsx`, sheet `DS08_HM_Feedback_Tracker`.
+* **Steps:**
+  1. Open the **SmartRecruit** dashboard after mock data import.
+  2. Locate **HM Feedback SLA Tracker (DS08)**.
+  3. Confirm shortlist and deadline values are shown as readable dates, not Excel serial numbers.
+  4. Filter **Overdue** or **Due soon** requests.
+  5. Click **Remind HM** on an eligible row.
+* **Expected Output:** The tracker shows derived 48-hour SLA states (`On Track`, `Due Soon`, `Overdue`, `Submitted`). Reminder delivery is queued only after recruiter approval, records an attempt, and displays persisted queued/sent/failed state instead of a simulated success toast.
+
 ---
 
 ### Section 3: Mapping to Evaluation Criteria
@@ -90,6 +100,7 @@ The Advisory Board will act as end users to test Team 4's multi-agent product (*
 | **Scenario B1** | Context Retention / Autonomy | Suggested database profiles are fetched and merged seamlessly without manually re-uploading CVs. |
 | **Scenario B2** | Tool Selection | The system handles scanned files automatically without throwing user-facing errors. |
 | **Scenario C1** | Edge Case Handling | The campaign workflow isolates individual CV failures instead of halting or returning a 500 server error. |
+| **Scenario C2** | Business Control / SLA Governance | Hiring Manager feedback deadlines are normalized, SLA state is derived from timestamps, and reminders require human approval before delivery. |
 
 ---
 
