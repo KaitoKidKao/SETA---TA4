@@ -6,6 +6,6 @@ export { registerSmartrecruitRoutes } from './routes.ts';
 
 export function buildSmartrecruitRoutes(_deps: RouteBuildDeps): Hono<SessionEnv> {
   const app = new Hono<SessionEnv>();
-  registerSmartrecruitRoutes(app);
+  registerSmartrecruitRoutes(app, { workers: _deps.workers });
   return app;
 }

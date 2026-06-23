@@ -1,11 +1,31 @@
+import { existsSync } from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SessionScope } from '@seta/core';
 import { and, eq } from 'drizzle-orm';
 import xlsx from 'xlsx';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
-import { candidates, criteria, outreachTemplates } from '../db/schema.ts';
+import {
+  candidates,
+  criteria,
+  outreachTemplates,
+  teamHireRequests,
+  teamSkillsMatrix,
+} from '../db/schema.ts';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '../../../../..');
+
 import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
-import { normalizeBoolean, normalizeEnglishLevel } from './normalize-candidate.ts';
+import { importHmFeedbackFromWorkbook } from './hm-feedback.ts';
+import {
+  normalizeBoolean,
+  normalizeEmail,
+  normalizeEnglishLevel,
+  normalizePhone,
+  normalizeSeniority,
+} from './normalize-candidate.ts';
 
 type SheetRow = Record<string, unknown>;
 
@@ -18,6 +38,14 @@ export interface ImportSmartrecruitMockDataOutput {
   candidates: { created: number; updated: number };
   criteria: { created: number; updated: number };
   templates: { created: number; updated: number };
+  teamSkillsMatrix?: { created: number; updated: number };
+  teamHireRequests?: { created: number; updated: number };
+  hmFeedback?: {
+    created: number;
+    updated: number;
+    skipped: number;
+    invalid: number;
+  };
 }
 
 function readSheetRows(filePath: string, sheetName: string): SheetRow[] {
@@ -119,15 +147,17 @@ export async function importSmartrecruitMockData(
     const values = {
       external_candidate_id: externalCandidateId,
       display_name: stringValue(row, 'full_name') || externalCandidateId,
-      email: stringValue(row, 'email') || `${externalCandidateId.toLowerCase()}@mock.local`,
-      phone: nullableString(row, 'phone'),
+      email: normalizeEmail(
+        stringValue(row, 'email') || `${externalCandidateId.toLowerCase()}@mock.local`,
+      ),
+      phone: normalizePhone(nullableString(row, 'phone')),
       location: nullableString(row, 'location'),
       applied_position: nullableString(row, 'applied_position'),
       current_title: nullableString(row, 'current_title'),
       current_company: nullableString(row, 'current_company'),
       past_companies: nullableString(row, 'past_companies'),
       years_of_experience: parseInteger(row, 'years_of_experience'),
-      seniority_level: nullableString(row, 'seniority_level'),
+      seniority_level: normalizeSeniority(nullableString(row, 'seniority_level')),
       domain_experience: nullableString(row, 'domain_experience'),
       employment_history: nullableString(row, 'employment_history'),
       notable_projects: nullableString(row, 'notable_projects'),
@@ -302,6 +332,144 @@ export async function importSmartrecruitMockData(
         ...values,
       });
       result.templates.created++;
+    }
+  }
+
+  // --- Team Skills Matrix & Hire Requests Mock Dataset Import ---
+  let gapsFilePath = '';
+  let hasGapsSheets = false;
+  try {
+    const wb = xlsx.readFile(input.filePath, { bookSheets: true });
+    if (
+      wb.SheetNames.includes('DS04_Team_Skills_Matrix') &&
+      wb.SheetNames.includes('DS06_Hire_Request')
+    ) {
+      gapsFilePath = input.filePath;
+      hasGapsSheets = true;
+    }
+  } catch {}
+
+  if (!hasGapsSheets) {
+    const siblingPath = path.resolve(
+      path.dirname(input.filePath),
+      '03_ta_hire_request_jd_generation.xlsx',
+    );
+    if (existsSync(siblingPath)) {
+      gapsFilePath = siblingPath;
+      hasGapsSheets = true;
+    } else {
+      const defaultPath = path.resolve(repoRoot, 'mock-data/03_ta_hire_request_jd_generation.xlsx');
+      if (existsSync(defaultPath)) {
+        gapsFilePath = defaultPath;
+        hasGapsSheets = true;
+      }
+    }
+  }
+
+  if (hasGapsSheets && gapsFilePath) {
+    result.teamSkillsMatrix = { created: 0, updated: 0 };
+    result.teamHireRequests = { created: 0, updated: 0 };
+
+    try {
+      const matrixRows = readSheetRows(gapsFilePath, 'DS04_Team_Skills_Matrix');
+      for (const row of matrixRows) {
+        const teamName = stringValue(row, 'team_name');
+        const skill = stringValue(row, 'skill');
+        if (!teamName || !skill) continue;
+
+        const values = {
+          tenant_id: tenantId,
+          team_name: teamName,
+          skill: skill,
+          proficiency_level: nullableString(row, 'proficiency_level'),
+          updated_at: new Date(),
+        };
+
+        const [existing] = await db
+          .select({ id: teamSkillsMatrix.id })
+          .from(teamSkillsMatrix)
+          .where(
+            and(
+              eq(teamSkillsMatrix.tenant_id, tenantId),
+              eq(teamSkillsMatrix.team_name, teamName),
+              eq(teamSkillsMatrix.skill, skill),
+            ),
+          )
+          .limit(1);
+
+        if (existing) {
+          await db.update(teamSkillsMatrix).set(values).where(eq(teamSkillsMatrix.id, existing.id));
+          result.teamSkillsMatrix.updated++;
+        } else {
+          await db.insert(teamSkillsMatrix).values({
+            id: crypto.randomUUID(),
+            ...values,
+          });
+          result.teamSkillsMatrix.created++;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to import team skills matrix sheet:', err);
+    }
+
+    try {
+      const hireRows = readSheetRows(gapsFilePath, 'DS06_Hire_Request');
+      for (const row of hireRows) {
+        const positionTitle = stringValue(row, 'position_title');
+        if (!positionTitle) continue;
+
+        const businessUnit = stringValue(row, 'business_unit') || 'Platform Team';
+        const values = {
+          tenant_id: tenantId,
+          position_title: positionTitle,
+          team_skill_gap_summary: nullableString(row, 'team_skill_gap_summary'),
+          business_unit: businessUnit,
+          updated_at: new Date(),
+        };
+
+        const [existing] = await db
+          .select({ id: teamHireRequests.id })
+          .from(teamHireRequests)
+          .where(
+            and(
+              eq(teamHireRequests.tenant_id, tenantId),
+              eq(teamHireRequests.position_title, positionTitle),
+              eq(teamHireRequests.business_unit, businessUnit),
+            ),
+          )
+          .limit(1);
+
+        if (existing) {
+          await db.update(teamHireRequests).set(values).where(eq(teamHireRequests.id, existing.id));
+          result.teamHireRequests.updated++;
+        } else {
+          await db.insert(teamHireRequests).values({
+            id: crypto.randomUUID(),
+            ...values,
+          });
+          result.teamHireRequests.created++;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to import team hire requests sheet:', err);
+    }
+  }
+
+  if (hasGapsSheets && gapsFilePath) {
+    try {
+      const hmFeedback = await importHmFeedbackFromWorkbook({
+        filePath: gapsFilePath,
+        session: input.session,
+      });
+      result.hmFeedback = {
+        created: hmFeedback.created,
+        updated: hmFeedback.updated,
+        skipped: hmFeedback.skipped,
+        invalid: hmFeedback.invalid.length,
+      };
+    } catch (err) {
+      console.error('Failed to import HM feedback tracker sheet:', err);
+      result.hmFeedback = { created: 0, updated: 0, skipped: 0, invalid: 0 };
     }
   }
 

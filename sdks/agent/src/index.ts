@@ -98,6 +98,11 @@ export {
 } from './trust.ts';
 export type { WorkflowBuilder } from './workflow-builder.ts';
 export type { WorkflowContribution } from './workflow-contribution.ts';
+export {
+  isWorkflowSystemWaitPayload,
+  type WorkflowSystemWaitPayload,
+  WorkflowSystemWaitPayloadSchema,
+} from './workflow-system-wait.ts';
 export { wrapUpdateWorkingMemoryTool } from './working-memory-guard.ts';
 export {
   type ConversationEntities,

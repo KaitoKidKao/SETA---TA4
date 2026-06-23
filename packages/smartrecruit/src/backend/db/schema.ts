@@ -108,6 +108,205 @@ export const criteria = smartrecruitSchema.table(
   ],
 );
 
+export const campaigns = smartrecruitSchema.table(
+  'campaigns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    workflow_run_id: text('workflow_run_id'),
+    criteria_id: uuid('criteria_id'),
+    job_title: text('job_title').notNull(),
+    jd_text: text('jd_text').notNull(),
+    template_id: uuid('template_id'),
+    orchestration_version: integer('orchestration_version').default(1).notNull(),
+    status: text('status', {
+      enum: [
+        'queued',
+        'awaiting_criteria',
+        'screening',
+        'screening_completed',
+        'drafting',
+        'awaiting_outreach_approval',
+        'sending',
+        'completed',
+        'completed_with_errors',
+        'failed',
+        'canceled',
+      ],
+    })
+      .notNull()
+      .default('queued'),
+    total_candidates: integer('total_candidates').default(0).notNull(),
+    screened_count: integer('screened_count').default(0).notNull(),
+    shortlisted_count: integer('shortlisted_count').default(0).notNull(),
+    failed_count: integer('failed_count').default(0).notNull(),
+    drafted_count: integer('drafted_count').default(0).notNull(),
+    sent_count: integer('sent_count').default(0).notNull(),
+    created_by: uuid('created_by').notNull(),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    screening_started_at: timestamp('screening_started_at', { withTimezone: true }),
+    screening_completed_at: timestamp('screening_completed_at', { withTimezone: true }),
+    drafting_started_at: timestamp('drafting_started_at', { withTimezone: true }),
+    drafting_completed_at: timestamp('drafting_completed_at', { withTimezone: true }),
+    sending_started_at: timestamp('sending_started_at', { withTimezone: true }),
+    sending_completed_at: timestamp('sending_completed_at', { withTimezone: true }),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+    error_reason: text('error_reason'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('campaigns_by_tenant_status').on(t.tenant_id, t.status),
+    index('campaigns_by_tenant_created_by').on(t.tenant_id, t.created_by),
+    index('campaigns_by_workflow_run').on(t.tenant_id, t.workflow_run_id),
+  ],
+);
+
+export const campaignCandidates = smartrecruitSchema.table(
+  'campaign_candidates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    source: text('source', {
+      enum: ['uploaded', 'suggested', 'mock_pool', 'manual'],
+    })
+      .notNull()
+      .default('uploaded'),
+    status: text('status', {
+      enum: [
+        'queued',
+        'screening',
+        'screened',
+        'shortlisted',
+        'screening_failed',
+        'drafting',
+        'drafted',
+        'draft_failed',
+        'sending',
+        'sent',
+        'send_failed',
+        'rejected',
+      ],
+    })
+      .notNull()
+      .default('queued'),
+    fit_score: integer('fit_score'),
+    reviewed_fit_score: integer('reviewed_fit_score'),
+    reviewed_by: uuid('reviewed_by'),
+    reviewed_at: timestamp('reviewed_at', { withTimezone: true }),
+    review_reason: text('review_reason'),
+    screening_report: jsonb('screening_report'),
+    draft_id: uuid('draft_id'),
+    error_reason: text('error_reason'),
+    last_error_code: text('last_error_code'),
+    screening_attempts: integer('screening_attempts').default(0).notNull(),
+    drafting_attempts: integer('drafting_attempts').default(0).notNull(),
+    sending_attempts: integer('sending_attempts').default(0).notNull(),
+    last_attempt_at: timestamp('last_attempt_at', { withTimezone: true }),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    screened_at: timestamp('screened_at', { withTimezone: true }),
+    drafted_at: timestamp('drafted_at', { withTimezone: true }),
+    sent_at: timestamp('sent_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('campaign_candidates_unique_candidate').on(
+      t.tenant_id,
+      t.campaign_id,
+      t.candidate_id,
+    ),
+    index('campaign_candidates_by_campaign').on(t.tenant_id, t.campaign_id),
+    index('campaign_candidates_by_status').on(t.tenant_id, t.campaign_id, t.status),
+  ],
+);
+
+export const recruiterOverrides = smartrecruitSchema.table(
+  'recruiter_overrides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    field: text('field').notNull(),
+    ai_value: jsonb('ai_value').notNull(),
+    human_value: jsonb('human_value').notNull(),
+    reason: text('reason').notNull(),
+    prompt_version: text('prompt_version'),
+    created_by: uuid('created_by').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('recruiter_overrides_by_campaign_candidate').on(
+      t.tenant_id,
+      t.campaign_id,
+      t.candidate_id,
+    ),
+  ],
+);
+
+export const campaignDataWarnings = smartrecruitSchema.table(
+  'campaign_data_warnings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    warning_code: text('warning_code').notNull(),
+    severity: text('severity', { enum: ['info', 'warning', 'error'] }).notNull(),
+    entity_type: text('entity_type').notNull(),
+    entity_id: text('entity_id'),
+    message: text('message').notNull(),
+    details: jsonb('details').notNull().default({}),
+    resolved_at: timestamp('resolved_at', { withTimezone: true }),
+    resolved_by: uuid('resolved_by'),
+    resolution_note: text('resolution_note'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('campaign_data_warnings_by_campaign').on(t.tenant_id, t.campaign_id, t.severity)],
+);
+
+export const campaignAiUsage = smartrecruitSchema.table(
+  'campaign_ai_usage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    candidate_id: uuid('candidate_id'),
+    stage: text('stage').notNull(),
+    model: text('model').notNull(),
+    prompt_version: text('prompt_version').notNull(),
+    input_tokens: integer('input_tokens'),
+    output_tokens: integer('output_tokens'),
+    latency_ms: integer('latency_ms').notNull(),
+    attempt: integer('attempt').default(1).notNull(),
+    ocr_source: text('ocr_source'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('campaign_ai_usage_by_campaign').on(t.tenant_id, t.campaign_id, t.stage)],
+);
+
+export const campaignReports = smartrecruitSchema.table(
+  'campaign_reports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    version: integer('version').notNull(),
+    snapshot: jsonb('snapshot').notNull(),
+    markdown: text('markdown').notNull(),
+    content_hash: text('content_hash').notNull(),
+    recruiter_note: text('recruiter_note'),
+    created_by: uuid('created_by').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('campaign_reports_unique_version').on(t.tenant_id, t.campaign_id, t.version),
+    index('campaign_reports_by_campaign').on(t.tenant_id, t.campaign_id, t.created_at),
+  ],
+);
+
 export const outreachTemplates = smartrecruitSchema.table(
   'outreach_templates',
   {
@@ -136,6 +335,7 @@ export const outreachDrafts = smartrecruitSchema.table(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     tenant_id: uuid('tenant_id').notNull(),
+    campaign_id: uuid('campaign_id'),
     candidate_id: uuid('candidate_id').notNull(),
     subject: text('subject').notNull(),
     body: text('body').notNull(),
@@ -154,7 +354,10 @@ export const outreachDrafts = smartrecruitSchema.table(
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [index('drafts_by_tenant_candidate').on(t.tenant_id, t.candidate_id)],
+  (t) => [
+    index('drafts_by_tenant_candidate').on(t.tenant_id, t.candidate_id),
+    index('drafts_by_tenant_campaign').on(t.tenant_id, t.campaign_id),
+  ],
 );
 
 export const interactionHistories = smartrecruitSchema.table(
@@ -173,4 +376,135 @@ export const interactionHistories = smartrecruitSchema.table(
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [index('interaction_histories_by_tenant_candidate').on(t.tenant_id, t.candidate_id)],
+);
+
+export const teamSkillsMatrix = smartrecruitSchema.table(
+  'team_skills_matrix',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    team_name: text('team_name').notNull(),
+    proficiency_level: text('proficiency_level'),
+    skill: text('skill').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('team_skills_matrix_by_tenant_team').on(t.tenant_id, t.team_name)],
+);
+
+export const teamHireRequests = smartrecruitSchema.table(
+  'team_hire_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    position_title: text('position_title').notNull(),
+    team_skill_gap_summary: text('team_skill_gap_summary'),
+    business_unit: text('business_unit'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('team_hire_requests_by_tenant_title').on(t.tenant_id, t.position_title)],
+);
+
+export const hmFeedbackRequests = smartrecruitSchema.table(
+  'hm_feedback_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    external_feedback_id: text('external_feedback_id').notNull(),
+    campaign_id: uuid('campaign_id'),
+    candidate_id: uuid('candidate_id'),
+    candidate_name: text('candidate_name').notNull(),
+    position: text('position').notNull(),
+    hiring_manager: text('hiring_manager').notNull(),
+    hiring_manager_email: text('hiring_manager_email'),
+    recruiter_owner_id: uuid('recruiter_owner_id'),
+    recruiter_owner_email: text('recruiter_owner_email'),
+    shortlisted_at: timestamp('shortlisted_at', { withTimezone: true }).notNull(),
+    feedback_due_at: timestamp('feedback_due_at', { withTimezone: true }).notNull(),
+    feedback_status: text('feedback_status').default('Pending').notNull(),
+    submitted_at: timestamp('submitted_at', { withTimezone: true }),
+    hm_decision: text('hm_decision'),
+    hm_feedback_text: text('hm_feedback_text'),
+    source_sla_breach: boolean('source_sla_breach'),
+    source_metadata: jsonb('source_metadata').default({}).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('hm_feedback_requests_tenant_external_id').on(t.tenant_id, t.external_feedback_id),
+    index('hm_feedback_requests_by_tenant_due').on(t.tenant_id, t.feedback_due_at),
+    index('hm_feedback_requests_by_tenant_status').on(t.tenant_id, t.feedback_status),
+    index('hm_feedback_requests_by_campaign').on(t.tenant_id, t.campaign_id),
+  ],
+);
+
+export const hmFeedbackReminderAttempts = smartrecruitSchema.table(
+  'hm_feedback_reminder_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    feedback_request_id: uuid('feedback_request_id').notNull(),
+    stage: text('stage', { enum: ['due_soon', 'overdue'] }).notNull(),
+    channel: text('channel', { enum: ['email'] })
+      .default('email')
+      .notNull(),
+    recipient_email: text('recipient_email'),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    status: text('status', {
+      enum: ['draft', 'queued', 'sent', 'failed', 'canceled'],
+    })
+      .default('draft')
+      .notNull(),
+    idempotency_key: text('idempotency_key').notNull(),
+    retry_number: integer('retry_number').default(0).notNull(),
+    approved_by: uuid('approved_by'),
+    approved_at: timestamp('approved_at', { withTimezone: true }),
+    queued_at: timestamp('queued_at', { withTimezone: true }),
+    sent_at: timestamp('sent_at', { withTimezone: true }),
+    provider_message_id: text('provider_message_id'),
+    failure_code: text('failure_code'),
+    failure_message: text('failure_message'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('hm_feedback_reminders_idempotency').on(t.tenant_id, t.idempotency_key),
+    index('hm_feedback_reminders_by_request').on(t.tenant_id, t.feedback_request_id, t.created_at),
+    index('hm_feedback_reminders_by_status').on(t.tenant_id, t.status),
+  ],
+);
+
+export const interviewSchedules = smartrecruitSchema.table(
+  'interview_schedules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    campaign_candidate_id: uuid('campaign_candidate_id').notNull(),
+    candidate_id: uuid('candidate_id').notNull(),
+    campaign_id: uuid('campaign_id').notNull(),
+    interviewer_email: text('interviewer_email').notNull(),
+    interviewer_name: text('interviewer_name'),
+    candidate_email: text('candidate_email').notNull(),
+    candidate_name: text('candidate_name'),
+    scheduled_at: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+    duration_minutes: integer('duration_minutes').default(60).notNull(),
+    teams_link: text('teams_link'),
+    graph_event_id: text('graph_event_id'),
+    status: text('status', {
+      enum: ['pending', 'confirmed', 'canceled', 'completed', 'rescheduled'],
+    })
+      .notNull()
+      .default('pending'),
+    notes: text('notes'),
+    created_by: uuid('created_by').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('interview_schedules_by_campaign').on(t.tenant_id, t.campaign_id),
+    index('interview_schedules_by_candidate').on(t.tenant_id, t.candidate_id),
+    index('interview_schedules_by_status').on(t.tenant_id, t.status),
+  ],
 );

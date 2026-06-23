@@ -4,18 +4,30 @@ import { hasPermission } from '@seta/shared-rbac';
 export const SMARTRECRUIT_ACCESS = 'smartrecruit.access' as const;
 export const SMARTRECRUIT_WRITE = 'smartrecruit.write' as const;
 export const SMARTRECRUIT_OUTREACH_APPROVE = 'smartrecruit.outreach.approve' as const;
+export const SMARTRECRUIT_HM_FEEDBACK_APPROVE = 'smartrecruit.hm_feedback.approve' as const;
 
 export const SMARTRECRUIT_PERMISSIONS = {
   [SMARTRECRUIT_ACCESS]: 'Access recruitment dashboard',
   [SMARTRECRUIT_WRITE]: 'Modify candidates and criteria',
   [SMARTRECRUIT_OUTREACH_APPROVE]: 'Approve and send outreach emails',
+  [SMARTRECRUIT_HM_FEEDBACK_APPROVE]: 'Approve Hiring Manager feedback reminders',
 } as const;
 
 export type SmartrecruitPermission = keyof typeof SMARTRECRUIT_PERMISSIONS;
 
 export const SMARTRECRUIT_ROLE_PERMISSIONS: Record<string, readonly SmartrecruitPermission[]> = {
-  recruiter: [SMARTRECRUIT_ACCESS, SMARTRECRUIT_WRITE, SMARTRECRUIT_OUTREACH_APPROVE],
-  hr: [SMARTRECRUIT_ACCESS, SMARTRECRUIT_WRITE, SMARTRECRUIT_OUTREACH_APPROVE],
+  recruiter: [
+    SMARTRECRUIT_ACCESS,
+    SMARTRECRUIT_WRITE,
+    SMARTRECRUIT_OUTREACH_APPROVE,
+    SMARTRECRUIT_HM_FEEDBACK_APPROVE,
+  ],
+  hr: [
+    SMARTRECRUIT_ACCESS,
+    SMARTRECRUIT_WRITE,
+    SMARTRECRUIT_OUTREACH_APPROVE,
+    SMARTRECRUIT_HM_FEEDBACK_APPROVE,
+  ],
   member: [SMARTRECRUIT_ACCESS],
 };
 

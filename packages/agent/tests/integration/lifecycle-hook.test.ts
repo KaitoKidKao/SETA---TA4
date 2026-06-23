@@ -68,6 +68,49 @@ describe('onLifecycleEvent — idempotency', () => {
 });
 
 describe('onLifecycleEvent — run-suspended', () => {
+  it('projects system waits without creating a human approval', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const runId = randomUUID();
+      const tenantId = randomUUID();
+      const userId = randomUUID();
+      await onLifecycleEvent(
+        pool,
+        baseRunStarted({ runId, eventSeq: 1, tenantId, startedBy: userId }),
+      );
+      await onLifecycleEvent(pool, {
+        kind: 'run-suspended',
+        runId,
+        eventSeq: 2,
+        workflowId: 'smartrecruit.workflow',
+        tenantId,
+        occurredAt: new Date(),
+        stepId: 'smartrecruit.screenCvs',
+        suspendReason: 'background_job',
+        proposedPayload: {
+          kind: 'system_wait',
+          reason: 'candidate_screening',
+          aggregateId: randomUUID(),
+          stage: 'screening',
+        },
+        approverUserId: userId,
+        fallbackApproverUserId: null,
+        surfaceCanvas: true,
+        surfaceChatThreadId: null,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
+      const run = await pool.query(
+        `SELECT status, suspend_reason FROM agent.workflow_runs WHERE run_id = $1`,
+        [runId],
+      );
+      expect(run.rows[0]).toMatchObject({ status: 'waiting', suspend_reason: 'background_job' });
+      const approvals = await pool.query(
+        `SELECT count(*)::int AS count FROM agent.workflow_approvals WHERE run_id = $1`,
+        [runId],
+      );
+      expect(approvals.rows[0]?.count).toBe(0);
+    });
+  });
+
   it('updates run status to paused and writes a workflow_approvals row', async () => {
     await withAgentTestDb(async ({ pool }) => {
       const runId = randomUUID();

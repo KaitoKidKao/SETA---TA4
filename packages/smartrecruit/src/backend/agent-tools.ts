@@ -2,9 +2,16 @@ import type { AgentTool } from '@seta/agent-sdk';
 import { actorFromContext, defineAgentTool } from '@seta/agent-sdk';
 import { buildActorSession } from '@seta/identity';
 import { z } from 'zod';
-import { requirePermission, SMARTRECRUIT_OUTREACH_APPROVE, SMARTRECRUIT_WRITE } from '../rbac.ts';
+import {
+  requirePermission,
+  SMARTRECRUIT_HM_FEEDBACK_APPROVE,
+  SMARTRECRUIT_OUTREACH_APPROVE,
+  SMARTRECRUIT_WRITE,
+} from '../rbac.ts';
+import { enqueueSmartrecruitJob } from './domain/campaign.ts';
 import { draftOutreach } from './domain/draft-outreach.ts';
 import { executeOutreach } from './domain/execute-outreach.ts';
+import { approveHmFeedbackReminder } from './domain/hm-feedback.ts';
 import { performOcr } from './domain/ocr.ts';
 import { parseJd } from './domain/parse-jd.ts';
 import { screenCv } from './domain/screen-cv.ts';
@@ -162,6 +169,41 @@ export const smartrecruitExecuteOutreachTool = defineAgentTool({
   },
 });
 
+export const smartrecruitApproveHmFeedbackReminderTool = defineAgentTool({
+  id: 'smartrecruit_approveHmFeedbackReminder',
+  name: 'Approve Hiring Manager Feedback Reminder',
+  description:
+    'Approve and queue an email reminder to a Hiring Manager for a due-soon or overdue feedback request.',
+  input: z.object({
+    feedbackRequestId: z.string().uuid().describe('ID of the HM feedback request'),
+  }),
+  output: z.object({
+    id: z.string().uuid(),
+    feedbackRequestId: z.string().uuid(),
+    status: z.string(),
+    queuedAt: z.string().nullable(),
+  }),
+  rbac: SMARTRECRUIT_HM_FEEDBACK_APPROVE,
+  needsApproval: true,
+  execute: async (input, ctx) => {
+    const actor = actorFromContext(ctx);
+    const session = await buildActorSession({ user_id: actor.user_id });
+    const attempt = await approveHmFeedbackReminder({
+      tenantId: session.tenant_id,
+      feedbackRequestId: input.feedbackRequestId,
+      session,
+      addJob: (taskName, payload, opts) =>
+        enqueueSmartrecruitJob(taskName, payload as Record<string, unknown>, opts),
+    });
+    return {
+      id: attempt.id,
+      feedbackRequestId: attempt.feedback_request_id,
+      status: attempt.status,
+      queuedAt: attempt.queued_at?.toISOString() ?? null,
+    };
+  },
+});
+
 export const smartrecruitOcrBackupTool = defineAgentTool({
   id: 'smartrecruit_ocrBackup',
   name: 'OCR Backup Tool',
@@ -188,5 +230,6 @@ export const smartrecruitAgentTools: AgentTool[] = [
   smartrecruitScreenCvTool,
   smartrecruitDraftOutreachTool,
   smartrecruitExecuteOutreachTool,
+  smartrecruitApproveHmFeedbackReminderTool,
   smartrecruitOcrBackupTool,
 ];

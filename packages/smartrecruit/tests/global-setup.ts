@@ -36,6 +36,8 @@ export default async function (): Promise<() => Promise<void>> {
   process.env.BETTER_AUTH_SECRET ??= 'test'.padEnd(32, '_');
   process.env.AGENT_MODELS ??= 'mock/echo';
   process.env.OPENAI_API_KEY ??= 'test-key';
+  process.env.MAILER_DEFAULT_TRANSPORT ??= 'dev-stub';
+  process.env.MAILER_DEFAULT_SENDER ??= 'noreply@example.com';
 
   return async () => {
     await handle?.stop();

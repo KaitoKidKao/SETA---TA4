@@ -1,33 +1,38 @@
 import { Agent } from '@mastra/core/agent';
 import { createStep } from '@mastra/core/workflows';
 import { createWorkflow } from '@mastra/core/workflows/evented';
-import { ApprovalCardSchema, sessionFromRequestContext, type WorkflowSpec } from '@seta/agent-sdk';
-import type { SessionScope } from '@seta/core';
+import {
+  ApprovalCardSchema,
+  sessionFromRequestContext,
+  type WorkflowSpec,
+  WorkflowSystemWaitPayloadSchema,
+} from '@seta/agent-sdk';
 import { withEmit } from '@seta/core/events';
 import { buildActorSession } from '@seta/identity';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { smartrecruitDb } from '../db/client.ts';
-import { candidates, criteria as criteriaTable, outreachDrafts } from '../db/schema.ts';
-import { draftOutreach } from '../domain/draft-outreach.ts';
-import { executeOutreach } from '../domain/execute-outreach.ts';
+import { criteria as criteriaTable, outreachDrafts } from '../db/schema.ts';
+import {
+  addCandidatesToCampaign,
+  createSmartrecruitCampaign,
+  enqueueSmartrecruitJob,
+  getCampaignView,
+  SmartrecruitCandidateInput,
+  SmartrecruitCandidateInputSchema,
+  updateCampaignStatus,
+  updateCampaignWorkflowRun,
+  waitForCampaignStatus,
+} from '../domain/campaign.ts';
 import { getModelConfig } from '../domain/model.ts';
-import { screenCv } from '../domain/screen-cv.ts';
 
 // --- Input/Output Schemas ---
 
-export const SmartrecruitCandidateInputSchema = z.object({
-  candidateName: z.string(),
-  candidateEmail: z.string().email(),
-  candidatePhone: z.string().optional(),
-  cvPath: z.string().optional(),
-  cvText: z.string(),
-});
-
 export const SmartrecruitWorkflowInputSchema = z.object({
+  campaignId: z.string().uuid().optional(),
   jobTitle: z.string(),
   jdText: z.string(),
-  cvs: z.array(SmartrecruitCandidateInputSchema),
+  cvs: z.array(SmartrecruitCandidateInputSchema).default([]),
   templateId: z.string().uuid().optional(),
 });
 export type SmartrecruitWorkflowInput = z.infer<typeof SmartrecruitWorkflowInputSchema>;
@@ -41,8 +46,8 @@ export type SmartrecruitWorkflowOutput = z.infer<typeof SmartrecruitWorkflowOutp
 // --- Step 1: Parse JD (Gate 1 Suspend) ---
 
 const ParseJdStepOutputSchema = z.object({
+  campaignId: z.string().uuid(),
   criteriaId: z.string().uuid(),
-  cvs: z.array(SmartrecruitCandidateInputSchema),
   templateId: z.string().uuid().optional(),
 });
 
@@ -74,6 +79,7 @@ const parseJdStep = createStep({
   resumeSchema: z.discriminatedUnion('action', [
     z.object({
       action: z.literal('approve'),
+      campaignId: z.string().uuid().optional(),
       criteriaId: z.string().uuid(),
       additionalCandidateIds: z.array(z.string().uuid()).optional(),
     }),
@@ -86,12 +92,43 @@ const parseJdStep = createStep({
     const session = await buildActorSession({ user_id: userId });
 
     if (!resumeData) {
+      const campaign =
+        inputData.campaignId ??
+        (
+          await createSmartrecruitCampaign({
+            jobTitle: inputData.jobTitle,
+            jdText: inputData.jdText,
+            cvs: inputData.cvs,
+            templateId: inputData.templateId,
+            session,
+          })
+        ).campaign.id;
+
+      await updateCampaignWorkflowRun({
+        campaignId: campaign,
+        tenantId: session.tenant_id,
+        workflowRunId: runId,
+      });
+      await updateCampaignStatus({
+        campaignId: campaign,
+        tenantId: session.tenant_id,
+        status: 'awaiting_criteria',
+      });
+
+      const campaignView = await getCampaignView({
+        campaignId: campaign,
+        tenantId: session.tenant_id,
+      });
+      if (!campaignView) throw new Error(`Campaign ${campaign} not found.`);
+      const jobTitle = campaignView.campaign.job_title;
+      const jdText = campaignView.campaign.jd_text;
+
       // 1. Ask LLM to parse raw Job Description
       const model = getModelConfig();
       const agent = new Agent({
         id: 'smartrecruit.jdParser',
         name: 'Job Description Parser',
-        instructions: `You are an expert recruitment coordinator. Analyze the job description for the position of "${inputData.jobTitle}".
+        instructions: `You are an expert recruitment coordinator. Analyze the job description for the position of "${jobTitle}".
 Extract:
 1. Must-have technical skills: skills absolutely required.
 2. Nice-to-have technical skills: preferred or optional skills.
@@ -103,7 +140,7 @@ Return the result structured according to the schema.`,
       });
 
       const response = await agent.generate(
-        `Job Title: ${inputData.jobTitle}\n\nJob Description:\n${inputData.jdText}`,
+        `Job Title: ${jobTitle}\n\nJob Description:\n${jdText}`,
         {
           structuredOutput: {
             schema: z.object({
@@ -122,6 +159,7 @@ Return the result structured according to the schema.`,
                 .describe('Additional notes or soft skill requirements'),
             }),
           },
+          modelSettings: { temperature: 0, seed: 42 },
         },
       );
 
@@ -144,8 +182,8 @@ Return the result structured according to the schema.`,
           await tx.insert(criteriaTable).values({
             id,
             tenant_id: session.tenant_id,
-            job_title: inputData.jobTitle,
-            jd_text: inputData.jdText,
+            job_title: jobTitle,
+            jd_text: jdText,
             must_have_skills: parsed.mustHaveSkills,
             nice_to_have_skills: parsed.niceToHaveSkills,
             min_yoe: parsed.minYoe,
@@ -155,18 +193,24 @@ Return the result structured according to the schema.`,
           criteriaId = id;
         },
       );
+      await updateCampaignStatus({
+        campaignId: campaign,
+        tenantId: session.tenant_id,
+        status: 'awaiting_criteria',
+        criteriaId,
+      });
 
       // 2. Build ApprovalCard for Gate 1
       const card = {
         toolCallId: `workflow:${runId}`,
         intent: 'Confirm screening criteria',
         riskBadge: 'write' as const,
-        summary: `Confirm recruitment screening criteria for "${inputData.jobTitle}"`,
+        summary: `Confirm recruitment screening criteria for "${jobTitle}"`,
         details: [
           {
             kind: 'kvTable' as const,
             rows: [
-              { k: 'Job Title', v: inputData.jobTitle },
+              { k: 'Job Title', v: jobTitle },
               { k: 'Minimum YOE', v: `${parsed.minYoe} years` },
               { k: 'Education Level', v: parsed.educationLevel ?? 'Not specified' },
               { k: 'Additional Requirements', v: parsed.additionalRequirements ?? 'None' },
@@ -184,6 +228,7 @@ Return the result structured according to the schema.`,
           label: 'Confirm Criteria',
           argsPatch: {
             action: 'approve',
+            campaignId: campaign,
             criteriaId,
           },
         },
@@ -212,6 +257,10 @@ Return the result structured according to the schema.`,
     }
 
     const { criteriaId, additionalCandidateIds } = resumeData;
+    const campaignId = resumeData.campaignId ?? inputData.campaignId;
+    if (!campaignId) {
+      throw new Error('Campaign ID is required to resume SmartRecruit workflow.');
+    }
     const db = smartrecruitDb();
     const [existing] = await db
       .select()
@@ -223,175 +272,27 @@ Return the result structured according to the schema.`,
       throw new Error(`Criteria with ID ${criteriaId} not found on resume.`);
     }
 
-    let additionalCvs: Array<{
-      candidateName: string;
-      candidateEmail: string;
-      candidatePhone?: string;
-      cvPath?: string;
-      cvText: string;
-    }> = [];
-
     if (additionalCandidateIds && additionalCandidateIds.length > 0) {
-      const dbCands = await db
-        .select()
-        .from(candidates)
-        .where(
-          and(
-            eq(candidates.tenant_id, session.tenant_id),
-            inArray(candidates.id, additionalCandidateIds),
-          ),
-        );
-      additionalCvs = dbCands.map((c) => ({
-        candidateName: c.display_name,
-        candidateEmail: c.email,
-        candidatePhone: c.phone ?? undefined,
-        cvPath: c.cv_path ?? undefined,
-        cvText: c.cv_text ?? '',
-      }));
+      await addCandidatesToCampaign({
+        campaignId,
+        tenantId: session.tenant_id,
+        candidateIds: additionalCandidateIds,
+        source: 'suggested',
+      });
     }
 
     return {
+      campaignId,
       criteriaId,
-      cvs: [...inputData.cvs, ...additionalCvs],
       templateId: inputData.templateId,
     };
   },
 });
 
-// --- Helper for Concurrent Batch Processing ---
-
-async function runInBatchesSettled<T, R>(
-  items: T[],
-  batchSize: number,
-  fn: (item: T) => Promise<R>,
-): Promise<Array<PromiseSettledResult<R>>> {
-  const results: Array<PromiseSettledResult<R>> = [];
-  for (let i = 0; i < items.length; i += batchSize) {
-    const chunk = items.slice(i, i + batchSize);
-    const chunkResults = await Promise.allSettled(chunk.map((item) => fn(item)));
-    results.push(...chunkResults);
-  }
-  return results;
-}
-
-type WorkflowCandidateSummary = {
-  id: string;
-  displayName: string;
-  email: string;
-  fitScore: number;
-  screeningStatus: 'screened' | 'shortlisted' | 'failed';
-  errorReason?: string;
-};
-
-function messageFromError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function toWorkflowCandidateSummary(
-  screened: Awaited<ReturnType<typeof screenCv>>,
-): WorkflowCandidateSummary {
-  return {
-    id: screened.id,
-    displayName: screened.displayName,
-    email: screened.email,
-    fitScore: screened.fitScore,
-    screeningStatus: screened.fitScore >= 70 ? 'shortlisted' : 'screened',
-  };
-}
-
-async function saveFailedScreeningCandidate(args: {
-  cv: z.infer<typeof SmartrecruitCandidateInputSchema>;
-  session: SessionScope;
-  error: unknown;
-}): Promise<WorkflowCandidateSummary> {
-  const message = messageFromError(args.error);
-  const report = {
-    pros: [],
-    gaps: [`Screening failed: ${message}`],
-    yoeExplanation: 'Unable to calculate years of experience because screening failed.',
-    overallJustification:
-      'The automated screening step failed for this CV. Keep this candidate for manual recruiter review instead of dropping them from the pipeline.',
-    mustHaveMatches: [],
-    niceToHaveMatches: [],
-    scoreBreakdown: {
-      mustHaveSkills: 0,
-      yoe: 0,
-      english: 0,
-      niceToHave: 0,
-    },
-    flags: ['SCREENING_FAILED'],
-  };
-
-  let savedId!: string;
-  await withEmit(
-    {
-      actor: {
-        userId: args.session.user_id,
-        tenantId: args.session.tenant_id,
-      },
-    },
-    async (tx) => {
-      const id = crypto.randomUUID();
-      await tx.insert(candidates).values({
-        id,
-        tenant_id: args.session.tenant_id,
-        display_name: args.cv.candidateName,
-        email: args.cv.candidateEmail,
-        phone: args.cv.candidatePhone ?? null,
-        cv_path: args.cv.cvPath ?? null,
-        cv_text: args.cv.cvText,
-        status: 'screened',
-        fit_score: 0,
-        screening_report: report,
-      });
-      savedId = id;
-    },
-  );
-
-  return {
-    id: savedId,
-    displayName: args.cv.candidateName,
-    email: args.cv.candidateEmail,
-    fitScore: 0,
-    screeningStatus: 'failed',
-    errorReason: message,
-  };
-}
-
-async function markOutreachDraftFailed(args: {
-  draftId: string;
-  session: SessionScope;
-  error: unknown;
-}): Promise<void> {
-  const message = messageFromError(args.error);
-  await withEmit(
-    {
-      actor: {
-        userId: args.session.user_id,
-        tenantId: args.session.tenant_id,
-      },
-    },
-    async (tx) => {
-      await tx
-        .update(outreachDrafts)
-        .set({
-          status: 'failed',
-          error_reason: message,
-          updated_at: new Date(),
-        })
-        .where(
-          and(
-            eq(outreachDrafts.id, args.draftId),
-            eq(outreachDrafts.tenant_id, args.session.tenant_id),
-          ),
-        );
-    },
-  );
-}
-
 // --- Step 2: Screen CVs (Calculates Fit Score) ---
 
 const ScreenCvsStepOutputSchema = z.object({
+  campaignId: z.string().uuid(),
   criteriaId: z.string().uuid(),
   screenedCandidates: z.array(
     z.object({
@@ -416,51 +317,91 @@ const ScreenCvsStepOutputSchema = z.object({
   templateId: z.string().uuid().optional(),
 });
 
+const CampaignStageResumeSchema = z.object({
+  kind: z.literal('campaign_stage_completed'),
+  campaignId: z.string().uuid(),
+  stage: z.enum(['screening', 'drafting', 'sending']),
+  status: z.enum([
+    'screening_completed',
+    'awaiting_outreach_approval',
+    'completed',
+    'completed_with_errors',
+  ]),
+});
+
 const screenCvsStep = createStep({
   id: 'smartrecruit.screenCvs',
   description: 'Screens all candidate CVs against the confirmed criteria and saves results.',
   inputSchema: ParseJdStepOutputSchema,
   outputSchema: ScreenCvsStepOutputSchema,
-  execute: async ({ inputData, requestContext }) => {
+  suspendSchema: WorkflowSystemWaitPayloadSchema,
+  resumeSchema: CampaignStageResumeSchema,
+  execute: async ({ inputData, resumeData, suspend, requestContext }) => {
     const { userId } = await sessionFromRequestContext(requestContext);
     const session = await buildActorSession({ user_id: userId });
 
-    const settledResults = await runInBatchesSettled(inputData.cvs, 3, (cv) =>
-      screenCv({
-        candidateName: cv.candidateName,
-        candidateEmail: cv.candidateEmail,
-        candidatePhone: cv.candidatePhone,
-        cvPath: cv.cvPath,
-        cvText: cv.cvText,
-        criteriaId: inputData.criteriaId,
-        session,
-      }),
-    );
-
-    const screenedCandidates: WorkflowCandidateSummary[] = [];
-    for (let index = 0; index < settledResults.length; index++) {
-      const settled = settledResults[index];
-      const cv = inputData.cvs[index];
-      if (!settled || !cv) continue;
-
-      if (settled.status === 'fulfilled') {
-        screenedCandidates.push(toWorkflowCandidateSummary(settled.value));
-      } else {
-        screenedCandidates.push(
-          await saveFailedScreeningCandidate({
-            cv,
-            session,
-            error: settled.reason,
-          }),
-        );
+    const initialView = await getCampaignView({
+      campaignId: inputData.campaignId,
+      tenantId: session.tenant_id,
+    });
+    if (!initialView) throw new Error(`Campaign ${inputData.campaignId} not found.`);
+    if (!resumeData) {
+      await enqueueSmartrecruitJob(
+        'smartrecruit:campaign_screen',
+        {
+          campaignId: inputData.campaignId,
+          criteriaId: inputData.criteriaId,
+          userId: session.user_id,
+        },
+        {
+          jobKey: `smartrecruit:campaign_screen:${inputData.campaignId}`,
+          maxAttempts: 3,
+          queueName: `smartrecruit:${inputData.campaignId}`,
+        },
+      );
+      if (initialView.campaign.orchestration_version >= 2) {
+        return suspend({
+          kind: 'system_wait',
+          reason: 'candidate_screening',
+          aggregateId: inputData.campaignId,
+          stage: 'screening',
+        });
       }
+      await waitForCampaignStatus({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+        statuses: ['screening_completed'],
+      });
+    } else if (resumeData.stage !== 'screening') {
+      throw new Error(`Unexpected campaign stage resume: ${resumeData.stage}`);
     }
+
+    const view = await getCampaignView({
+      campaignId: inputData.campaignId,
+      tenantId: session.tenant_id,
+    });
+    if (!view) throw new Error(`Campaign ${inputData.campaignId} not found after screening.`);
+
+    const screenedCandidates = view.candidates.map(({ campaignCandidate, candidate }) => ({
+      id: campaignCandidate.candidate_id,
+      displayName: candidate?.display_name ?? 'Unknown candidate',
+      email: candidate?.email ?? 'unknown@example.com',
+      fitScore: campaignCandidate.fit_score ?? 0,
+      screeningStatus:
+        campaignCandidate.status === 'screening_failed'
+          ? ('failed' as const)
+          : campaignCandidate.status === 'shortlisted'
+            ? ('shortlisted' as const)
+            : ('screened' as const),
+      errorReason: campaignCandidate.error_reason ?? undefined,
+    }));
 
     const shortlistedCandidates = screenedCandidates.filter(
       (candidate) => candidate.screeningStatus === 'shortlisted',
     );
 
     return {
+      campaignId: inputData.campaignId,
       criteriaId: inputData.criteriaId,
       screenedCandidates,
       shortlistedCandidates,
@@ -472,6 +413,7 @@ const screenCvsStep = createStep({
 // --- Step 3: Draft Outreach Emails (Gate 2 Suspend) ---
 
 const DraftOutreachStepOutputSchema = z.object({
+  campaignId: z.string().uuid(),
   approvedDraftIds: z.array(z.string().uuid()),
 });
 
@@ -498,38 +440,80 @@ const draftOutreachStep = createStep({
     'Drafts outreach emails for shortlisted candidates with anti-hallucination checks, and suspends for Gate 2 human approval.',
   inputSchema: ScreenCvsStepOutputSchema,
   outputSchema: DraftOutreachStepOutputSchema,
-  suspendSchema: ApprovalCardSchema,
-  resumeSchema: z.union([Gate2ResumeSchema, Gate2GenericResumeSchema]),
+  suspendSchema: z.union([ApprovalCardSchema, WorkflowSystemWaitPayloadSchema]),
+  resumeSchema: z.union([Gate2ResumeSchema, Gate2GenericResumeSchema, CampaignStageResumeSchema]),
   execute: async ({ inputData, resumeData, suspend, requestContext, runId }) => {
     const { userId } = await sessionFromRequestContext(requestContext);
     const session = await buildActorSession({ user_id: userId });
+    const stageResume =
+      resumeData && 'kind' in resumeData && resumeData.kind === 'campaign_stage_completed';
 
     if (!resumeData) {
-      const draftSettled = await runInBatchesSettled(inputData.shortlistedCandidates, 3, (cand) =>
-        draftOutreach({
-          candidateId: cand.id,
+      const campaignBeforeDrafting = await getCampaignView({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+      });
+      if (!campaignBeforeDrafting) throw new Error(`Campaign ${inputData.campaignId} not found.`);
+      await enqueueSmartrecruitJob(
+        'smartrecruit:campaign_draft_outreach',
+        {
+          campaignId: inputData.campaignId,
           templateId: inputData.templateId,
-          session,
-        }),
+          userId: session.user_id,
+        },
+        {
+          jobKey: `smartrecruit:campaign_draft_outreach:${inputData.campaignId}`,
+          maxAttempts: 3,
+          queueName: `smartrecruit:${inputData.campaignId}`,
+        },
       );
 
-      const draftResults: Array<Awaited<ReturnType<typeof draftOutreach>>> = [];
-      const draftFailures = new Map<string, string>();
-      for (let index = 0; index < draftSettled.length; index++) {
-        const settled = draftSettled[index];
-        const candidate = inputData.shortlistedCandidates[index];
-        if (!settled || !candidate) continue;
-        if (settled.status === 'fulfilled') {
-          draftResults.push(settled.value);
-        } else {
-          const message = messageFromError(settled.reason);
-          draftFailures.set(candidate.id, message);
-        }
+      if (campaignBeforeDrafting.campaign.orchestration_version >= 2) {
+        return suspend({
+          kind: 'system_wait',
+          reason: 'outreach_drafting',
+          aggregateId: inputData.campaignId,
+          stage: 'drafting',
+        });
       }
 
+      await waitForCampaignStatus({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+        statuses: ['awaiting_outreach_approval'],
+      });
+    }
+
+    if (!resumeData || stageResume) {
+      const view = await getCampaignView({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+      });
+      if (!view) throw new Error(`Campaign ${inputData.campaignId} not found after drafting.`);
+
       // Build ApprovalCard for Gate 2
-      const screenedCount = inputData.screenedCandidates.length;
-      const shortlistedCount = inputData.shortlistedCandidates.length;
+      const screenedCandidates = view.candidates.map(({ campaignCandidate, candidate, draft }) => ({
+        id: campaignCandidate.candidate_id,
+        displayName: candidate?.display_name ?? 'Unknown candidate',
+        email: candidate?.email ?? 'unknown@example.com',
+        fitScore: campaignCandidate.fit_score ?? 0,
+        status: campaignCandidate.status,
+        errorReason: campaignCandidate.error_reason ?? undefined,
+        draft,
+      }));
+      const screenedCount = screenedCandidates.length;
+      const shortlistedCount = screenedCandidates.filter((c) =>
+        [
+          'shortlisted',
+          'drafting',
+          'drafted',
+          'draft_failed',
+          'sending',
+          'sent',
+          'send_failed',
+        ].includes(c.status),
+      ).length;
+      const draftedCandidates = screenedCandidates.filter((c) => c.draft);
       const card = {
         toolCallId: `workflow:${runId}`,
         intent: 'Approve outreach emails',
@@ -537,26 +521,24 @@ const draftOutreachStep = createStep({
         riskBadge: 'external' as const,
         summary:
           shortlistedCount > 0
-            ? `Review ${draftResults.length} generated outreach drafts for ${shortlistedCount} shortlisted candidates (${screenedCount} screened total)`
+            ? `Review ${draftedCandidates.length} generated outreach drafts for ${shortlistedCount} shortlisted candidates (${screenedCount} screened total)`
             : `Review screening results for ${screenedCount} candidates. No outreach draft was generated because no candidate met the shortlist threshold.`,
         details: [
           {
             kind: 'candidateList' as const,
-            items: inputData.screenedCandidates.map((c) => {
-              const draft = draftResults.find((d) => d.candidateId === c.id);
-              const draftFailure = draftFailures.get(c.id);
+            items: screenedCandidates.map((c) => {
               const statusLabel =
-                c.screeningStatus === 'failed'
+                c.status === 'screening_failed'
                   ? `Screening failed: ${c.errorReason ?? 'Unknown error'}`
-                  : c.screeningStatus === 'shortlisted'
-                    ? `Score: ${c.fitScore}% | Draft: ${
-                        draft
-                          ? `Anti-Hallucination ${draft.hallucinationCheckStatus}`
-                          : draftFailure
-                            ? `failed (${draftFailure})`
-                            : 'not generated'
-                      }`
-                    : `Score: ${c.fitScore}% | Below outreach threshold, keep for manual review`;
+                  : c.status === 'draft_failed'
+                    ? `Score: ${c.fitScore}% | Draft failed: ${c.errorReason ?? 'Unknown error'}`
+                    : c.draft
+                      ? `Score: ${c.fitScore}% | Draft: Anti-Hallucination ${c.draft.hallucination_check_status}`
+                      : c.status === 'shortlisted'
+                        ? `Score: ${c.fitScore}% | Draft: ${
+                            c.errorReason ? `failed (${c.errorReason})` : 'not generated'
+                          }`
+                        : `Score: ${c.fitScore}% | Below outreach threshold, keep for manual review`;
               return {
                 id: c.id,
                 label: c.displayName,
@@ -570,8 +552,10 @@ const draftOutreachStep = createStep({
           label: 'Approve & Send',
           argsPatch: {
             action: 'approve',
-            approvedDraftIds: draftResults.map((d) => d.id),
-            assigneeUserIds: draftResults.map((draft) => draft.candidateId),
+            approvedDraftIds: draftedCandidates
+              .map((candidate) => candidate.draft?.id)
+              .filter(Boolean),
+            assigneeUserIds: draftedCandidates.map((candidate) => candidate.id),
           },
         },
         alternates: [],
@@ -603,7 +587,12 @@ const draftOutreachStep = createStep({
         (resumeData.decision === 'reject' || resumeData.decision === 'timeout'));
 
     if (declined) {
-      return { approvedDraftIds: [] };
+      await updateCampaignStatus({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+        status: 'canceled',
+      });
+      return { campaignId: inputData.campaignId, approvedDraftIds: [] };
     }
 
     const explicitDraftIds =
@@ -611,7 +600,7 @@ const draftOutreachStep = createStep({
         ? (resumeData.approvedDraftIds as string[])
         : [];
     if (explicitDraftIds.length > 0) {
-      return { approvedDraftIds: explicitDraftIds };
+      return { campaignId: inputData.campaignId, approvedDraftIds: explicitDraftIds };
     }
 
     const candidateIds =
@@ -619,7 +608,9 @@ const draftOutreachStep = createStep({
         ? (resumeData.assigneeUserIds as string[])
         : inputData.shortlistedCandidates.map((candidate) => candidate.id);
 
-    if (candidateIds.length === 0) return { approvedDraftIds: [] };
+    if (candidateIds.length === 0) {
+      return { campaignId: inputData.campaignId, approvedDraftIds: [] };
+    }
 
     const db = smartrecruitDb();
     const rows = await db
@@ -628,12 +619,14 @@ const draftOutreachStep = createStep({
       .where(
         and(
           eq(outreachDrafts.tenant_id, session.tenant_id),
+          eq(outreachDrafts.campaign_id, inputData.campaignId),
           inArray(outreachDrafts.candidate_id, candidateIds),
           eq(outreachDrafts.status, 'draft'),
         ),
       );
 
     return {
+      campaignId: inputData.campaignId,
       approvedDraftIds: rows.map((row) => row.id),
     };
   },
@@ -646,37 +639,59 @@ const executeOutreachStep = createStep({
   description: 'Sends the approved outreach emails via SMTP and updates statuses.',
   inputSchema: DraftOutreachStepOutputSchema,
   outputSchema: SmartrecruitWorkflowOutputSchema,
-  execute: async ({ inputData, requestContext }) => {
+  suspendSchema: WorkflowSystemWaitPayloadSchema,
+  resumeSchema: CampaignStageResumeSchema,
+  execute: async ({ inputData, resumeData, suspend, requestContext }) => {
     const { userId } = await sessionFromRequestContext(requestContext);
     const session = await buildActorSession({ user_id: userId });
 
-    const sendResults = await runInBatchesSettled(inputData.approvedDraftIds, 2, (draftId) =>
-      executeOutreach({
-        draftId,
-        session,
-      }),
-    );
-
-    let sentCount = 0;
-    for (let index = 0; index < sendResults.length; index++) {
-      const result = sendResults[index];
-      const draftId = inputData.approvedDraftIds[index];
-      if (!result || !draftId) continue;
-
-      if (result.status === 'fulfilled') {
-        sentCount += 1;
-      } else {
-        await markOutreachDraftFailed({
-          draftId,
-          session,
-          error: result.reason,
+    const beforeSending = await getCampaignView({
+      campaignId: inputData.campaignId,
+      tenantId: session.tenant_id,
+    });
+    if (!beforeSending) throw new Error(`Campaign ${inputData.campaignId} not found.`);
+    let campaign = beforeSending.campaign;
+    if (!resumeData) {
+      await enqueueSmartrecruitJob(
+        'smartrecruit:campaign_send_outreach',
+        {
+          campaignId: inputData.campaignId,
+          userId: session.user_id,
+          approvedDraftIds: inputData.approvedDraftIds,
+        },
+        {
+          jobKey: `smartrecruit:campaign_send_outreach:${inputData.campaignId}`,
+          maxAttempts: 3,
+          queueName: `smartrecruit:${inputData.campaignId}`,
+        },
+      );
+      if (campaign.orchestration_version >= 2) {
+        return suspend({
+          kind: 'system_wait',
+          reason: 'outreach_sending',
+          aggregateId: inputData.campaignId,
+          stage: 'sending',
         });
       }
+      campaign = await waitForCampaignStatus({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+        statuses: ['completed', 'completed_with_errors'],
+      });
+    } else if (resumeData.stage === 'sending') {
+      const completed = await getCampaignView({
+        campaignId: inputData.campaignId,
+        tenantId: session.tenant_id,
+      });
+      if (!completed) throw new Error(`Campaign ${inputData.campaignId} not found after sending.`);
+      campaign = completed.campaign;
+    } else {
+      throw new Error(`Unexpected campaign stage resume: ${resumeData.stage}`);
     }
 
     return {
-      success: sentCount === inputData.approvedDraftIds.length,
-      count: sentCount,
+      success: campaign.failed_count === 0,
+      count: campaign.sent_count,
     };
   },
 });
