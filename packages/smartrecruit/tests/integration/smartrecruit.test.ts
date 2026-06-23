@@ -1,7 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { candidates, criteria, outreachDrafts } from '../../src/backend/db/schema.ts';
+import { campaigns, candidates, criteria, outreachDrafts } from '../../src/backend/db/schema.ts';
 import { draftOutreach } from '../../src/backend/domain/draft-outreach.ts';
 import { executeOutreach } from '../../src/backend/domain/execute-outreach.ts';
 import { parseJd } from '../../src/backend/domain/parse-jd.ts';
@@ -638,6 +638,83 @@ describe('SmartRecruit Integration Tests', () => {
       expect(result).toBeDefined();
       expect(result.results.length).toBeGreaterThan(0);
       expect(result.results.map((r) => r.displayName)).toContain('Go Expert');
+    });
+  });
+
+  it('Verification Case 7: Do not flag missing JD IDs for manually pasted job descriptions', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      const criteriaId = crypto.randomUUID();
+      await db.insert(criteria).values({
+        id: criteriaId,
+        tenant_id: session.tenant_id,
+        job_title: 'Manual AI Engineer',
+        jd_text: 'Python, PyTorch, LLMs',
+        must_have_skills: ['Python'],
+        nice_to_have_skills: [],
+        min_yoe: 3,
+      });
+
+      const campaignId = crypto.randomUUID();
+      await db.insert(campaigns).values({
+        id: campaignId,
+        tenant_id: session.tenant_id,
+        criteria_id: criteriaId,
+        job_title: 'Manual AI Engineer',
+        jd_text: 'Python, PyTorch, LLMs',
+        status: 'awaiting_criteria',
+        created_by: session.user_id,
+      });
+
+      const { refreshCampaignWarnings } = await import(
+        '../../src/backend/domain/campaign-operations.ts'
+      );
+      const warnings = await refreshCampaignWarnings({
+        campaignId,
+        tenantId: session.tenant_id,
+      });
+
+      expect(warnings).toBeDefined();
+      const codeMissingJd = warnings?.some((w) => w.warning_code === 'CRITERIA_JD_ID_MISSING');
+      expect(codeMissingJd).toBe(false);
+    });
+  });
+
+  it('Verification Case 8: Flag missing JD IDs for imported criteria with external_criteria_id present', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      const criteriaId = crypto.randomUUID();
+      await db.insert(criteria).values({
+        id: criteriaId,
+        tenant_id: session.tenant_id,
+        external_criteria_id: 'EXT-ATS-001',
+        job_title: 'Linked AI Engineer',
+        jd_text: 'Python, PyTorch, LLMs',
+        must_have_skills: ['Python'],
+        nice_to_have_skills: [],
+        min_yoe: 3,
+      });
+
+      const campaignId = crypto.randomUUID();
+      await db.insert(campaigns).values({
+        id: campaignId,
+        tenant_id: session.tenant_id,
+        criteria_id: criteriaId,
+        job_title: 'Linked AI Engineer',
+        jd_text: 'Python, PyTorch, LLMs',
+        status: 'awaiting_criteria',
+        created_by: session.user_id,
+      });
+
+      const { refreshCampaignWarnings } = await import(
+        '../../src/backend/domain/campaign-operations.ts'
+      );
+      const warnings = await refreshCampaignWarnings({
+        campaignId,
+        tenantId: session.tenant_id,
+      });
+
+      expect(warnings).toBeDefined();
+      const codeMissingJd = warnings?.some((w) => w.warning_code === 'CRITERIA_JD_ID_MISSING');
+      expect(codeMissingJd).toBe(true);
     });
   });
 });
