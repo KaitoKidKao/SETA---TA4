@@ -4,10 +4,79 @@ import { fileURLToPath } from 'node:url';
 import { eq } from 'drizzle-orm';
 import xlsx from 'xlsx';
 import { smartrecruitDb } from '../db/client.ts';
-import { teamHireRequests, teamSkillsMatrix } from '../db/schema.ts';
+import { criteria, teamHireRequests, teamSkillsMatrix } from '../db/schema.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../../..');
+
+export const SKILL_ALIASES: Record<string, string> = {
+  k8s: 'Kubernetes',
+  kubernetes: 'Kubernetes',
+  postgres: 'PostgreSQL',
+  postgresql: 'PostgreSQL',
+  typescript: 'TypeScript',
+  ts: 'TypeScript',
+  javascript: 'JavaScript',
+  js: 'JavaScript',
+  kafka: 'Kafka',
+  redis: 'Redis',
+  docker: 'Docker',
+  playwright: 'Playwright',
+  selenium: 'Selenium',
+  react: 'React',
+  reactjs: 'React',
+  react_js: 'React',
+  hono: 'Hono',
+  node: 'Node.js',
+  nodejs: 'Node.js',
+  'node.js': 'Node.js',
+};
+
+export function getCanonicalSkillName(skill: string): string {
+  const normalized = skill.trim().toLowerCase();
+  return SKILL_ALIASES[normalized] || skill.trim();
+}
+
+export function areSkillsMatching(skillA: string, skillB: string): boolean {
+  return (
+    getCanonicalSkillName(skillA).toLowerCase() === getCanonicalSkillName(skillB).toLowerCase()
+  );
+}
+
+export function promoteGapSkills(
+  mustHaveSkills: string[],
+  niceToHaveSkills: string[],
+  gapSkills: string[],
+): { promotedMustHave: string[]; promotedNiceToHave: string[] } {
+  const promotedMustHave = [...mustHaveSkills];
+  const promotedNiceToHave = [...niceToHaveSkills];
+
+  for (const gap of gapSkills) {
+    // If the gap skill is in niceToHaveSkills, promote it to mustHaveSkills
+    const niceIndex = promotedNiceToHave.findIndex((s) => areSkillsMatching(s, gap));
+    if (niceIndex !== -1) {
+      const skillName = promotedNiceToHave[niceIndex];
+      if (skillName) {
+        const mustHas = promotedMustHave.some((s) => areSkillsMatching(s, gap));
+        if (!mustHas) {
+          promotedMustHave.push(skillName);
+        }
+        promotedNiceToHave.splice(niceIndex, 1);
+      }
+    }
+  }
+
+  return { promotedMustHave, promotedNiceToHave };
+}
+
+export interface SkillGapRecommendation {
+  skill: string;
+  source: 'DS04_Team_Skills_Matrix' | 'DS06_Hire_Request' | 'both';
+  reason: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  recommendedAction: 'promote_to_must_have' | 'increase_nice_to_have_weight' | 'none';
+  applied: boolean;
+}
 
 export interface SkillGapInfo {
   position: string;
@@ -15,6 +84,7 @@ export interface SkillGapInfo {
   skillsGap: string[];
   summary: string;
   recommendations: string[];
+  structuredRecommendations: SkillGapRecommendation[];
 }
 
 interface SkillMatrixRow {
@@ -29,8 +99,51 @@ interface HireRequestRow {
   business_unit?: string;
 }
 
-export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Promise<SkillGapInfo> {
+function extractSkillsFromSummary(summary: string, allSkills: string[]): string[] {
+  if (!summary) return [];
+  const found = new Set<string>();
+
+  const candidateSkills = Array.from(
+    new Set([...allSkills, ...Object.keys(SKILL_ALIASES), ...Object.values(SKILL_ALIASES)]),
+  );
+
+  for (const skill of candidateSkills) {
+    const escaped = skill.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    let regex: RegExp;
+    if (/^[a-zA-Z0-9_]+$/.test(skill)) {
+      regex = new RegExp(`\\b${escaped}\\b`, 'i');
+    } else {
+      regex = new RegExp(escaped, 'i');
+    }
+
+    if (regex.test(summary)) {
+      found.add(getCanonicalSkillName(skill));
+    }
+  }
+  return Array.from(found);
+}
+
+export async function analyzeSkillGaps(
+  jobTitle: string,
+  tenantId: string,
+  criteriaId?: string,
+): Promise<SkillGapInfo> {
   const db = smartrecruitDb();
+
+  // Load criteria if criteriaId is supplied
+  let mustHaveSkills: string[] = [];
+  let niceToHaveSkills: string[] = [];
+  if (criteriaId) {
+    try {
+      const [crit] = await db.select().from(criteria).where(eq(criteria.id, criteriaId)).limit(1);
+      if (crit) {
+        mustHaveSkills = crit.must_have_skills || [];
+        niceToHaveSkills = crit.nice_to_have_skills || [];
+      }
+    } catch (err) {
+      console.warn('Failed to load criteria in analyzeSkillGaps:', err);
+    }
+  }
 
   try {
     // 1. Attempt to load from PostgreSQL Database first
@@ -65,33 +178,76 @@ export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Prom
       // Identify weak or missing skills (Intermediate, Basic, or None)
       const weakSkills = teamSkills
         .filter((s) => s.proficiency_level === 'Basic' || s.proficiency_level === 'None')
-        .map((s) => s.skill);
+        .map((s) => getCanonicalSkillName(s.skill));
 
       // Extract skills mentioned in the raw gap summary
-      const extractedGaps: string[] = [];
-      if (rawGapSummary) {
-        if (/kafka/i.test(rawGapSummary)) extractedGaps.push('Kafka');
-        if (/redis/i.test(rawGapSummary)) extractedGaps.push('Redis');
-        if (/docker/i.test(rawGapSummary)) extractedGaps.push('Docker');
-        if (/kubernetes/i.test(rawGapSummary) || /k8s/i.test(rawGapSummary))
-          extractedGaps.push('Kubernetes');
-        if (/playwright/i.test(rawGapSummary)) extractedGaps.push('Playwright');
-        if (/selenium/i.test(rawGapSummary)) extractedGaps.push('Selenium');
-        if (/typescript/i.test(rawGapSummary)) extractedGaps.push('TypeScript');
-      }
+      const allMatrixSkills = dbSkillsMatrix.map((s) => s.skill);
+      const extractedGaps = extractSkillsFromSummary(rawGapSummary, allMatrixSkills);
 
       // Merge gaps
-      const uniqueGaps = Array.from(new Set([...extractedGaps, ...weakSkills]));
-
-      // Generate recommendations
-      const recommendations = uniqueGaps.map(
-        (skill) =>
-          `Ưu tiên cao ứng viên có kinh nghiệm thực chiến với ${skill} để bù đắp năng lực cho ${teamName}.`,
+      const uniqueGaps = Array.from(
+        new Set([...extractedGaps, ...weakSkills].map(getCanonicalSkillName)),
       );
+
+      // Generate structured recommendations
+      const structuredRecommendations: SkillGapRecommendation[] = uniqueGaps.map((skill) => {
+        const isWeak = weakSkills.some((s) => areSkillsMatching(s, skill));
+        const isExtracted = extractedGaps.some((s) => areSkillsMatching(s, skill));
+
+        let source: 'DS04_Team_Skills_Matrix' | 'DS06_Hire_Request' | 'both' =
+          'DS04_Team_Skills_Matrix';
+        let reason = `Team proficiency is low or missing in the skills matrix (${teamName})`;
+        let priority: 'critical' | 'high' | 'medium' | 'low' = 'medium';
+
+        if (isWeak && isExtracted) {
+          source = 'both';
+          reason = `Team proficiency is low and identified in the hire request (${teamName})`;
+          priority = 'critical';
+        } else if (isExtracted) {
+          source = 'both'; // Keep as both or DS06_Hire_Request, let's use both/hire request
+          source = 'DS06_Hire_Request';
+          reason = `Explicitly requested to fill team skill gap in hire request (${teamName})`;
+          priority = 'high';
+        }
+
+        const isApplied =
+          mustHaveSkills.some((s) => areSkillsMatching(s, skill)) ||
+          niceToHaveSkills.some((s) => areSkillsMatching(s, skill));
+
+        const recommendedAction =
+          priority === 'critical'
+            ? 'promote_to_must_have'
+            : priority === 'high'
+              ? 'increase_nice_to_have_weight'
+              : 'none';
+
+        return {
+          skill,
+          source,
+          reason,
+          priority,
+          recommendedAction,
+          applied: isApplied,
+        };
+      });
+
+      // Generate standard recommendations list (in English)
+      const recommendations = structuredRecommendations.map((gap) => {
+        if (gap.applied) {
+          return `Applied: Prioritized ${gap.skill} because ${gap.reason.toLowerCase()}`;
+        }
+        if (gap.recommendedAction === 'promote_to_must_have') {
+          return `Recommend: Add ${gap.skill} as a Must-Have skill to address a critical team gap in ${teamName}.`;
+        }
+        if (gap.recommendedAction === 'increase_nice_to_have_weight') {
+          return `Recommend: Add ${gap.skill} as a Nice-to-Have skill or increase its weight to address a high-priority gap in ${teamName}.`;
+        }
+        return `Note: Consider candidate's experience with ${gap.skill} to support ${teamName}.`;
+      });
 
       if (recommendations.length === 0) {
         recommendations.push(
-          'Đội ngũ hiện tại có đủ kỹ năng cơ bản, tập trung đánh giá số năm kinh nghiệm.',
+          'The current team has sufficient basic skills; focus on years of experience.',
         );
       }
 
@@ -101,8 +257,9 @@ export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Prom
         skillsGap: uniqueGaps,
         summary:
           rawGapSummary ||
-          'Không tìm thấy thông tin khoảng trống kỹ năng định trước cho vị trí này. Hệ thống tự động phân tích dựa trên ma trận kỹ năng.',
+          'No pre-defined team skill gap found for this position. The system automatically analyzed the skills matrix.',
         recommendations,
+        structuredRecommendations,
       };
     }
   } catch (dbErr) {
@@ -116,8 +273,34 @@ export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Prom
       position: jobTitle,
       teamName: 'Platform Team',
       skillsGap: ['Kafka', 'Redis'],
-      summary: 'Lỗi đọc tệp dữ liệu mock. Đề xuất mặc định dựa trên yêu cầu dự án Alpha.',
-      recommendations: ['Ưu tiên ứng viên có Kafka.', 'Ưu tiên ứng viên có Redis.'],
+      summary:
+        'Error reading mock data file. Default recommendations applied based on Project Alpha requirements.',
+      recommendations: [
+        'Recommend: Add Kafka as a Must-Have skill to address a critical team gap in Platform Team.',
+        'Recommend: Add Redis as a Nice-to-Have skill or increase its weight to address a high-priority gap in Platform Team.',
+      ],
+      structuredRecommendations: [
+        {
+          skill: 'Kafka',
+          source: 'both',
+          reason: 'Team proficiency is low and identified in the hire request (Platform Team)',
+          priority: 'critical',
+          recommendedAction: 'promote_to_must_have',
+          applied:
+            mustHaveSkills.some((s) => areSkillsMatching(s, 'Kafka')) ||
+            niceToHaveSkills.some((s) => areSkillsMatching(s, 'Kafka')),
+        },
+        {
+          skill: 'Redis',
+          source: 'DS06_Hire_Request',
+          reason: 'Explicitly requested to fill team skill gap in hire request (Platform Team)',
+          priority: 'high',
+          recommendedAction: 'increase_nice_to_have_weight',
+          applied:
+            mustHaveSkills.some((s) => areSkillsMatching(s, 'Redis')) ||
+            niceToHaveSkills.some((s) => areSkillsMatching(s, 'Redis')),
+        },
+      ],
     };
   }
 
@@ -156,33 +339,75 @@ export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Prom
     // Identify weak or missing skills
     const weakSkills = teamSkills
       .filter((s) => s.proficiency_level === 'Basic' || s.proficiency_level === 'None')
-      .map((s) => s.skill as string);
+      .map((s) => getCanonicalSkillName(s.skill as string));
 
     // Extract skills mentioned in the raw gap summary
-    const extractedGaps: string[] = [];
-    if (rawGapSummary) {
-      if (/kafka/i.test(rawGapSummary)) extractedGaps.push('Kafka');
-      if (/redis/i.test(rawGapSummary)) extractedGaps.push('Redis');
-      if (/docker/i.test(rawGapSummary)) extractedGaps.push('Docker');
-      if (/kubernetes/i.test(rawGapSummary) || /k8s/i.test(rawGapSummary))
-        extractedGaps.push('Kubernetes');
-      if (/playwright/i.test(rawGapSummary)) extractedGaps.push('Playwright');
-      if (/selenium/i.test(rawGapSummary)) extractedGaps.push('Selenium');
-      if (/typescript/i.test(rawGapSummary)) extractedGaps.push('TypeScript');
-    }
+    const allMatrixSkills = skillsMatrix.map((s) => s.skill as string);
+    const extractedGaps = extractSkillsFromSummary(rawGapSummary, allMatrixSkills);
 
     // Merge gaps
-    const uniqueGaps = Array.from(new Set([...extractedGaps, ...weakSkills]));
-
-    // Generate recommendations
-    const recommendations = uniqueGaps.map(
-      (skill) =>
-        `Ưu tiên cao ứng viên có kinh nghiệm thực chiến với ${skill} để bù đắp năng lực cho ${teamName}.`,
+    const uniqueGaps = Array.from(
+      new Set([...extractedGaps, ...weakSkills].map(getCanonicalSkillName)),
     );
+
+    // Generate structured recommendations
+    const structuredRecommendations: SkillGapRecommendation[] = uniqueGaps.map((skill) => {
+      const isWeak = weakSkills.some((s) => areSkillsMatching(s, skill));
+      const isExtracted = extractedGaps.some((s) => areSkillsMatching(s, skill));
+
+      let source: 'DS04_Team_Skills_Matrix' | 'DS06_Hire_Request' | 'both' =
+        'DS04_Team_Skills_Matrix';
+      let reason = `Team proficiency is low or missing in the skills matrix (${teamName})`;
+      let priority: 'critical' | 'high' | 'medium' | 'low' = 'medium';
+
+      if (isWeak && isExtracted) {
+        source = 'both';
+        reason = `Team proficiency is low and identified in the hire request (${teamName})`;
+        priority = 'critical';
+      } else if (isExtracted) {
+        source = 'DS06_Hire_Request';
+        reason = `Explicitly requested to fill team skill gap in hire request (${teamName})`;
+        priority = 'high';
+      }
+
+      const isApplied =
+        mustHaveSkills.some((s) => areSkillsMatching(s, skill)) ||
+        niceToHaveSkills.some((s) => areSkillsMatching(s, skill));
+
+      const recommendedAction =
+        priority === 'critical'
+          ? 'promote_to_must_have'
+          : priority === 'high'
+            ? 'increase_nice_to_have_weight'
+            : 'none';
+
+      return {
+        skill,
+        source,
+        reason,
+        priority,
+        recommendedAction,
+        applied: isApplied,
+      };
+    });
+
+    // Generate standard recommendations list (in English)
+    const recommendations = structuredRecommendations.map((gap) => {
+      if (gap.applied) {
+        return `Applied: Prioritized ${gap.skill} because ${gap.reason.toLowerCase()}`;
+      }
+      if (gap.recommendedAction === 'promote_to_must_have') {
+        return `Recommend: Add ${gap.skill} as a Must-Have skill to address a critical team gap in ${teamName}.`;
+      }
+      if (gap.recommendedAction === 'increase_nice_to_have_weight') {
+        return `Recommend: Add ${gap.skill} as a Nice-to-Have skill or increase its weight to address a high-priority gap in ${teamName}.`;
+      }
+      return `Note: Consider candidate's experience with ${gap.skill} to support ${teamName}.`;
+    });
 
     if (recommendations.length === 0) {
       recommendations.push(
-        'Đội ngũ hiện tại có đủ kỹ năng cơ bản, tập trung đánh giá số năm kinh nghiệm.',
+        'The current team has sufficient basic skills; focus on years of experience.',
       );
     }
 
@@ -192,8 +417,9 @@ export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Prom
       skillsGap: uniqueGaps,
       summary:
         rawGapSummary ||
-        'Không tìm thấy thông tin khoảng trống kỹ năng định trước cho vị trí này. Hệ thống tự động phân tích dựa trên ma trận kỹ năng.',
+        'No pre-defined team skill gap found for this position. The system automatically analyzed the skills matrix.',
       recommendations,
+      structuredRecommendations,
     };
   } catch (err) {
     console.error('Failed to parse skills gap from Excel:', err);
@@ -201,8 +427,34 @@ export async function analyzeSkillGaps(jobTitle: string, tenantId: string): Prom
       position: jobTitle,
       teamName: 'Platform Team',
       skillsGap: ['Kafka', 'Redis'],
-      summary: 'Lỗi đọc tệp dữ liệu mock. Đề xuất mặc định dựa trên yêu cầu dự án Alpha.',
-      recommendations: ['Ưu tiên ứng viên có Kafka.', 'Ưu tiên ứng viên có Redis.'],
+      summary:
+        'Error reading mock data file. Default recommendations applied based on Project Alpha requirements.',
+      recommendations: [
+        'Recommend: Add Kafka as a Must-Have skill to address a critical team gap in Platform Team.',
+        'Recommend: Add Redis as a Nice-to-Have skill or increase its weight to address a high-priority gap in Platform Team.',
+      ],
+      structuredRecommendations: [
+        {
+          skill: 'Kafka',
+          source: 'both',
+          reason: 'Team proficiency is low and identified in the hire request (Platform Team)',
+          priority: 'critical',
+          recommendedAction: 'promote_to_must_have',
+          applied:
+            mustHaveSkills.some((s) => areSkillsMatching(s, 'Kafka')) ||
+            niceToHaveSkills.some((s) => areSkillsMatching(s, 'Kafka')),
+        },
+        {
+          skill: 'Redis',
+          source: 'DS06_Hire_Request',
+          reason: 'Explicitly requested to fill team skill gap in hire request (Platform Team)',
+          priority: 'high',
+          recommendedAction: 'increase_nice_to_have_weight',
+          applied:
+            mustHaveSkills.some((s) => areSkillsMatching(s, 'Redis')) ||
+            niceToHaveSkills.some((s) => areSkillsMatching(s, 'Redis')),
+        },
+      ],
     };
   }
 }

@@ -23,7 +23,7 @@ import {
   SCREENING_PROMPT_VERSION,
 } from './scoring.ts';
 import { isShortlistedScore } from './shortlist-policy.ts';
-import { analyzeSkillGaps } from './skill-gap-analyzer.ts';
+import { analyzeSkillGaps, areSkillsMatching } from './skill-gap-analyzer.ts';
 
 // ---------------------------------------------------------------------------
 // Language Detection for bilingual CV support (Phase 3)
@@ -348,15 +348,24 @@ ${anonymizedCvText}`,
       // Get skill gaps of the team and compare with candidate's skills
       const gapsInfo = await analyzeSkillGaps(crit.job_title, input.session.tenant_id);
       const teamGaps = gapsInfo.skillsGap || [];
+
+      // Filter out gaps that are already in must-have or nice-to-have criteria to avoid double-counting
+      const nonAppliedTeamGaps = teamGaps.filter(
+        (gap) =>
+          !crit.must_have_skills.some((s) => areSkillsMatching(s, gap)) &&
+          !crit.nice_to_have_skills.some((s) => areSkillsMatching(s, gap)),
+      );
+
       const solvedTeamGaps: string[] = [];
       const missingTeamGaps: string[] = [];
 
-      for (const gap of teamGaps) {
+      for (const gap of nonAppliedTeamGaps) {
         const hasSkill = parsed.skills.some(
           (s) =>
             s.toLowerCase() === gap.toLowerCase() ||
             s.toLowerCase().includes(gap.toLowerCase()) ||
-            gap.toLowerCase().includes(s.toLowerCase()),
+            gap.toLowerCase().includes(s.toLowerCase()) ||
+            areSkillsMatching(s, gap),
         );
 
         if (hasSkill) {
@@ -369,6 +378,60 @@ ${anonymizedCvText}`,
       // Calculate bonus: +5% if 1 gap solved, +10% if 2 or more gaps solved.
       const bonus = solvedTeamGaps.length >= 2 ? 10 : solvedTeamGaps.length === 1 ? 5 : 0;
       const finalFitScore = Math.min(100, (deterministic.fitScore || 0) + bonus);
+
+      // Enrich matches with team gap explanations
+      const enrichedMustHaveMatches = deterministic.mustHaveMatches.map((match) => {
+        const isGap = teamGaps.some((gap) => areSkillsMatching(gap, match.jdSkill));
+        if (isGap) {
+          if (match.matched) {
+            return {
+              ...match,
+              justification: `${match.jdSkill} matched: prioritized because the team currently lacks ${match.jdSkill} coverage. ${match.justification}`,
+            };
+          } else {
+            return {
+              ...match,
+              justification: `${match.jdSkill} missing: candidate does not cover a critical team skill gap. ${match.justification}`,
+            };
+          }
+        }
+        return match;
+      });
+
+      const enrichedNiceToHaveMatches = deterministic.niceToHaveMatches.map((match) => {
+        const isGap = teamGaps.some((gap) => areSkillsMatching(gap, match.jdSkill));
+        if (isGap) {
+          if (match.matched) {
+            return {
+              ...match,
+              justification: `${match.jdSkill} matched: prioritized because the team currently lacks ${match.jdSkill} coverage. ${match.justification}`,
+            };
+          } else {
+            return {
+              ...match,
+              justification: `${match.jdSkill} missing: candidate does not cover a critical team skill gap. ${match.justification}`,
+            };
+          }
+        }
+        return match;
+      });
+
+      const appliedTeamGaps = teamGaps
+        .filter(
+          (gap) =>
+            crit.must_have_skills.some((s) => areSkillsMatching(s, gap)) ||
+            crit.nice_to_have_skills.some((s) => areSkillsMatching(s, gap)),
+        )
+        .map((gap) => {
+          const isMustHave = crit.must_have_skills.some((s) => areSkillsMatching(s, gap));
+          const matches = isMustHave ? enrichedMustHaveMatches : enrichedNiceToHaveMatches;
+          const match = matches.find((m) => areSkillsMatching(m.jdSkill, gap));
+          return {
+            skill: gap,
+            matched: match ? match.matched : false,
+            treatment: isMustHave ? 'must_have' : 'nice_to_have',
+          };
+        });
 
       const modelRecord = model as unknown as {
         id?: string;
@@ -393,8 +456,8 @@ ${anonymizedCvText}`,
         gaps: parsed.fitAnalysis.gaps,
         yoeExplanation,
         overallJustification: parsed.fitAnalysis.justification,
-        mustHaveMatches: deterministic.mustHaveMatches,
-        niceToHaveMatches: deterministic.niceToHaveMatches,
+        mustHaveMatches: enrichedMustHaveMatches,
+        niceToHaveMatches: enrichedNiceToHaveMatches,
         englishEvidence: parsed.fitAnalysis.englishEvidence ?? null,
         scoreBreakdown: {
           ...deterministic.scoreBreakdown,
@@ -404,6 +467,7 @@ ${anonymizedCvText}`,
         piiMapping,
         solvedTeamGaps,
         missingTeamGaps,
+        appliedTeamGaps,
         teamSkillGapBonus: bonus,
         originalFitScore: deterministic.fitScore,
       };

@@ -899,7 +899,8 @@ export function registerSmartrecruitRoutes(
     const session = c.get('user');
     const tenantId = session.tenant_id;
     const jobTitle = c.req.query('jobTitle') || '';
-    const result = await analyzeSkillGaps(jobTitle, tenantId);
+    const criteriaId = c.req.query('criteriaId') || undefined;
+    const result = await analyzeSkillGaps(jobTitle, tenantId, criteriaId);
     return c.json(result);
   });
 

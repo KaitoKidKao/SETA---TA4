@@ -69,6 +69,10 @@ interface CriteriaState {
   min_yoe: number;
   education_level: string;
   additional_requirements: string;
+  weight_must_have_skills?: number;
+  weight_yoe?: number;
+  weight_english?: number;
+  weight_nice_to_have?: number;
 }
 
 interface PoolCandidate {
@@ -441,7 +445,7 @@ export function SmartrecruitPage() {
       setActiveCriteria(data);
       if (data.job_title) {
         const gapRes = await fetch(
-          `/api/smartrecruit/v1/skill-gaps?jobTitle=${encodeURIComponent(data.job_title)}`,
+          `/api/smartrecruit/v1/skill-gaps?jobTitle=${encodeURIComponent(data.job_title)}&criteriaId=${criteriaId}`,
         );
         if (gapRes.ok) {
           const gapData = await gapRes.json();
@@ -673,6 +677,16 @@ export function SmartrecruitPage() {
     fetchPendingRuns();
     fetchSlaTracker();
   }, [fetchPendingRuns, fetchCriteriaList, fetchSlaTracker]);
+
+  // Synchronize local scoring weights state with activeCriteria when loaded
+  useEffect(() => {
+    if (activeCriteria) {
+      setSwMustHave(activeCriteria.weight_must_have_skills ?? 50);
+      setSwYoe(activeCriteria.weight_yoe ?? 15);
+      setSwEnglish(activeCriteria.weight_english ?? 15);
+      setSwNiceToHave(activeCriteria.weight_nice_to_have ?? 20);
+    }
+  }, [activeCriteria]);
 
   // Poll active run and pending approvals if a run is running
   useEffect(() => {
@@ -1070,6 +1084,40 @@ export function SmartrecruitPage() {
       nice_to_have_skills: [...activeCriteria.nice_to_have_skills, newNiceToHave.trim()],
     });
     setNewNiceToHave('');
+  };
+
+  const addGapSkillToMustHave = (skillName: string) => {
+    if (!activeCriteria) return;
+    if (
+      activeCriteria.must_have_skills.some(
+        (s: string) => s.toLowerCase() === skillName.toLowerCase(),
+      )
+    )
+      return;
+    setActiveCriteria({
+      ...activeCriteria,
+      must_have_skills: [...activeCriteria.must_have_skills, skillName],
+      nice_to_have_skills: activeCriteria.nice_to_have_skills.filter(
+        (s: string) => s.toLowerCase() !== skillName.toLowerCase(),
+      ),
+    });
+  };
+
+  const addGapSkillToNiceToHave = (skillName: string) => {
+    if (!activeCriteria) return;
+    if (
+      activeCriteria.nice_to_have_skills.some(
+        (s: string) => s.toLowerCase() === skillName.toLowerCase(),
+      )
+    )
+      return;
+    setActiveCriteria({
+      ...activeCriteria,
+      nice_to_have_skills: [...activeCriteria.nice_to_have_skills, skillName],
+      must_have_skills: activeCriteria.must_have_skills.filter(
+        (s: string) => s.toLowerCase() !== skillName.toLowerCase(),
+      ),
+    });
   };
 
   const removeMustHave = (idx: number) => {
@@ -2175,47 +2223,169 @@ export function SmartrecruitPage() {
 
                     {/* Skill Gap Analysis Section */}
                     {skillGaps && (
-                      <div className="md:col-span-12 border-t border-hairline pt-6 flex flex-col gap-3">
-                        <div className="bg-blue-500/5 border border-blue-500/20 p-4 rounded-xl flex flex-col gap-2">
-                          <div className="flex items-center gap-2 text-blue-700">
-                            <Settings className="size-4 animate-spin-slow" />
-                            <span className="font-bold text-body-sm text-blue-800">
-                              Team Skill Gap Analysis
+                      <div className="md:col-span-12 border-t border-hairline pt-5 flex flex-col gap-2.5">
+                        <div className="bg-blue-500/5 border border-blue-500/10 p-3.5 rounded-xl flex flex-col gap-3">
+                          <div className="flex items-center justify-between border-b border-blue-500/10 pb-2">
+                            <div className="flex items-center gap-2 text-blue-700">
+                              <Settings className="size-4 animate-spin-slow" />
+                              <span className="font-bold text-xs text-blue-800">
+                                Team Skill Gap Analysis
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                              Project/Team: {skillGaps.teamName}
                             </span>
                           </div>
-                          <p className="text-body-sm text-ink-subtle">
-                            <strong>Project/Team:</strong> {skillGaps.teamName} |{' '}
-                            <strong>Skill gaps:</strong>{' '}
-                            {skillGaps.skillsGap.length > 0 ? (
-                              skillGaps.skillsGap.map((s: string, idx: number) => (
-                                <Badge
-                                  key={idx}
-                                  variant="secondary"
-                                  className="mx-0.5 text-rose-600 bg-rose-50 border-rose-100"
-                                >
-                                  {s}
-                                </Badge>
-                              ))
-                            ) : (
-                              <span className="text-emerald-600 font-semibold">
-                                No major gaps detected
+
+                          <div className="text-xs text-ink-subtle leading-relaxed">
+                            <strong>Gap Summary:</strong> "{skillGaps.summary}"
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* Applied Gaps (Prioritized) */}
+                            <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-2.5 flex flex-col gap-2">
+                              <span className="text-xs font-bold text-emerald-800 flex items-center gap-1">
+                                <CheckCircle className="size-4 text-emerald-600" />
+                                Applied Gaps (Prioritized in Screening)
                               </span>
-                            )}
-                          </p>
-                          <blockquote className="border-l-2 border-hairline-strong pl-3 italic text-body-sm text-ink-subtle my-1">
-                            "{skillGaps.summary}"
-                          </blockquote>
-                          <div className="text-body-sm text-ink flex flex-col gap-1 mt-1">
-                            <strong className="text-blue-900">
-                              Recommended screening weight adjustment:
-                            </strong>
-                            <ul className="list-disc pl-4 space-y-1">
+                              <div className="flex flex-col gap-1.5">
+                                {skillGaps.structuredRecommendations &&
+                                skillGaps.structuredRecommendations.filter((r: any) => {
+                                  const skill = r.skill;
+                                  return (
+                                    activeCriteria.must_have_skills.some(
+                                      (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                    ) ||
+                                    activeCriteria.nice_to_have_skills.some(
+                                      (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                    )
+                                  );
+                                }).length > 0 ? (
+                                  skillGaps.structuredRecommendations
+                                    .filter((r: any) => {
+                                      const skill = r.skill;
+                                      return (
+                                        activeCriteria.must_have_skills.some(
+                                          (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                        ) ||
+                                        activeCriteria.nice_to_have_skills.some(
+                                          (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                        )
+                                      );
+                                    })
+                                    .map((gap: any, idx: number) => {
+                                      const isMustHave = activeCriteria.must_have_skills.some(
+                                        (s: string) => s.toLowerCase() === gap.skill.toLowerCase(),
+                                      );
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className="flex items-center justify-between bg-white border border-emerald-100 rounded-lg p-2 text-xs"
+                                        >
+                                          <div className="flex flex-col">
+                                            <span className="font-semibold text-emerald-900">
+                                              {gap.skill}
+                                            </span>
+                                            <span className="text-[9px] text-emerald-700 font-medium uppercase tracking-wider">
+                                              {isMustHave ? 'Must-Have' : 'Nice-to-Have'}
+                                            </span>
+                                          </div>
+                                          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200 text-[10px] px-1.5 py-0">
+                                            Prioritized
+                                          </Badge>
+                                        </div>
+                                      );
+                                    })
+                                ) : (
+                                  <span className="text-xs text-ink-subtle/70 italic">
+                                    No prioritized gaps applied yet.
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Recommended Additions */}
+                            <div className="bg-amber-500/5 border border-amber-500/10 rounded-xl p-2.5 flex flex-col gap-2">
+                              <span className="text-xs font-bold text-amber-800 flex items-center gap-1">
+                                <AlertTriangle className="size-4 text-amber-600" />
+                                Recommended Additions (Unapplied)
+                              </span>
+                              <div className="flex flex-col gap-1.5">
+                                {skillGaps.structuredRecommendations &&
+                                skillGaps.structuredRecommendations.filter((r: any) => {
+                                  const skill = r.skill;
+                                  return (
+                                    !activeCriteria.must_have_skills.some(
+                                      (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                    ) &&
+                                    !activeCriteria.nice_to_have_skills.some(
+                                      (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                    )
+                                  );
+                                }).length > 0 ? (
+                                  skillGaps.structuredRecommendations
+                                    .filter((r: any) => {
+                                      const skill = r.skill;
+                                      return (
+                                        !activeCriteria.must_have_skills.some(
+                                          (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                        ) &&
+                                        !activeCriteria.nice_to_have_skills.some(
+                                          (s: string) => s.toLowerCase() === skill.toLowerCase(),
+                                        )
+                                      );
+                                    })
+                                    .map((gap: any, idx: number) => (
+                                      <div
+                                        key={idx}
+                                        className="flex items-center justify-between bg-white border border-amber-100 rounded-lg p-2 text-xs shadow-xs"
+                                      >
+                                        <div className="flex flex-col max-w-[60%]">
+                                          <span className="font-semibold text-amber-900">
+                                            {gap.skill}
+                                          </span>
+                                          <span className="text-[9px] text-ink-subtle leading-tight mt-0.5">
+                                            {gap.reason}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          <Button
+                                            onClick={() => addGapSkillToMustHave(gap.skill)}
+                                            size="sm"
+                                            className="h-6 text-[9px] px-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium"
+                                          >
+                                            Must
+                                          </Button>
+                                          <Button
+                                            onClick={() => addGapSkillToNiceToHave(gap.skill)}
+                                            size="sm"
+                                            className="h-6 text-[9px] px-1.5 bg-neutral-200 hover:bg-neutral-350 text-ink font-medium"
+                                          >
+                                            Nice
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ))
+                                ) : (
+                                  <span className="text-xs text-ink-subtle/70 italic">
+                                    All detected gaps are prioritized in criteria.
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Predefined text recommendation list */}
+                          <div className="text-xs text-ink flex flex-col gap-1 border-t border-blue-500/10 pt-2.5">
+                            <strong className="text-blue-900">Screening Guidance Notes:</strong>
+                            <div className="text-ink-subtle space-y-0.5">
                               {skillGaps.recommendations.map((rec: string, idx: number) => (
-                                <li key={idx} className="text-ink-subtle">
-                                  {rec}
-                                </li>
+                                <div key={idx} className="flex items-start gap-1">
+                                  <span className="text-blue-400 font-bold">•</span>
+                                  <span>{rec}</span>
+                                </div>
                               ))}
-                            </ul>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -2886,18 +3056,44 @@ export function SmartrecruitPage() {
                     )}
                   </div>
                   <Button
-                    onClick={() => {
+                    onClick={async () => {
+                      if (!activeCriteria?.id) {
+                        toast.error('No active criteria loaded');
+                        return;
+                      }
                       if (swMustHave + swYoe + swEnglish + swNiceToHave !== 100) {
                         toast.error('Weights must total 100%');
                         return;
                       }
                       setIsSavingWeights(true);
-                      setTimeout(() => {
+                      try {
+                        const res = await fetch(
+                          `/api/smartrecruit/v1/criteria/${activeCriteria.id}/scoring-weights`,
+                          {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              weightMustHaveSkills: swMustHave,
+                              weightYoe: swYoe,
+                              weightEnglish: swEnglish,
+                              weightNiceToHave: swNiceToHave,
+                            }),
+                          },
+                        );
+                        if (res.ok) {
+                          setWeightsSaved(true);
+                          toast.success('Scoring weights saved!');
+                          fetchCriteriaDetails(activeCriteria.id);
+                          setTimeout(() => setWeightsSaved(false), 3000);
+                        } else {
+                          const errData = await res.json().catch(() => ({}));
+                          toast.error(errData.error || 'Failed to save weights.');
+                        }
+                      } catch (err) {
+                        toast.error((err as Error).message);
+                      } finally {
                         setIsSavingWeights(false);
-                        setWeightsSaved(true);
-                        toast.success('Scoring weights saved!');
-                        setTimeout(() => setWeightsSaved(false), 3000);
-                      }, 800);
+                      }
                     }}
                     disabled={
                       isSavingWeights || swMustHave + swYoe + swEnglish + swNiceToHave !== 100

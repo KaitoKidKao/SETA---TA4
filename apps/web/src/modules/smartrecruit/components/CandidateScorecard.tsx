@@ -52,6 +52,11 @@ interface CandidateState {
     flags?: string[];
     solvedTeamGaps?: string[];
     missingTeamGaps?: string[];
+    appliedTeamGaps?: Array<{
+      skill: string;
+      matched: boolean;
+      treatment: 'must_have' | 'nice_to_have';
+    }>;
     teamSkillGapBonus?: number;
     originalFitScore?: number;
   } | null;
@@ -276,7 +281,8 @@ export function CandidateScorecard({
 
       {/* Team Skill Gap Contribution */}
       {((report?.solvedTeamGaps && report.solvedTeamGaps.length > 0) ||
-        (report?.missingTeamGaps && report.missingTeamGaps.length > 0)) && (
+        (report?.missingTeamGaps && report.missingTeamGaps.length > 0) ||
+        (report?.appliedTeamGaps && report.appliedTeamGaps.length > 0)) && (
         <div className="bg-neutral-50/50 p-5 rounded-xl border border-neutral-200 shadow-sm flex flex-col gap-4">
           <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
             <h4 className="text-sm font-bold text-neutral-850 flex items-center gap-2">
@@ -336,6 +342,39 @@ export function CandidateScorecard({
               </div>
             </div>
           </div>
+
+          {report.appliedTeamGaps && report.appliedTeamGaps.length > 0 && (
+            <div className="border-t border-neutral-100 pt-3 flex flex-col gap-2">
+              <span className="text-xs font-bold text-neutral-600 uppercase tracking-wider">
+                Prioritized Team Gap Skills (Applied to Criteria)
+              </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {report.appliedTeamGaps.map((gap, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-2.5 rounded-lg border text-xs flex items-center justify-between ${
+                      gap.matched
+                        ? 'bg-emerald-50/50 border-emerald-200 text-emerald-800'
+                        : 'bg-red-50/50 border-red-200 text-red-800'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {gap.matched ? (
+                        <Check className="w-4 h-4 text-emerald-600" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-red-600" />
+                      )}
+                      <span className="font-semibold">{gap.skill}</span>
+                      <span className="text-[10px] opacity-75 uppercase">
+                        ({gap.treatment === 'must_have' ? 'Must-Have' : 'Nice-to-Have'})
+                      </span>
+                    </div>
+                    <span className="font-bold">{gap.matched ? 'Covered' : 'Missing'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

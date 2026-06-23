@@ -6,6 +6,7 @@ import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { criteria } from '../db/schema.ts';
 import { getModelConfig } from './model.ts';
 import { withRetry } from './retry.ts';
+import { analyzeSkillGaps, promoteGapSkills } from './skill-gap-analyzer.ts';
 
 export interface ParseJdInput {
   jobTitle: string;
@@ -144,6 +145,19 @@ Return the result structured according to the schema.`,
     throw new Error('Failed to parse Job Description. LLM returned empty result.');
   }
 
+  // Automatically promote gap skills if they are present in the JD nice-to-have list
+  let mustHave = parsed.mustHaveSkills;
+  let niceToHave = parsed.niceToHaveSkills;
+  try {
+    const gapsInfo = await analyzeSkillGaps(input.jobTitle, input.session.tenant_id);
+    const gaps = gapsInfo.skillsGap || [];
+    const promoted = promoteGapSkills(mustHave, niceToHave, gaps);
+    mustHave = promoted.promotedMustHave;
+    niceToHave = promoted.promotedNiceToHave;
+  } catch (err) {
+    console.warn('Failed to analyze/promote skill gaps in parseJd:', err);
+  }
+
   let savedId!: string;
   await withEmit(
     {
@@ -159,8 +173,8 @@ Return the result structured according to the schema.`,
         tenant_id: input.session.tenant_id,
         job_title: input.jobTitle,
         jd_text: input.jdText,
-        must_have_skills: parsed.mustHaveSkills,
-        nice_to_have_skills: parsed.niceToHaveSkills,
+        must_have_skills: mustHave,
+        nice_to_have_skills: niceToHave,
         min_yoe: parsed.minYoe,
         max_yoe: parsed.maxYoe,
         tech_stack_preferred: parsed.techStackPreferred,
@@ -186,8 +200,8 @@ Return the result structured according to the schema.`,
   return {
     id: savedId,
     jobTitle: input.jobTitle,
-    mustHaveSkills: parsed.mustHaveSkills,
-    niceToHaveSkills: parsed.niceToHaveSkills,
+    mustHaveSkills: mustHave,
+    niceToHaveSkills: niceToHave,
     minYoe: parsed.minYoe ?? 0,
     maxYoe: parsed.maxYoe,
     techStackPreferred: parsed.techStackPreferred,
