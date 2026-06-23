@@ -757,3 +757,50 @@ This file records completed implementation steps so another IDE session or agent
 
 - `rg` confirmed `window.confirm` is no longer used in the SmartRecruit page.
 - `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+
+## 2026-06-23 - SmartRecruit Production Mock Dataset Path
+
+### Completed
+
+- Fixed mock dataset resolution after `pnpm deploy` packages SmartRecruit under the server's `node_modules` tree.
+- The default import now checks `APP_HOME/mock-data/04_ta_cv_screening.xlsx` first in production. With the server Docker image configuration, this resolves to `/app/mock-data/04_ta_cv_screening.xlsx`.
+- Preserved local development and explicit relative-path fallbacks through `process.cwd()` and the source checkout root.
+
+### Files
+
+- `packages/smartrecruit/src/backend/http/routes.ts`
+
+### Verification
+
+- `pnpm exec biome check --write packages/smartrecruit/src/backend/http/routes.ts` passed.
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+
+### Deployment
+
+- No database migration is required.
+- Rebuild and release the server image before retesting Mock Dataset Import in production.
+
+## 2026-06-23 - Workflow Start Error Diagnostics
+
+### Completed
+
+- Hardened `POST /api/agent/v1/workflows/runs/:workflowId/start` so synchronous Mastra/storage failures return structured JSON instead of Hono's plain `500 Internal Server Error` response.
+- Added stage tracking for workflow lookup, deduplication, Mastra run creation and lifecycle projection.
+- Added production-safe classifications for missing Agent schema, database permission failures and unavailable workflow storage.
+- Added an error ID to the response and structured server log so a production failure can be correlated without exposing the full stack trace to the browser.
+- Added a regression test covering a synchronous workflow storage connection failure.
+
+### Files
+
+- `packages/agent/src/backend/routes.ts`
+- `packages/agent/tests/integration/routes.workflow-start.test.ts`
+
+### Verification
+
+- `node_modules/.bin/biome check --write packages/agent/src/backend/routes.ts packages/agent/tests/integration/routes.workflow-start.test.ts` passed.
+- `packages/agent/node_modules/.bin/tsc -b --noEmit` passed.
+- The targeted integration test could not execute because no PostgreSQL container runtime is available on the current Windows environment; Vitest stopped during global setup before running assertions.
+
+### Deployment
+
+- Rebuild and release the server image, reproduce the launch once, then use the returned `error`, `details.stage`, `details.causeCode` and `details.errorId` to identify the production root cause.

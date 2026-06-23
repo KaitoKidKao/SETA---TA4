@@ -104,13 +104,26 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../.
 function resolveMockDataFilePath(filePath?: string): string {
   if (filePath) {
     if (isAbsolute(filePath)) return filePath;
-    const cwdPath = resolve(process.cwd(), filePath);
-    if (existsSync(cwdPath)) return cwdPath;
-    return resolve(repoRoot, filePath);
+
+    const candidates = [
+      resolve(process.cwd(), filePath),
+      ...(process.env.APP_HOME ? [resolve(process.env.APP_HOME, filePath)] : []),
+      resolve(repoRoot, filePath),
+    ];
+    return (
+      candidates.find((candidate) => existsSync(candidate)) ?? resolve(process.cwd(), filePath)
+    );
   }
-  const defaultCwdPath = resolve(process.cwd(), 'mock-data/04_ta_cv_screening.xlsx');
-  if (existsSync(defaultCwdPath)) return defaultCwdPath;
-  return resolve(repoRoot, 'mock-data/04_ta_cv_screening.xlsx');
+
+  const relativePath = 'mock-data/04_ta_cv_screening.xlsx';
+  const candidates = [
+    ...(process.env.APP_HOME ? [resolve(process.env.APP_HOME, relativePath)] : []),
+    resolve(process.cwd(), relativePath),
+    resolve(repoRoot, relativePath),
+  ];
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ?? resolve(process.cwd(), relativePath)
+  );
 }
 
 const screenCandidatePoolSchema = z.object({
@@ -498,6 +511,18 @@ export function registerSmartrecruitRoutes(
     }
   });
 
+  async function extractUploadedPdfText(file: File): Promise<string> {
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const doc = await getDocumentProxy(new Uint8Array(buffer));
+    const extracted = await extractText(doc, { mergePages: false });
+    const pages = Array.isArray(extracted.text) ? extracted.text : [extracted.text];
+    return pages
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
   // --- File Upload & PDF Extraction (OCR Fallback) ---
   app.post('/api/smartrecruit/v1/upload-cv', async (c) => {
     const session = c.get('user');
@@ -511,18 +536,9 @@ export function registerSmartrecruitRoutes(
         return c.json({ error: 'No file uploaded or file parameter invalid' }, 400);
       }
 
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
       let text = '';
       try {
-        const doc = await getDocumentProxy(new Uint8Array(buffer));
-        const extracted = await extractText(doc, { mergePages: false });
-        const pages = Array.isArray(extracted.text) ? extracted.text : [extracted.text];
-        text = pages
-          .map((p) => p.trim())
-          .filter(Boolean)
-          .join('\n');
+        text = await extractUploadedPdfText(file);
       } catch (err) {
         return c.json(
           {
@@ -551,6 +567,54 @@ export function registerSmartrecruitRoutes(
     } catch (err) {
       return c.json(
         { error: 'Failed to process file upload', details: (err as Error).message },
+        500,
+      );
+    }
+  });
+
+  app.post('/api/smartrecruit/v1/upload-jd', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    try {
+      const body = await c.req.parseBody();
+      const file = body.file;
+
+      if (!file || typeof file === 'string') {
+        return c.json({ error: 'No JD file uploaded or file parameter invalid' }, 400);
+      }
+
+      let text = '';
+      try {
+        text = await extractUploadedPdfText(file);
+      } catch (err) {
+        return c.json(
+          {
+            error: 'JD_TEXT_EXTRACTION_FAILED',
+            message: 'Unable to extract text from the uploaded JD file.',
+            details: (err as Error).message,
+          },
+          422,
+        );
+      }
+
+      if (!text.trim()) {
+        return c.json(
+          {
+            error: 'JD_TEXT_EMPTY',
+            message: 'The uploaded JD file did not contain extractable text.',
+          },
+          422,
+        );
+      }
+
+      return c.json({
+        filename: file.name,
+        text,
+      });
+    } catch (err) {
+      return c.json(
+        { error: 'Failed to process JD file upload', details: (err as Error).message },
         500,
       );
     }

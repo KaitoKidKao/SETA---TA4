@@ -223,6 +223,9 @@ export function SmartrecruitPage() {
 
   const [uploadedCvs, setUploadedCvs] = useState<UploadedCv[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isUploadingJd, setIsUploadingJd] = useState(false);
+  const [uploadedJdFilename, setUploadedJdFilename] = useState<string | null>(null);
+  const [jdUploadError, setJdUploadError] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isImportingMockData, setIsImportingMockData] = useState(false);
   const [isScreeningMockPool, setIsScreeningMockPool] = useState(false);
@@ -293,6 +296,24 @@ export function SmartrecruitPage() {
   const isGate2Active =
     activeApproval?.stepId === 'smartrecruit.draftOutreach' ||
     activeApproval?.proposedPayload?.meta?.toolId === 'smartrecruit_draftOutreach';
+
+  const isPipelineProcessing = ['running', 'waiting', 'pending'].includes(runStatus || '');
+  const activeCampaignStatus = activeCampaign?.campaign.status;
+  const isScreeningOrLater =
+    activeCampaignStatus != null &&
+    [
+      'screening',
+      'screening_completed',
+      'drafting',
+      'drafting_completed',
+      'sending',
+      'sent',
+      'completed',
+      'completed_with_errors',
+    ].includes(activeCampaignStatus);
+  const isJdAnalysisPhase =
+    isPipelineProcessing && !activeApproval && !isScreeningOrLater && !activeCriteria;
+  const isCandidateAnalysisPhase = isPipelineProcessing && !activeApproval && !isJdAnalysisPhase;
 
   const criteriaIdToLoad = isGate1Active
     ? activeApproval?.proposedPayload?.primary?.argsPatch?.criteriaId || null
@@ -607,6 +628,27 @@ export function SmartrecruitPage() {
   ]);
 
   // --- CV Upload Handler ---
+  const handleJdUpload = async (file: File) => {
+    setIsUploadingJd(true);
+    setJdUploadError(null);
+    setErrorMsg(null);
+
+    try {
+      const data = await smartrecruitApi.uploadJd(file);
+      setJdText(data.text);
+      setUploadedJdFilename(data.filename || file.name);
+      toast.success('Job description text extracted.', {
+        description: 'Review or edit the extracted text before launching the pipeline.',
+      });
+    } catch (err) {
+      const message = (err as Error).message || 'Failed to extract text from the JD file.';
+      setJdUploadError(message);
+      toast.error('JD upload failed.', { description: message });
+    } finally {
+      setIsUploadingJd(false);
+    }
+  };
+
   const handleCvUpload = async (file: File) => {
     setIsUploading(true);
     setErrorMsg(null);
@@ -1031,6 +1073,36 @@ export function SmartrecruitPage() {
                     <label className="text-body-sm font-medium text-ink">
                       Job Description Text
                     </label>
+                    <Dropzone
+                      accept="application/pdf"
+                      onFile={handleJdUpload}
+                      isPending={isUploadingJd}
+                      pendingLabel="Extracting JD Text..."
+                      label="Upload a JD PDF or drag it here"
+                      hint="Extracted text will populate the editable JD field below"
+                      className="border-hairline"
+                    />
+                    {(uploadedJdFilename || jdUploadError) && (
+                      <div
+                        className={cn(
+                          'rounded-lg border px-3 py-2 text-body-xs flex items-start gap-2',
+                          jdUploadError
+                            ? 'border-red-200 bg-red-50 text-red-700'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-800',
+                        )}
+                      >
+                        {jdUploadError ? (
+                          <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                        ) : (
+                          <Check className="size-4 shrink-0 mt-0.5" />
+                        )}
+                        <span>
+                          {jdUploadError
+                            ? jdUploadError
+                            : `Extracted text from ${uploadedJdFilename}. Review or edit it before launching.`}
+                        </span>
+                      </div>
+                    )}
                     <Textarea
                       value={jdText}
                       onChange={(e) => setJdText(e.target.value)}
@@ -1202,7 +1274,7 @@ export function SmartrecruitPage() {
                         ? 'Creating campaign...'
                         : startWorkflowMutation.isPending
                           ? 'Starting workflow...'
-                          : `Launch Screening Pipeline: ''}`}
+                          : `Launch Screening Pipeline`}
                     </Button>
                     {errorMsg && (
                       <div className="flex items-center gap-2 bg-destructive-tint/20 border border-destructive/20 text-destructive text-body-sm p-3 rounded-lg">
@@ -1347,7 +1419,7 @@ export function SmartrecruitPage() {
                       <RefreshCw
                         className={cn(
                           'size-4',
-                          ['running', 'waiting', 'pending'].includes(runStatus || '')
+                          isPipelineProcessing
                             ? 'text-blue-500 animate-spin'
                             : runStatus === 'paused'
                               ? 'text-amber-500'
@@ -1361,7 +1433,7 @@ export function SmartrecruitPage() {
                         <span
                           className={cn(
                             'font-bold px-2 py-0.5 rounded text-[11px] uppercase tracking-wider',
-                            ['running', 'waiting', 'pending'].includes(runStatus || '')
+                            isPipelineProcessing
                               ? 'bg-blue-50 text-blue-600 border border-blue-200 animate-pulse'
                               : runStatus === 'paused'
                                 ? 'bg-amber-50 text-amber-600 border border-amber-200'
@@ -1394,7 +1466,7 @@ export function SmartrecruitPage() {
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
                           runStatus === 'paused' && isGate1Active
                             ? 'bg-amber-500 border-amber-600 text-white'
-                            : ['running', 'waiting', 'pending'].includes(runStatus || '')
+                            : isJdAnalysisPhase
                               ? 'bg-primary border-primary text-white'
                               : 'bg-surface-1 border-hairline-strong text-ink-subtle',
                         )}
@@ -1409,8 +1481,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          ['running', 'waiting', 'pending'].includes(runStatus || '') &&
-                            !activeApproval
+                          isCandidateAnalysisPhase
                             ? 'bg-amber-500 border-amber-600 text-white'
                             : 'bg-surface-1 border-hairline-strong text-ink-subtle',
                         )}
@@ -2123,17 +2194,22 @@ export function SmartrecruitPage() {
             )}
 
             {/* PIPELINE SCANNING STATE */}
-            {['running', 'waiting', 'pending'].includes(runStatus || '') && !activeApproval && (
+            {isPipelineProcessing && !activeApproval && (
               <Card className="shadow-sm border-hairline bg-canvas/40 py-12 flex flex-col items-center justify-center gap-4">
                 <div className="relative">
                   <div className="size-16 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
                   <FileText className="size-6 text-primary absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                 </div>
                 <div className="flex flex-col items-center gap-1 text-center">
-                  <h2 className="text-body-lg font-bold text-ink">Analyzing candidate CVs...</h2>
+                  <h2 className="text-body-lg font-bold text-ink">
+                    {isJdAnalysisPhase
+                      ? 'Analyzing Job Description...'
+                      : 'Analyzing candidate CVs...'}
+                  </h2>
                   <p className="text-body-sm text-ink-subtle max-w-md">
-                    Our AI agent is matching candidates against the criteria, calculating work
-                    duration, and checking for hallucination-free outreach.
+                    {isJdAnalysisPhase
+                      ? 'Our AI agent is extracting screening criteria from the job description before Gate 1 review.'
+                      : 'Our AI agent is matching candidates against the criteria, calculating work duration, and checking for hallucination-free outreach.'}
                   </p>
                 </div>
               </Card>
