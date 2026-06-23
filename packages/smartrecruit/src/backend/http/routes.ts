@@ -104,13 +104,26 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../.
 function resolveMockDataFilePath(filePath?: string): string {
   if (filePath) {
     if (isAbsolute(filePath)) return filePath;
-    const cwdPath = resolve(process.cwd(), filePath);
-    if (existsSync(cwdPath)) return cwdPath;
-    return resolve(repoRoot, filePath);
+
+    const candidates = [
+      resolve(process.cwd(), filePath),
+      ...(process.env.APP_HOME ? [resolve(process.env.APP_HOME, filePath)] : []),
+      resolve(repoRoot, filePath),
+    ];
+    return (
+      candidates.find((candidate) => existsSync(candidate)) ?? resolve(process.cwd(), filePath)
+    );
   }
-  const defaultCwdPath = resolve(process.cwd(), 'mock-data/04_ta_cv_screening.xlsx');
-  if (existsSync(defaultCwdPath)) return defaultCwdPath;
-  return resolve(repoRoot, 'mock-data/04_ta_cv_screening.xlsx');
+
+  const relativePath = 'mock-data/04_ta_cv_screening.xlsx';
+  const candidates = [
+    ...(process.env.APP_HOME ? [resolve(process.env.APP_HOME, relativePath)] : []),
+    resolve(process.cwd(), relativePath),
+    resolve(repoRoot, relativePath),
+  ];
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ?? resolve(process.cwd(), relativePath)
+  );
 }
 
 const screenCandidatePoolSchema = z.object({

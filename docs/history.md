@@ -757,3 +757,25 @@ This file records completed implementation steps so another IDE session or agent
 
 - `rg` confirmed `window.confirm` is no longer used in the SmartRecruit page.
 - `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+
+## 2026-06-23 - SmartRecruit Production Mock Dataset Path
+
+### Completed
+
+- Fixed mock dataset resolution after `pnpm deploy` packages SmartRecruit under the server's `node_modules` tree.
+- The default import now checks `APP_HOME/mock-data/04_ta_cv_screening.xlsx` first in production. With the server Docker image configuration, this resolves to `/app/mock-data/04_ta_cv_screening.xlsx`.
+- Preserved local development and explicit relative-path fallbacks through `process.cwd()` and the source checkout root.
+
+### Files
+
+- `packages/smartrecruit/src/backend/http/routes.ts`
+
+### Verification
+
+- `pnpm exec biome check --write packages/smartrecruit/src/backend/http/routes.ts` passed.
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+
+### Deployment
+
+- No database migration is required.
+- Rebuild and release the server image before retesting Mock Dataset Import in production.
