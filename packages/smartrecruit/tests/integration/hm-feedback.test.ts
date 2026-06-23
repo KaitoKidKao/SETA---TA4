@@ -49,7 +49,7 @@ describe('HM feedback SLA persistence', () => {
     });
   });
 
-  it('creates one reminder draft and one queued attempt per stage', async () => {
+  it('creates one reminder attempt per stage and re-enqueues it idempotently', async () => {
     await withSmartrecruitTestDb(async ({ db, session }) => {
       const [request] = await db
         .insert(hmFeedbackRequests)
@@ -76,7 +76,13 @@ describe('HM feedback SLA persistence', () => {
       });
       expect(firstDraft.id).toBe(secondDraft.id);
 
-      const addJob = vi.fn(async () => {});
+      const addJob = vi.fn(
+        async (
+          _taskName: string,
+          _payload: unknown,
+          _options?: { jobKey?: string; maxAttempts?: number },
+        ) => {},
+      );
       const firstAttempt = await approveHmFeedbackReminder({
         tenantId: session.tenant_id,
         feedbackRequestId: request!.id,
@@ -91,10 +97,50 @@ describe('HM feedback SLA persistence', () => {
       });
 
       expect(firstAttempt.id).toBe(secondAttempt.id);
-      expect(addJob).toHaveBeenCalledTimes(1);
+      expect(addJob).toHaveBeenCalledTimes(2);
+      expect(addJob.mock.calls[0]?.[2]?.jobKey).toBe(firstAttempt.id);
+      expect(addJob.mock.calls[1]?.[2]?.jobKey).toBe(firstAttempt.id);
       const attempts = await db.select().from(hmFeedbackReminderAttempts);
       expect(attempts).toHaveLength(1);
       expect(attempts[0]?.status).toBe('queued');
+    });
+  });
+
+  it('marks an attempt failed when the reminder queue is unavailable', async () => {
+    await withSmartrecruitTestDb(async ({ db, session }) => {
+      const [request] = await db
+        .insert(hmFeedbackRequests)
+        .values({
+          tenant_id: session.tenant_id,
+          external_feedback_id: 'FB-QUEUE-FAIL',
+          candidate_name: 'Candidate Queue',
+          position: 'Backend Engineer',
+          hiring_manager: 'HM Queue',
+          hiring_manager_email: 'hm@example.com',
+          shortlisted_at: new Date('2025-04-01T00:00:00Z'),
+          feedback_due_at: new Date(Date.now() - 60_000),
+          feedback_status: 'Pending',
+        })
+        .returning();
+
+      await expect(
+        approveHmFeedbackReminder({
+          tenantId: session.tenant_id,
+          feedbackRequestId: request!.id,
+          session,
+          addJob: async () => {
+            throw new Error('worker unavailable');
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+
+      const [attempt] = await db
+        .select()
+        .from(hmFeedbackReminderAttempts)
+        .where(eq(hmFeedbackReminderAttempts.feedback_request_id, request!.id));
+      expect(attempt?.status).toBe('failed');
+      expect(attempt?.failure_code).toBe('REMINDER_QUEUE_UNAVAILABLE');
+      expect(attempt?.failure_message).toBe('worker unavailable');
     });
   });
 

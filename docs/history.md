@@ -831,3 +831,32 @@ This file records completed implementation steps so another IDE session or agent
 - No database migration is required.
 - Run Hackathon Release again so the EC2 deployment fetches the updated `compose.yml` and recreates server/worker containers.
 - The current release configuration uses `dev-stub`; it validates the workflow without delivering a real external email. Real delivery requires `smtp` plus an SMTP URL/credentials configuration.
+
+## 2026-06-24 - SLA Tracker Restored In Monitoring
+
+### Completed
+
+- Restored HM Feedback SLA tracking as a dedicated, campaign-independent section on the SmartRecruit Monitoring page.
+- Added a persistent empty state and `Import DS08` action so the section no longer disappears when the tenant has no feedback records.
+- Added debounced candidate/HM/position search and status filters for overdue, due soon, on track, submitted and data-error records.
+- Added per-record SLA dates, HM details, feedback text, reminder status and failure code visibility.
+- Added explicit `Send reminder` and `Retry reminder` actions with pending states and success/error toasts.
+- Added a 10-second optional polling interval to `useSlaTracker` so queued reminder status can update without a page reload.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/components/SlaMonitoringSection.tsx`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-monitoring-page.tsx`
+- `apps/web/src/modules/smartrecruit/hooks/use-smartrecruit.ts`
+
+### Verification
+
+- Biome check/write passed for all three changed web files. It only reported pre-existing non-null assertion warnings in the shared SmartRecruit hooks file.
+- `apps/web/node_modules/.bin/tsc -b --noEmit` passed.
+- Automated browser inspection was unavailable in the current session, so visual acceptance remains to be checked manually on `/smartrecruit/monitoring`.
+
+### Manual Retest
+
+- Open SmartRecruit > Monitoring and confirm the SLA section appears above Campaign Monitoring even when it has no rows.
+- Click `Import DS08`, verify counts and rows appear, then exercise search and each status filter.
+- On a due-soon or overdue item, click `Send reminder` and confirm its status progresses from queued to sent; use `Retry reminder` when the latest attempt is failed.

@@ -7,6 +7,7 @@ import {
   requirePermission,
   SMARTRECRUIT_HM_FEEDBACK_APPROVE,
   SMARTRECRUIT_WRITE,
+  SmartrecruitError,
 } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { hmFeedbackReminderAttempts, hmFeedbackRequests } from '../db/schema.ts';
@@ -349,7 +350,9 @@ export async function approveHmFeedbackReminder(input: {
           ),
         )
         .limit(1);
-      if (!request) throw new Error('HM feedback request not found.');
+      if (!request) {
+        throw new SmartrecruitError('NOT_FOUND', 'HM feedback request not found.');
+      }
 
       const sla = deriveHmFeedbackSla({
         dueAt: request.feedback_due_at,
@@ -360,10 +363,21 @@ export async function approveHmFeedbackReminder(input: {
         state: sla.state,
         hiringManagerEmail: request.hiring_manager_email,
       });
-      if (!approval.allowed) throw new Error(approval.reason);
+      if (!approval.allowed) {
+        throw new SmartrecruitError('CONFLICT', approval.reason, {
+          feedbackRequestId: request.id,
+          slaState: sla.state,
+        });
+      }
 
       const stage = reminderStageForState(sla.state);
-      if (!stage) throw new Error('HM feedback request is not eligible for a reminder.');
+      if (!stage) {
+        throw new SmartrecruitError(
+          'CONFLICT',
+          'HM feedback request is not eligible for a reminder.',
+          { feedbackRequestId: request.id, slaState: sla.state },
+        );
+      }
       const content = renderHmFeedbackReminder({
         stage,
         hiringManager: request.hiring_manager,
@@ -389,6 +403,7 @@ export async function approveHmFeedbackReminder(input: {
         .limit(1);
       if (existing && existing.status !== 'draft') {
         attempt = existing;
+        shouldQueue = existing.status === 'queued';
         return;
       }
 
@@ -450,11 +465,28 @@ export async function approveHmFeedbackReminder(input: {
   );
 
   if (shouldQueue && attempt.status === 'queued') {
-    await input.addJob(
-      'smartrecruit:hm_feedback_reminder_send',
-      { attemptId: attempt.id, userId: input.session.user_id },
-      { jobKey: attempt.id, maxAttempts: 3 },
-    );
+    try {
+      await input.addJob(
+        'smartrecruit:hm_feedback_reminder_send',
+        { attemptId: attempt.id, userId: input.session.user_id },
+        { jobKey: attempt.id, maxAttempts: 3 },
+      );
+    } catch (error) {
+      await smartrecruitDb()
+        .update(hmFeedbackReminderAttempts)
+        .set({
+          status: 'failed',
+          failure_code: 'REMINDER_QUEUE_UNAVAILABLE',
+          failure_message: error instanceof Error ? error.message : String(error),
+          updated_at: new Date(),
+        })
+        .where(eq(hmFeedbackReminderAttempts.id, attempt.id));
+      throw new SmartrecruitError(
+        'SERVICE_UNAVAILABLE',
+        'Reminder delivery queue is unavailable. Retry after the worker is healthy.',
+        { reminderAttemptId: attempt.id },
+      );
+    }
   }
   return attempt;
 }
