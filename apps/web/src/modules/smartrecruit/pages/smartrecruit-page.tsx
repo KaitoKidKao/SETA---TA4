@@ -30,14 +30,12 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
-  Bell,
   Calendar,
   Check,
   CheckCircle,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Clock,
   FileText,
   Loader2,
   Mail,
@@ -51,12 +49,12 @@ import {
   Trash2,
   Upload,
   User,
+  Users,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   smartrecruitApi,
   useAddPoolCandidates,
-  useApproveSlaReminder,
   useCampaignMetrics,
   useCampaignWarnings,
   useCancelCampaign,
@@ -70,7 +68,6 @@ import {
   usePendingApprovals,
   useScreenCandidatesFromPool,
   useSkillGaps,
-  useSlaTracker,
   useSmartrecruitCampaign,
   useStartWorkflowRun,
   useSubmitDecision,
@@ -172,43 +169,6 @@ interface DraftState {
   error_reason: string | null;
 }
 
-type SlaState = 'on_track' | 'due_soon' | 'overdue' | 'submitted' | 'data_error';
-
-interface SlaTrackerItem {
-  id: string;
-  feedbackId: string;
-  candidateName: string;
-  position: string;
-  hiringManager: string;
-  hiringManagerEmail: string | null;
-  shortlistedAt: string;
-  feedbackDueAt: string;
-  slaState: SlaState;
-  remainingSeconds: number | null;
-  feedbackStatus: string;
-  hmDecision: string | null;
-  hmFeedbackText: string | null;
-  reminderAvailable: boolean;
-  reminderStage: 'due_soon' | 'overdue' | null;
-  latestReminder: {
-    id: string;
-    stage: 'due_soon' | 'overdue';
-    status: string;
-    queuedAt: string | null;
-    sentAt: string | null;
-    failureCode: string | null;
-  } | null;
-}
-
-function formatSlaDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Invalid date';
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
-}
-
 export function SmartrecruitPage() {
   // Navigation & Core State
   const [activeTab, setActiveTab] = useState<'new' | 'active' | 'settings'>('new');
@@ -236,7 +196,6 @@ export function SmartrecruitPage() {
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
   const [dismissedRunIds, setDismissedRunIds] = useState<Record<string, boolean>>({});
   const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
-  const [slaSearchQuery] = useState('');
 
   // Local UI State
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
@@ -268,7 +227,7 @@ export function SmartrecruitPage() {
   const [isImportingMockData, setIsImportingMockData] = useState(false);
   const [isScreeningMockPool, setIsScreeningMockPool] = useState(false);
   const [mockDataSummary, setMockDataSummary] = useState<string | null>(null);
-  const [showDemoTools, setShowDemoTools] = useState(false);
+  const [candidateSource, setCandidateSource] = useState<'upload' | 'pool'>('upload');
   const [showCancelPipelineDialog, setShowCancelPipelineDialog] = useState(false);
 
   // Gate 1: Criteria State
@@ -278,10 +237,6 @@ export function SmartrecruitPage() {
   const [isSavingCriteria, setIsSavingCriteria] = useState(false);
   const [isConfirmingCriteria, setIsConfirmingCriteria] = useState(false);
   const [isApprovingOutreach, setIsApprovingOutreach] = useState(false);
-  const [slaFilterTab, setSlaFilterTab] = useState<'all' | 'overdue' | 'due_soon' | 'pending'>(
-    'all',
-  );
-  const [remindingIds, setRemindingIds] = useState<Record<string, boolean>>({});
 
   // Gate 2: Candidate Scorecard & Email workspace
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateState | null>(null);
@@ -347,9 +302,6 @@ export function SmartrecruitPage() {
   const skillGapsQuery = useSkillGaps(criteriaDetailsQuery.data?.job_title ?? '');
   const skillGaps = skillGapsQuery.data ?? null;
 
-  const slaTrackerQuery = useSlaTracker({ search: slaSearchQuery });
-  const slaTracker = slaTrackerQuery.data?.tracker ?? [];
-
   const candidatesQuery = useCandidates();
   const draftsQuery = useOutreachDrafts();
 
@@ -366,47 +318,6 @@ export function SmartrecruitPage() {
   const submitDecisionMutation = useSubmitDecision();
   const addPoolCandidatesMutation = useAddPoolCandidates();
   const updateOutreachDraftMutation = useUpdateOutreachDraft();
-
-  const approveSlaReminderMutation = useApproveSlaReminder();
-
-  const handleRemindHM = useCallback(
-    async (item: SlaTrackerItem) => {
-      const id = item.id;
-      setRemindingIds((prev) => ({ ...prev, [id]: true }));
-
-      try {
-        await approveSlaReminderMutation.mutateAsync(item.id);
-        toast.success('Reminder queued for approval delivery.', {
-          description: `A ${item.reminderStage?.replace('_', ' ') ?? 'feedback'} reminder for ${item.hiringManager} is now queued.`,
-        });
-      } catch (err) {
-        toast.error('Could not queue reminder.', {
-          description: err instanceof Error ? err.message : String(err),
-        });
-      } finally {
-        setRemindingIds((prev) => ({ ...prev, [id]: false }));
-      }
-    },
-    [approveSlaReminderMutation],
-  );
-
-  const filteredSlaTracker = useMemo(() => {
-    return slaTracker.filter((item) => {
-      const query = slaSearchQuery.toLowerCase();
-      const matchesSearch =
-        item.candidateName?.toLowerCase().includes(query) ||
-        item.hiringManager?.toLowerCase().includes(query) ||
-        item.position?.toLowerCase().includes(query);
-
-      if (!matchesSearch) return false;
-
-      if (slaFilterTab === 'overdue') return item.slaState === 'overdue';
-      if (slaFilterTab === 'due_soon') return item.slaState === 'due_soon';
-      if (slaFilterTab === 'pending') return item.slaState !== 'submitted';
-
-      return true;
-    });
-  }, [slaTracker, slaSearchQuery, slaFilterTab]);
 
   const candidatesList = useMemo(() => {
     if (activeCampaignId && activeCampaignQuery.data) {
@@ -1130,89 +1041,218 @@ export function SmartrecruitPage() {
                   </div>
                 </CardContent>
               </Card>
+            </div>
 
-              {/* Start Campaign Trigger */}
-              <div className="flex flex-col gap-2">
-                <Button
-                  onClick={handleStartPipeline}
-                  disabled={
-                    isUploading ||
-                    isAnyCvNotReady ||
-                    uploadedCvs.length === 0 ||
-                    createCampaignMutation.isPending ||
-                    startWorkflowMutation.isPending
-                  }
-                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium shadow-md flex items-center justify-center gap-2 h-11"
-                >
-                  {createCampaignMutation.isPending || startWorkflowMutation.isPending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Play className="size-4 fill-current" />
-                  )}
-                  {createCampaignMutation.isPending
-                    ? 'Creating campaign...'
-                    : startWorkflowMutation.isPending
-                      ? 'Starting workflow...'
-                      : 'Launch Screening Pipeline'}
-                </Button>
-                {errorMsg && (
-                  <div className="flex items-center gap-2 bg-destructive-tint/20 border border-destructive/20 text-destructive text-body-sm p-3 rounded-lg">
-                    <AlertCircle className="size-4 shrink-0" />
-                    <span>{errorMsg}</span>
-                  </div>
-                )}
-              </div>
-
-              <Card className="shadow-sm border-hairline bg-canvas/40">
+            {/* Right Side: Candidate Source — mode toggle */}
+            <div className="lg:col-span-7 flex flex-col gap-4">
+              {/* Mode Toggle */}
+              <div className="flex items-center gap-1 bg-surface-1 border border-hairline rounded-lg p-1">
                 <button
                   type="button"
-                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left"
-                  onClick={() => setShowDemoTools((value) => !value)}
+                  onClick={() => setCandidateSource('upload')}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-md text-body-sm font-medium transition-all',
+                    candidateSource === 'upload'
+                      ? 'bg-white text-ink shadow-sm'
+                      : 'text-ink-subtle hover:text-ink',
+                  )}
                 >
-                  <div>
-                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                      <RefreshCw className="size-4 text-primary" />
-                      Mock Sourcing & SLA Utilities
-                    </CardTitle>
-                    <CardDescription className="text-eyebrow mt-1">
-                      Optional mock dataset, pool screening, and hiring manager SLA utilities.
-                    </CardDescription>
-                  </div>
-                  <ChevronRight
-                    className={cn(
-                      'size-4 text-ink-subtle transition-transform',
-                      showDemoTools && 'rotate-90',
-                    )}
-                  />
+                  <Upload className="size-4" />
+                  Upload CVs
                 </button>
-              </Card>
+                <button
+                  type="button"
+                  onClick={() => setCandidateSource('pool')}
+                  className={cn(
+                    'flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-md text-body-sm font-medium transition-all',
+                    candidateSource === 'pool'
+                      ? 'bg-white text-ink shadow-sm'
+                      : 'text-ink-subtle hover:text-ink',
+                  )}
+                >
+                  <Users className="size-4" />
+                  Screen from Pool
+                </button>
+              </div>
 
-              {showDemoTools && (
-                <>
+              {/* Upload CVs Mode */}
+              {candidateSource === 'upload' && (
+                <Card className="shadow-sm border-hairline bg-canvas/40 flex-1">
+                  <CardHeader>
+                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                      <Upload className="size-4 text-primary" />
+                      Candidate CV Storage
+                    </CardTitle>
+                    <CardDescription className="text-eyebrow">
+                      Drag and drop candidate CVs (PDF files) to extract details, then launch
+                      screening.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-4">
+                    <Dropzone
+                      accept="application/pdf"
+                      onFile={handleCvUpload}
+                      isPending={isUploading}
+                      pendingLabel="Extracting CV Text..."
+                      label="Drag & drop CV PDFs here or click to browse"
+                      hint="Only PDF files supported"
+                      className="border-hairline"
+                    />
+                    {uploadedCvs.length > 0 && (
+                      <div className="flex flex-col gap-2.5">
+                        <h3 className="text-body-sm font-semibold text-ink">
+                          Uploaded Candidate Profiles ({uploadedCvs.length})
+                        </h3>
+                        <div className="max-h-[260px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
+                          {uploadedCvs.map((cv) => (
+                            <div
+                              key={cv.id}
+                              className="p-3.5 flex flex-col gap-3 transition-colors hover:bg-canvas"
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <FileText className="size-5 text-ink-tertiary shrink-0" />
+                                  <div className="min-w-0">
+                                    <p className="text-body-sm font-medium text-ink truncate max-w-[240px]">
+                                      {cv.filename}
+                                    </p>
+                                    {cv.status === 'uploading' && (
+                                      <span className="text-eyebrow text-blue-500 animate-pulse">
+                                        Uploading...
+                                      </span>
+                                    )}
+                                    {cv.status === 'extracting' && (
+                                      <span className="text-eyebrow text-amber-500 animate-pulse">
+                                        Extracting info...
+                                      </span>
+                                    )}
+                                    {cv.status === 'ready' && (
+                                      <span className="text-eyebrow text-emerald-500 font-medium flex items-center gap-1">
+                                        <Check className="size-3" /> Ready
+                                      </span>
+                                    )}
+                                    {cv.status === 'error' && (
+                                      <span className="text-eyebrow text-rose-500">
+                                        Error: {cv.error}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleRemoveCv(cv.id)}
+                                  className="h-8 w-8 p-0 text-ink-subtle hover:text-rose-500 rounded-full"
+                                >
+                                  <Trash2 className="size-4" />
+                                </Button>
+                              </div>
+                              {cv.status === 'ready' && (
+                                <div className="grid grid-cols-2 gap-2.5 bg-canvas p-2.5 rounded-lg border border-hairline">
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-eyebrow text-ink-subtle">
+                                      Candidate Name
+                                    </label>
+                                    <Input
+                                      value={cv.name}
+                                      onChange={(e) =>
+                                        handleUpdateCvInfo(cv.id, 'name', e.target.value)
+                                      }
+                                      size="sm"
+                                      className="h-8 text-body-sm bg-surface border-hairline"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-eyebrow text-ink-subtle">
+                                      Email Address
+                                    </label>
+                                    <Input
+                                      value={cv.email}
+                                      onChange={(e) =>
+                                        handleUpdateCvInfo(cv.id, 'email', e.target.value)
+                                      }
+                                      size="sm"
+                                      className="h-8 text-body-sm bg-surface border-hairline"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <Button
+                      onClick={handleStartPipeline}
+                      disabled={
+                        isUploading ||
+                        isAnyCvNotReady ||
+                        uploadedCvs.length === 0 ||
+                        createCampaignMutation.isPending ||
+                        startWorkflowMutation.isPending
+                      }
+                      className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium shadow-md flex items-center justify-center gap-2 h-11 mt-2"
+                    >
+                      {createCampaignMutation.isPending || startWorkflowMutation.isPending ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Play className="size-4 fill-current" />
+                      )}
+                      {createCampaignMutation.isPending
+                        ? 'Creating campaign...'
+                        : startWorkflowMutation.isPending
+                          ? 'Starting workflow...'
+                          : `Launch Screening Pipeline${uploadedCvs.length > 0 ? ` (${uploadedCvs.length} CVs)` : ''}`}
+                    </Button>
+                    {errorMsg && (
+                      <div className="flex items-center gap-2 bg-destructive-tint/20 border border-destructive/20 text-destructive text-body-sm p-3 rounded-lg">
+                        <AlertCircle className="size-4 shrink-0" />
+                        <span>{errorMsg}</span>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Screen from Pool Mode */}
+              {candidateSource === 'pool' && (
+                <div className="flex flex-col gap-4">
                   <Card className="shadow-sm border-hairline bg-canvas/40">
                     <CardHeader>
                       <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                        <RefreshCw className="size-4 text-primary" />
-                        Mock Dataset Mode
+                        <Users className="size-4 text-primary" />
+                        Candidate Pool Screening
                       </CardTitle>
                       <CardDescription className="text-eyebrow">
-                        Import DS-06 candidates, DS-07 criteria, and DS-08 outreach templates from
-                        the assignment workbook.
+                        Import mock dataset then select a criteria set to screen all candidates.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
-                      <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-3 p-3 rounded-lg border border-hairline bg-surface-1">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-body-sm font-medium text-ink">
+                            Mock Dataset (DS-06, DS-07, DS-08)
+                          </p>
+                          <p className="text-eyebrow text-ink-subtle">
+                            Candidates, criteria and outreach templates
+                          </p>
+                        </div>
                         <Button
                           onClick={handleImportMockData}
                           disabled={isImportingMockData || isScreeningMockPool}
                           variant="secondary"
-                          className="w-full justify-center gap-2"
+                          size="sm"
+                          className="shrink-0 gap-1.5"
                         >
-                          <Upload className="size-4" />
-                          {isImportingMockData ? 'Importing dataset...' : 'Import Mock Dataset'}
+                          <Upload className="size-3.5" />
+                          {isImportingMockData ? 'Importing...' : 'Import Dataset'}
                         </Button>
                       </div>
-
+                      {mockDataSummary && (
+                        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
+                          {mockDataSummary}
+                        </div>
+                      )}
                       <div className="flex flex-col gap-1.5">
                         <label className="text-body-sm font-medium text-ink">
                           Screening Criteria
@@ -1225,37 +1265,33 @@ export function SmartrecruitPage() {
                           <option value="">Select criteria</option>
                           {criteriaOptions.map((item) => (
                             <option key={item.id} value={item.id}>
-                              {item.external_criteria_id ? `${item.external_criteria_id} - ` : ''}
+                              {item.external_criteria_id ? `${item.external_criteria_id} — ` : ''}
                               {item.job_title}
                             </option>
                           ))}
                         </select>
                       </div>
-
                       <Button
                         onClick={handleScreenMockPool}
                         disabled={!selectedCriteriaId || isImportingMockData || isScreeningMockPool}
-                        className="w-full justify-center gap-2"
+                        className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-medium shadow-md flex items-center justify-center gap-2 h-11"
                       >
-                        <Play className="size-4 fill-current" />
+                        {isScreeningMockPool ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Play className="size-4 fill-current" />
+                        )}
                         {isScreeningMockPool ? 'Screening candidate pool...' : 'Run Pool Screening'}
                       </Button>
-
-                      {mockDataSummary && (
-                        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
-                          {mockDataSummary}
-                        </div>
-                      )}
-
                       {candidatesList.filter(
                         (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
                       ).length > 0 && (
-                        <div className="flex flex-col gap-2 mt-2">
+                        <div className="flex flex-col gap-2 pt-2 border-t border-hairline">
                           <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
                             <CheckCircle className="size-4 text-emerald-500" />
-                            Passed Candidates (Shortlisted)
+                            Shortlisted Candidates
                           </h3>
-                          <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
+                          <div className="max-h-[240px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
                             {candidatesList
                               .filter(
                                 (c) =>
@@ -1275,19 +1311,17 @@ export function SmartrecruitPage() {
                                       {cand.email}
                                     </span>
                                   </div>
-                                  <div className="flex items-center gap-2">
-                                    <Badge
-                                      className={
-                                        cand.fit_score != null && cand.fit_score >= 70
-                                          ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
-                                          : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
-                                      }
-                                    >
-                                      {cand.fit_score != null
-                                        ? `${cand.fit_score}% Fit`
-                                        : 'Pre-screened'}
-                                    </Badge>
-                                  </div>
+                                  <Badge
+                                    className={
+                                      cand.fit_score != null && cand.fit_score >= 70
+                                        ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
+                                        : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
+                                    }
+                                  >
+                                    {cand.fit_score != null
+                                      ? `${cand.fit_score}% Fit`
+                                      : 'Pre-screened'}
+                                  </Badge>
                                 </div>
                               ))}
                           </div>
@@ -1295,286 +1329,8 @@ export function SmartrecruitPage() {
                       )}
                     </CardContent>
                   </Card>
-
-                  {/* Hiring Manager SLA Tracker Card */}
-                  {slaTracker.length > 0 && (
-                    <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[450px] overflow-hidden flex flex-col">
-                      <CardHeader className="pb-3 shrink-0">
-                        <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                          <Mail className="size-4 text-rose-500" />
-                          HM Feedback SLA Tracker (DS08)
-                        </CardTitle>
-                        <CardDescription className="text-eyebrow">
-                          Track Hiring Manager feedback against the 48-hour SLA.
-                        </CardDescription>
-                      </CardHeader>
-
-                      {/* Search and Filters */}
-                      <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
-                        <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
-                          {(
-                            [
-                              { id: 'all', label: 'All' },
-                              { id: 'overdue', label: 'Overdue ⚠️' },
-                              { id: 'due_soon', label: 'Due soon' },
-                              { id: 'pending', label: 'Waiting HM' },
-                            ] as const
-                          ).map((tab) => (
-                            <button
-                              key={tab.id}
-                              type="button"
-                              className={cn(
-                                'flex-1 py-1 rounded-sm font-medium transition-all',
-                                slaFilterTab === tab.id
-                                  ? 'bg-surface text-ink shadow-sm'
-                                  : 'text-ink-subtle hover:text-ink hover:bg-surface-1',
-                              )}
-                              onClick={() => setSlaFilterTab(tab.id)}
-                            >
-                              {tab.label}
-                              {tab.id === 'overdue' && (
-                                <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
-                                  {slaTracker.filter((i) => i.slaState === 'overdue').length}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <CardContent className="flex-1 overflow-y-auto pt-0">
-                        <div className="flex flex-col gap-2.5">
-                          {filteredSlaTracker.length === 0 ? (
-                            <div className="text-center py-6 text-ink-subtle text-xs">
-                              No matching feedback requests.
-                            </div>
-                          ) : (
-                            filteredSlaTracker.map((item) => {
-                              const isBreached = item.slaState === 'overdue';
-                              const isDueSoon = item.slaState === 'due_soon';
-                              const isReminding = remindingIds[item.id];
-                              const isSubmitted = item.slaState === 'submitted';
-                              const stateLabel = item.slaState.replace('_', ' ');
-
-                              return (
-                                <div
-                                  key={item.feedbackId}
-                                  className={cn(
-                                    'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
-                                    isBreached
-                                      ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
-                                      : isDueSoon
-                                        ? 'border-amber-200/50 border-l-4 border-l-amber-500 bg-amber-50/5 dark:bg-amber-950/5'
-                                        : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
-                                  )}
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div className="flex flex-col">
-                                      <span className="font-bold text-ink text-sm flex items-center gap-1.5">
-                                        <User className="size-3.5 text-ink-subtle" />
-                                        {item.candidateName}
-                                      </span>
-                                      <span className="text-[11px] text-ink-subtle mt-0.5">
-                                        Position:{' '}
-                                        <span className="font-medium text-ink/80">
-                                          {item.position}
-                                        </span>
-                                      </span>
-                                    </div>
-                                    <div className="flex flex-col items-end gap-1.5 shrink-0">
-                                      {isBreached ? (
-                                        <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
-                                          Overdue
-                                        </Badge>
-                                      ) : isDueSoon ? (
-                                        <Badge className="bg-amber-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                          Due Soon
-                                        </Badge>
-                                      ) : (
-                                        <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                          {isSubmitted ? 'Submitted' : 'On Track'}
-                                        </Badge>
-                                      )}
-                                      <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
-                                        {stateLabel}
-                                      </Badge>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-xs text-ink-subtle flex flex-col gap-1 border-t border-hairline/50 pt-2 mt-1">
-                                    <div className="flex justify-between items-center">
-                                      <span>
-                                        HM:{' '}
-                                        <span className="font-medium text-ink">
-                                          {item.hiringManager}
-                                        </span>
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-1 text-[11px] text-ink-muted">
-                                      <Calendar className="size-3 text-ink-subtle" />
-                                      <span>Shortlisted: {formatSlaDate(item.shortlistedAt)}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1 text-[11px] text-ink-muted">
-                                      <Clock className="size-3 text-ink-subtle" />
-                                      <span>Deadline: {formatSlaDate(item.feedbackDueAt)}</span>
-                                    </div>
-                                  </div>
-
-                                  {item.hmFeedbackText && (
-                                    <p className="text-[11px] text-ink-subtle bg-canvas/40 p-2 rounded italic border-l-2 border-primary/30 mt-1">
-                                      HM Feedback: "{item.hmFeedbackText}"
-                                    </p>
-                                  )}
-
-                                  {!isSubmitted && item.reminderAvailable && (
-                                    <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
-                                      <Button
-                                        size="sm"
-                                        disabled={isReminding}
-                                        className={cn(
-                                          'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
-                                          'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
-                                        )}
-                                        onClick={() => handleRemindHM(item)}
-                                      >
-                                        {isReminding ? (
-                                          <>
-                                            <Loader2 className="animate-spin size-3.5" />
-                                            <span>Queueing...</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <Bell className="size-3.5" />
-                                            <span>Remind HM</span>
-                                          </>
-                                        )}
-                                      </Button>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
-                </>
+                </div>
               )}
-            </div>
-
-            {/* Right Side: CV Uploader Center */}
-            <div className="lg:col-span-7 flex flex-col gap-6">
-              <Card className="shadow-sm border-hairline bg-canvas/40 flex-1">
-                <CardHeader>
-                  <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                    <Upload className="size-4 text-primary" />
-                    Candidate CV Storage
-                  </CardTitle>
-                  <CardDescription className="text-eyebrow">
-                    Drag and drop candidate CVs (PDF files) to extract details.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <Dropzone
-                    accept="application/pdf"
-                    onFile={handleCvUpload}
-                    isPending={isUploading}
-                    pendingLabel="Extracting CV Text..."
-                    label="Drag & drop CV PDFs here or click to browse"
-                    hint="Only PDF files supported"
-                    className="border-hairline"
-                  />
-
-                  {/* Upload Queue List */}
-                  {uploadedCvs.length > 0 && (
-                    <div className="flex flex-col gap-2.5 mt-4">
-                      <h3 className="text-body-sm font-semibold text-ink">
-                        Uploaded Candidate Profiles ({uploadedCvs.length})
-                      </h3>
-                      <div className="max-h-[300px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
-                        {uploadedCvs.map((cv) => (
-                          <div
-                            key={cv.id}
-                            className="p-3.5 flex flex-col gap-3 transition-colors hover:bg-canvas"
-                          >
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <FileText className="size-5 text-ink-tertiary shrink-0" />
-                                <div className="min-w-0">
-                                  <p className="text-body-sm font-medium text-ink truncate max-w-[240px]">
-                                    {cv.filename}
-                                  </p>
-                                  {cv.status === 'uploading' && (
-                                    <span className="text-eyebrow text-blue-500 animate-pulse">
-                                      Uploading...
-                                    </span>
-                                  )}
-                                  {cv.status === 'extracting' && (
-                                    <span className="text-eyebrow text-amber-500 animate-pulse">
-                                      Extracting info...
-                                    </span>
-                                  )}
-                                  {cv.status === 'ready' && (
-                                    <span className="text-eyebrow text-emerald-500 font-medium flex items-center gap-1">
-                                      <Check className="size-3" /> Ready
-                                    </span>
-                                  )}
-                                  {cv.status === 'error' && (
-                                    <span className="text-eyebrow text-rose-500">
-                                      Error: {cv.error}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRemoveCv(cv.id)}
-                                className="h-8 w-8 p-0 text-ink-subtle hover:text-rose-500 rounded-full"
-                              >
-                                <Trash2 className="size-4" />
-                              </Button>
-                            </div>
-
-                            {/* Editable Fields when Ready */}
-                            {cv.status === 'ready' && (
-                              <div className="grid grid-cols-2 gap-2.5 bg-canvas p-2.5 rounded-lg border border-hairline">
-                                <div className="flex flex-col gap-1">
-                                  <label className="text-eyebrow text-ink-subtle">
-                                    Candidate Name
-                                  </label>
-                                  <Input
-                                    value={cv.name}
-                                    onChange={(e) =>
-                                      handleUpdateCvInfo(cv.id, 'name', e.target.value)
-                                    }
-                                    size="sm"
-                                    className="h-8 text-body-sm bg-surface border-hairline"
-                                  />
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                  <label className="text-eyebrow text-ink-subtle">
-                                    Email Address
-                                  </label>
-                                  <Input
-                                    value={cv.email}
-                                    onChange={(e) =>
-                                      handleUpdateCvInfo(cv.id, 'email', e.target.value)
-                                    }
-                                    size="sm"
-                                    className="h-8 text-body-sm bg-surface border-hairline"
-                                  />
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
             </div>
           </div>
         )}
