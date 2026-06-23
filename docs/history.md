@@ -779,3 +779,28 @@ This file records completed implementation steps so another IDE session or agent
 
 - No database migration is required.
 - Rebuild and release the server image before retesting Mock Dataset Import in production.
+
+## 2026-06-23 - Workflow Start Error Diagnostics
+
+### Completed
+
+- Hardened `POST /api/agent/v1/workflows/runs/:workflowId/start` so synchronous Mastra/storage failures return structured JSON instead of Hono's plain `500 Internal Server Error` response.
+- Added stage tracking for workflow lookup, deduplication, Mastra run creation and lifecycle projection.
+- Added production-safe classifications for missing Agent schema, database permission failures and unavailable workflow storage.
+- Added an error ID to the response and structured server log so a production failure can be correlated without exposing the full stack trace to the browser.
+- Added a regression test covering a synchronous workflow storage connection failure.
+
+### Files
+
+- `packages/agent/src/backend/routes.ts`
+- `packages/agent/tests/integration/routes.workflow-start.test.ts`
+
+### Verification
+
+- `node_modules/.bin/biome check --write packages/agent/src/backend/routes.ts packages/agent/tests/integration/routes.workflow-start.test.ts` passed.
+- `packages/agent/node_modules/.bin/tsc -b --noEmit` passed.
+- The targeted integration test could not execute because no PostgreSQL container runtime is available on the current Windows environment; Vitest stopped during global setup before running assertions.
+
+### Deployment
+
+- Rebuild and release the server image, reproduce the launch once, then use the returned `error`, `details.stage`, `details.causeCode` and `details.errorId` to identify the production root cause.

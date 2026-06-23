@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Mastra } from '@mastra/core';
 import type { MemoryConfig } from '@mastra/core/memory';
 import { RequestContext } from '@mastra/core/request-context';
@@ -49,6 +50,63 @@ function handleDomainError(c: Context<AgentRouteEnv>, err: unknown): Response {
     if (code === 'invalid_cursor') return c.json({ error: 'invalid_cursor', message }, 400);
   }
   throw err;
+}
+
+type WorkflowStartStage = 'resolve_workflow' | 'dedupe' | 'create_run' | 'project_run';
+
+const HANDLED_DOMAIN_ERROR_CODES = new Set([
+  'forbidden',
+  'not_found',
+  'already_decided',
+  'invalid_cursor',
+]);
+const WORKFLOW_SCHEMA_ERROR_CODES = new Set(['3F000', '42P01', '42703']);
+const WORKFLOW_CONNECTION_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  '53300',
+  '57P01',
+]);
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== 'object' || !('code' in err)) return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function classifyWorkflowStartError(stage: WorkflowStartStage, err: unknown) {
+  const causeCode = getErrorCode(err);
+
+  if (causeCode && WORKFLOW_SCHEMA_ERROR_CODES.has(causeCode)) {
+    return {
+      code: 'agent_schema_not_ready',
+      message: 'Agent workflow schema is not ready. Run production database migrations.',
+      causeCode,
+    };
+  }
+  if (causeCode === '42501') {
+    return {
+      code: 'workflow_storage_forbidden',
+      message: 'The server database user cannot access workflow storage.',
+      causeCode,
+    };
+  }
+  if (causeCode && WORKFLOW_CONNECTION_ERROR_CODES.has(causeCode)) {
+    return {
+      code: 'workflow_storage_unavailable',
+      message: 'Workflow storage is unavailable. Check the server database connection.',
+      causeCode,
+    };
+  }
+  return {
+    code: stage === 'project_run' ? 'workflow_projection_failed' : 'workflow_start_failed',
+    message:
+      stage === 'project_run'
+        ? 'Workflow run was created but could not be recorded. Check the agent database schema.'
+        : 'Workflow run could not be created. Check the server logs for the error ID.',
+    causeCode,
+  };
 }
 
 const ChatBody = z.object({
@@ -1170,6 +1228,8 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
     requestContext.set('actor', { type: 'user' as const, user_id: session.user_id });
     requestContext.set('tenant_id', session.tenant_id);
     requestContext.set('role_summary', session.role_summary);
+    let startStage: WorkflowStartStage = 'resolve_workflow';
+    let createdRunId: string | undefined;
     try {
       // Resolve Mastra's intrinsic workflow id (e.g. `planner.assignBySkill`)
       // up front — both the dedupe lookup (registry is keyed by mastra id) and
@@ -1185,6 +1245,7 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
       // instead of starting a duplicate. This prevents UI races and parallel-
       // tab duplication, and keeps the at-most-one-pending invariant that the
       // chat-flow mutex also enforces.
+      startStage = 'dedupe';
       const spec = AgentRegistry.findWorkflowSpecByMastraId(projectedWorkflowId);
       if (spec?.dedupeKey) {
         const existingRunId = await spec.dedupeKey(body, {
@@ -1202,11 +1263,14 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
         }
       }
 
+      startStage = 'create_run';
       const run = await workflow.createRun();
+      createdRunId = run.runId;
       // Project the row synchronously so a GET on the returned runId never 404s,
       // even if the user opens the deep link before Mastra's async workflow.start
       // pubsub event reaches the lifecycle hook. The async path's INSERT is then
       // a no-op via ON CONFLICT (run_id) DO NOTHING + workflow_run_events_seen.
+      startStage = 'project_run';
       await onLifecycleEvent(deps.pool, {
         kind: 'run-started',
         runId: run.runId,
@@ -1275,7 +1339,40 @@ export function registerAgentRoutes(app: Hono<AgentRouteEnv>, deps: AgentRouteDe
       });
       return c.json({ runId: run.runId });
     } catch (err) {
-      return handleDomainError(c, err);
+      const domainCode = getErrorCode(err);
+      if (domainCode && HANDLED_DOMAIN_ERROR_CODES.has(domainCode)) {
+        return handleDomainError(c, err);
+      }
+
+      const errorId = randomUUID();
+      const classified = classifyWorkflowStartError(startStage, err);
+      const logContext = {
+        subsystem: 'agent.workflow.start',
+        errorId,
+        stage: startStage,
+        workflowId,
+        runId: createdRunId,
+        tenantId: session.tenant_id,
+        causeCode: classified.causeCode,
+        err,
+      };
+      if (deps.log) {
+        deps.log.error(logContext, 'workflow start request failed');
+      } else {
+        console.error('[agent.workflow.start.request-fail]', logContext);
+      }
+      return c.json(
+        {
+          error: classified.code,
+          message: classified.message,
+          details: {
+            errorId,
+            stage: startStage,
+            ...(classified.causeCode ? { causeCode: classified.causeCode } : {}),
+          },
+        },
+        500,
+      );
     }
   });
 
