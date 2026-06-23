@@ -1,5 +1,5 @@
 import { type NavManifest, noNavExtensions } from '@seta/module-sdk';
-import { Box } from 'lucide-react';
+import { Activity, Box } from 'lucide-react';
 
 export const smartrecruitNavManifest: NavManifest = {
   id: 'smartrecruit',
@@ -10,7 +10,15 @@ export const smartrecruitNavManifest: NavManifest = {
   nav: [
     {
       label: 'Smartrecruit',
-      items: [{ id: 'smartrecruit.home', icon: Box, label: 'Smartrecruit', to: '/smartrecruit' }],
+      items: [
+        { id: 'smartrecruit.home', icon: Box, label: 'Smartrecruit', to: '/smartrecruit' },
+        {
+          id: 'smartrecruit.monitoring',
+          icon: Activity,
+          label: 'Monitoring',
+          to: '/smartrecruit/monitoring',
+        },
+      ],
     },
   ],
 };

@@ -78,7 +78,7 @@ export function analyzeSkillGapRows(args: {
       position: args.jobTitle,
       teamName: null,
       skillsGap: [],
-      summary: 'Không tìm thấy hire request hoặc ma trận kỹ năng phù hợp với vị trí này.',
+      summary: 'No matching hire request or skill matrix found for this position.',
       recommendations: [],
       dataStatus: 'no_matching_team_data',
       source: args.source,
@@ -99,8 +99,8 @@ export function analyzeSkillGapRows(args: {
       teamName,
       skillsGap: [],
       summary: hasEvidence
-        ? 'Hire request và ma trận kỹ năng không ghi nhận khoảng trống kỹ năng cho vị trí này.'
-        : 'Có dữ liệu tuyển dụng nhưng chưa đủ ma trận kỹ năng để kết luận về khoảng trống của đội ngũ.',
+        ? 'Hire request and skill matrix do not indicate any skill gaps for this position.'
+        : 'Recruitment data is available, but the skill matrix is insufficient to determine team gaps.',
       recommendations: [],
       dataStatus: hasEvidence ? 'no_gap_detected' : 'no_matching_team_data',
       source: args.source,
@@ -111,10 +111,12 @@ export function analyzeSkillGapRows(args: {
     position: matchedRequest?.position_title?.trim() || args.jobTitle,
     teamName,
     skillsGap,
-    summary: rawGapSummary || `Ma trận kỹ năng ghi nhận ${skillsGap.length} kỹ năng cần bổ sung.`,
+    summary:
+      rawGapSummary ||
+      `The skill matrix identifies ${skillsGap.length} skills that need reinforcement.`,
     recommendations: skillsGap.map(
       (skill) =>
-        `Ưu tiên ứng viên có bằng chứng kinh nghiệm thực tế với ${skill} để bù đắp khoảng trống của ${teamName ?? 'đội ngũ'}.`,
+        `Prioritize candidates with proven practical experience in ${skill} to fill the gaps in the ${teamName ?? 'team'}.`,
     ),
     dataStatus: 'gaps_found',
     source: args.source,
@@ -126,7 +128,7 @@ function unavailable(jobTitle: string): SkillGapInfo {
     position: jobTitle,
     teamName: null,
     skillsGap: [],
-    summary: 'Nguồn dữ liệu hire request và ma trận kỹ năng hiện không khả dụng.',
+    summary: 'The hire request and skill matrix data source is currently unavailable.',
     recommendations: [],
     dataStatus: 'source_unavailable',
     source: 'none',
