@@ -13,6 +13,12 @@ import {
   CardHeader,
   CardTitle,
   cn,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Dropzone,
   Input,
   PageChrome,
@@ -50,6 +56,7 @@ import {
   useApproveSlaReminder,
   useCampaignMetrics,
   useCampaignWarnings,
+  useCancelCampaign,
   useCandidates,
   useCreateCampaign,
   useCriteria,
@@ -226,6 +233,7 @@ export function SmartrecruitPage() {
   // State used by query hooks must be declared before those hooks run.
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
+  const [dismissedRunIds, setDismissedRunIds] = useState<Record<string, boolean>>({});
   const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
   const [slaSearchQuery, setSlaSearchQuery] = useState('');
 
@@ -259,6 +267,8 @@ export function SmartrecruitPage() {
   const [isImportingMockData, setIsImportingMockData] = useState(false);
   const [isScreeningMockPool, setIsScreeningMockPool] = useState(false);
   const [mockDataSummary, setMockDataSummary] = useState<string | null>(null);
+  const [showDemoTools, setShowDemoTools] = useState(false);
+  const [showCancelPipelineDialog, setShowCancelPipelineDialog] = useState(false);
 
   // Gate 1: Criteria State
   const [activeCriteria, setActiveCriteria] = useState<CriteriaState | null>(null);
@@ -289,6 +299,9 @@ export function SmartrecruitPage() {
     refetchInterval: activeRunId ? 2000 : undefined,
   });
   const activeCampaign = activeCampaignQuery.data ?? null;
+  const canCancelActiveCampaign =
+    !!activeCampaign &&
+    !['completed', 'completed_with_errors', 'canceled'].includes(activeCampaign.campaign.status);
 
   const campaignMetricsQuery = useCampaignMetrics(activeCampaignId);
   const campaignMetrics = campaignMetricsQuery.data ?? null;
@@ -343,6 +356,7 @@ export function SmartrecruitPage() {
 
   // Mutations
   const createCampaignMutation = useCreateCampaign();
+  const cancelCampaignMutation = useCancelCampaign();
   const startWorkflowMutation = useStartWorkflowRun();
   const importMockDataMutation = useImportMockData();
   const screenCandidatesFromPoolMutation = useScreenCandidatesFromPool();
@@ -579,10 +593,10 @@ export function SmartrecruitPage() {
       : null;
     const preferredDraft = currentDraft ?? draftsList[0] ?? null;
     const preferredCandidate =
+      current ??
       (preferredDraft
         ? candidatesList.find((candidate) => candidate.id === preferredDraft.candidate_id)
         : null) ??
-      current ??
       candidatesList[0];
 
     if (
@@ -613,7 +627,9 @@ export function SmartrecruitPage() {
   useEffect(() => {
     if (workflowRunsQuery.data?.rows && !activeRunId) {
       const running = workflowRunsQuery.data.rows.find(
-        (r: any) => r.status === 'paused' || r.status === 'running' || r.status === 'waiting',
+        (r: any) =>
+          !dismissedRunIds[r.runId] &&
+          (r.status === 'paused' || r.status === 'running' || r.status === 'waiting'),
       );
       if (running) {
         setActiveRunId(running.runId);
@@ -621,7 +637,7 @@ export function SmartrecruitPage() {
         setActiveTab('active');
       }
     }
-  }, [workflowRunsQuery.data, activeRunId]);
+  }, [workflowRunsQuery.data, activeRunId, dismissedRunIds]);
 
   // Synchronize loading details when Gate 1 or Gate 2 is active
   useEffect(() => {
@@ -742,6 +758,7 @@ export function SmartrecruitPage() {
     const readyCvs = uploadedCvs.filter((c) => c.status === 'ready');
 
     try {
+      setErrorMsg(null);
       const campaignData = await createCampaignMutation.mutateAsync({
         jobTitle,
         jdText,
@@ -767,10 +784,14 @@ export function SmartrecruitPage() {
         throw new Error('Workflow start returned no run ID.');
       }
 
-      await fetchCampaignProgress(campaignData.campaign.id);
       setActiveCampaignId(campaignData.campaign.id);
       setActiveRunId(data.runId);
       setActiveTab('active');
+      void fetchCampaignProgress(campaignData.campaign.id).catch((err) => {
+        toast.error('Campaign started, but the first progress refresh failed.', {
+          description: err instanceof Error ? err.message : String(err),
+        });
+      });
     } catch (err) {
       setErrorMsg((err as Error).message);
     }
@@ -987,6 +1008,37 @@ export function SmartrecruitPage() {
     queryClient.invalidateQueries({ queryKey: ['agent'] });
   };
 
+  const handleCancelActiveCampaign = async () => {
+    if (!activeCampaignId || cancelCampaignMutation.isPending) return;
+
+    try {
+      const runIdToCancel = activeRunId;
+      if (activeRunId) {
+        setDismissedRunIds((prev) => ({ ...prev, [activeRunId]: true }));
+      }
+      await cancelCampaignMutation.mutateAsync({
+        campaignId: activeCampaignId,
+        reason: 'Canceled from SmartRecruit UI after an incorrect or stale run.',
+      });
+      if (runIdToCancel) {
+        await smartrecruitApi.cancelWorkflowRun(runIdToCancel).catch((err) => {
+          toast.warning('Campaign canceled, but workflow run cancel was not confirmed.', {
+            description: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      toast.success('Pipeline canceled.', {
+        description: 'Pending SmartRecruit jobs for this campaign will be ignored.',
+      });
+      setShowCancelPipelineDialog(false);
+      resetPipeline();
+    } catch (err) {
+      toast.error('Could not cancel pipeline.', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
   return (
     <PageChrome title="SmartRecruit Screening & Outreach">
       <div className="flex flex-col gap-6 max-w-7xl mx-auto w-full px-4 py-2">
@@ -1071,291 +1123,29 @@ export function SmartrecruitPage() {
                 </CardContent>
               </Card>
 
-              <Card className="shadow-sm border-hairline bg-canvas/40">
-                <CardHeader>
-                  <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                    <RefreshCw className="size-4 text-primary" />
-                    Mock Dataset Mode
-                  </CardTitle>
-                  <CardDescription className="text-eyebrow">
-                    Import DS-06 candidates, DS-07 criteria, and DS-08 outreach templates from the
-                    assignment workbook.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2">
-                    <Button
-                      onClick={handleImportMockData}
-                      disabled={isImportingMockData || isScreeningMockPool}
-                      variant="secondary"
-                      className="w-full justify-center gap-2"
-                    >
-                      <Upload className="size-4" />
-                      {isImportingMockData ? 'Importing dataset...' : 'Import Mock Dataset'}
-                    </Button>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-body-sm font-medium text-ink">Screening Criteria</label>
-                    <select
-                      value={selectedCriteriaId}
-                      onChange={(e) => setSelectedCriteriaId(e.target.value)}
-                      className="h-10 rounded-md border border-hairline bg-surface px-3 text-body-sm text-ink"
-                    >
-                      <option value="">Select criteria</option>
-                      {criteriaOptions.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.external_criteria_id ? `${item.external_criteria_id} - ` : ''}
-                          {item.job_title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <Button
-                    onClick={handleScreenMockPool}
-                    disabled={!selectedCriteriaId || isImportingMockData || isScreeningMockPool}
-                    className="w-full justify-center gap-2"
-                  >
-                    <Play className="size-4 fill-current" />
-                    {isScreeningMockPool ? 'Screening candidate pool...' : 'Run Pool Screening'}
-                  </Button>
-
-                  {mockDataSummary && (
-                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
-                      {mockDataSummary}
-                    </div>
-                  )}
-
-                  {candidatesList.filter(
-                    (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
-                  ).length > 0 && (
-                    <div className="flex flex-col gap-2 mt-2">
-                      <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
-                        <CheckCircle className="size-4 text-emerald-500" />
-                        Passed Candidates (Shortlisted)
-                      </h3>
-                      <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
-                        {candidatesList
-                          .filter(
-                            (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
-                          )
-                          .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
-                          .map((cand) => (
-                            <div
-                              key={cand.id}
-                              className="p-3 flex items-center justify-between transition-colors hover:bg-canvas"
-                            >
-                              <div className="flex flex-col gap-0.5 min-w-0">
-                                <span className="text-body-sm font-bold text-ink truncate">
-                                  {cand.display_name}
-                                </span>
-                                <span className="text-eyebrow text-ink-subtle truncate">
-                                  {cand.email}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Badge
-                                  className={
-                                    cand.fit_score != null && cand.fit_score >= 70
-                                      ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
-                                      : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
-                                  }
-                                >
-                                  {cand.fit_score != null
-                                    ? `${cand.fit_score}% Fit`
-                                    : 'Pre-screened'}
-                                </Badge>
-                              </div>
-                            </div>
-                          ))}
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Hiring Manager SLA Tracker Card */}
-              {slaTracker.length > 0 && (
-                <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[450px] overflow-hidden flex flex-col">
-                  <CardHeader className="pb-3 shrink-0">
-                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
-                      <Mail className="size-4 text-rose-500" />
-                      HM Feedback SLA Tracker (DS08)
-                    </CardTitle>
-                    <CardDescription className="text-eyebrow">
-                      Track Hiring Manager feedback against the 48-hour SLA.
-                    </CardDescription>
-                  </CardHeader>
-
-                  {/* Search and Filters */}
-                  <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
-                      <Input
-                        type="text"
-                        placeholder="Search candidate, HM, or position..."
-                        className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
-                        value={slaSearchQuery}
-                        onChange={(e) => setSlaSearchQuery(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
-                      {(
-                        [
-                          { id: 'all', label: 'All' },
-                          { id: 'overdue', label: 'Overdue ⚠️' },
-                          { id: 'due_soon', label: 'Due soon' },
-                          { id: 'pending', label: 'Waiting HM' },
-                        ] as const
-                      ).map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          className={cn(
-                            'flex-1 py-1 rounded-sm font-medium transition-all',
-                            slaFilterTab === tab.id
-                              ? 'bg-surface text-ink shadow-sm'
-                              : 'text-ink-subtle hover:text-ink hover:bg-surface-1',
-                          )}
-                          onClick={() => setSlaFilterTab(tab.id)}
-                        >
-                          {tab.label}
-                          {tab.id === 'overdue' && (
-                            <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
-                              {slaTracker.filter((i) => i.slaState === 'overdue').length}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <CardContent className="flex-1 overflow-y-auto pt-0">
-                    <div className="flex flex-col gap-2.5">
-                      {filteredSlaTracker.length === 0 ? (
-                        <div className="text-center py-6 text-ink-subtle text-xs">
-                          No matching feedback requests.
-                        </div>
-                      ) : (
-                        filteredSlaTracker.map((item) => {
-                          const isBreached = item.slaState === 'overdue';
-                          const isDueSoon = item.slaState === 'due_soon';
-                          const isReminding = remindingIds[item.id];
-                          const isSubmitted = item.slaState === 'submitted';
-                          const stateLabel = item.slaState.replace('_', ' ');
-
-                          return (
-                            <div
-                              key={item.feedbackId}
-                              className={cn(
-                                'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
-                                isBreached
-                                  ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
-                                  : isDueSoon
-                                    ? 'border-amber-200/50 border-l-4 border-l-amber-500 bg-amber-50/5 dark:bg-amber-950/5'
-                                    : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
-                              )}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex flex-col">
-                                  <span className="font-bold text-ink text-sm flex items-center gap-1.5">
-                                    <User className="size-3.5 text-ink-subtle" />
-                                    {item.candidateName}
-                                  </span>
-                                  <span className="text-[11px] text-ink-subtle mt-0.5">
-                                    Position:{' '}
-                                    <span className="font-medium text-ink/80">{item.position}</span>
-                                  </span>
-                                </div>
-                                <div className="flex flex-col items-end gap-1.5 shrink-0">
-                                  {isBreached ? (
-                                    <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
-                                      Overdue
-                                    </Badge>
-                                  ) : isDueSoon ? (
-                                    <Badge className="bg-amber-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                      Due Soon
-                                    </Badge>
-                                  ) : (
-                                    <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
-                                      {isSubmitted ? 'Submitted' : 'On Track'}
-                                    </Badge>
-                                  )}
-                                  <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
-                                    {stateLabel}
-                                  </Badge>
-                                </div>
-                              </div>
-
-                              <div className="text-xs text-ink-subtle flex flex-col gap-1 border-t border-hairline/50 pt-2 mt-1">
-                                <div className="flex justify-between items-center">
-                                  <span>
-                                    HM:{' '}
-                                    <span className="font-medium text-ink">
-                                      {item.hiringManager}
-                                    </span>
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1 text-[11px] text-ink-muted">
-                                  <Calendar className="size-3 text-ink-subtle" />
-                                  <span>Shortlisted: {formatSlaDate(item.shortlistedAt)}</span>
-                                </div>
-                                <div className="flex items-center gap-1 text-[11px] text-ink-muted">
-                                  <Clock className="size-3 text-ink-subtle" />
-                                  <span>Deadline: {formatSlaDate(item.feedbackDueAt)}</span>
-                                </div>
-                              </div>
-
-                              {item.hmFeedbackText && (
-                                <p className="text-[11px] text-ink-subtle bg-canvas/40 p-2 rounded italic border-l-2 border-primary/30 mt-1">
-                                  HM Feedback: "{item.hmFeedbackText}"
-                                </p>
-                              )}
-
-                              {!isSubmitted && item.reminderAvailable && (
-                                <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
-                                  <Button
-                                    size="sm"
-                                    disabled={isReminding}
-                                    className={cn(
-                                      'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
-                                      'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
-                                    )}
-                                    onClick={() => handleRemindHM(item)}
-                                  >
-                                    {isReminding ? (
-                                      <>
-                                        <Loader2 className="animate-spin size-3.5" />
-                                        <span>Queueing...</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Bell className="size-3.5" />
-                                        <span>Remind HM</span>
-                                      </>
-                                    )}
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
               {/* Start Campaign Trigger */}
               <div className="flex flex-col gap-2">
                 <Button
                   onClick={handleStartPipeline}
-                  disabled={isUploading || isAnyCvNotReady || uploadedCvs.length === 0}
+                  disabled={
+                    isUploading ||
+                    isAnyCvNotReady ||
+                    uploadedCvs.length === 0 ||
+                    createCampaignMutation.isPending ||
+                    startWorkflowMutation.isPending
+                  }
                   className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium shadow-md flex items-center justify-center gap-2 h-11"
                 >
-                  <Play className="size-4 fill-current" />
-                  Launch Screening Pipeline
+                  {createCampaignMutation.isPending || startWorkflowMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Play className="size-4 fill-current" />
+                  )}
+                  {createCampaignMutation.isPending
+                    ? 'Creating campaign...'
+                    : startWorkflowMutation.isPending
+                      ? 'Starting workflow...'
+                      : 'Launch Screening Pipeline'}
                 </Button>
                 {errorMsg && (
                   <div className="flex items-center gap-2 bg-destructive-tint/20 border border-destructive/20 text-destructive text-body-sm p-3 rounded-lg">
@@ -1364,6 +1154,316 @@ export function SmartrecruitPage() {
                   </div>
                 )}
               </div>
+
+              <Card className="shadow-sm border-hairline bg-canvas/40">
+                <button
+                  type="button"
+                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left"
+                  onClick={() => setShowDemoTools((value) => !value)}
+                >
+                  <div>
+                    <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                      <RefreshCw className="size-4 text-primary" />
+                      Demo & Operations Tools
+                    </CardTitle>
+                    <CardDescription className="text-eyebrow mt-1">
+                      Optional mock dataset, pool screening, shortlisted candidates, and HM SLA
+                      utilities.
+                    </CardDescription>
+                  </div>
+                  <ChevronRight
+                    className={cn(
+                      'size-4 text-ink-subtle transition-transform',
+                      showDemoTools && 'rotate-90',
+                    )}
+                  />
+                </button>
+              </Card>
+
+              {showDemoTools && (
+                <>
+                  <Card className="shadow-sm border-hairline bg-canvas/40">
+                    <CardHeader>
+                      <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                        <RefreshCw className="size-4 text-primary" />
+                        Mock Dataset Mode
+                      </CardTitle>
+                      <CardDescription className="text-eyebrow">
+                        Import DS-06 candidates, DS-07 criteria, and DS-08 outreach templates from
+                        the assignment workbook.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          onClick={handleImportMockData}
+                          disabled={isImportingMockData || isScreeningMockPool}
+                          variant="secondary"
+                          className="w-full justify-center gap-2"
+                        >
+                          <Upload className="size-4" />
+                          {isImportingMockData ? 'Importing dataset...' : 'Import Mock Dataset'}
+                        </Button>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-body-sm font-medium text-ink">
+                          Screening Criteria
+                        </label>
+                        <select
+                          value={selectedCriteriaId}
+                          onChange={(e) => setSelectedCriteriaId(e.target.value)}
+                          className="h-10 rounded-md border border-hairline bg-surface px-3 text-body-sm text-ink"
+                        >
+                          <option value="">Select criteria</option>
+                          {criteriaOptions.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.external_criteria_id ? `${item.external_criteria_id} - ` : ''}
+                              {item.job_title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <Button
+                        onClick={handleScreenMockPool}
+                        disabled={!selectedCriteriaId || isImportingMockData || isScreeningMockPool}
+                        className="w-full justify-center gap-2"
+                      >
+                        <Play className="size-4 fill-current" />
+                        {isScreeningMockPool ? 'Screening candidate pool...' : 'Run Pool Screening'}
+                      </Button>
+
+                      {mockDataSummary && (
+                        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-body-sm text-emerald-700">
+                          {mockDataSummary}
+                        </div>
+                      )}
+
+                      {candidatesList.filter(
+                        (c) => c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
+                      ).length > 0 && (
+                        <div className="flex flex-col gap-2 mt-2">
+                          <h3 className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                            <CheckCircle className="size-4 text-emerald-500" />
+                            Passed Candidates (Shortlisted)
+                          </h3>
+                          <div className="max-h-[250px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
+                            {candidatesList
+                              .filter(
+                                (c) =>
+                                  c.status === 'shortlisted' || (c.fit_score && c.fit_score >= 70),
+                              )
+                              .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
+                              .map((cand) => (
+                                <div
+                                  key={cand.id}
+                                  className="p-3 flex items-center justify-between transition-colors hover:bg-canvas"
+                                >
+                                  <div className="flex flex-col gap-0.5 min-w-0">
+                                    <span className="text-body-sm font-bold text-ink truncate">
+                                      {cand.display_name}
+                                    </span>
+                                    <span className="text-eyebrow text-ink-subtle truncate">
+                                      {cand.email}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge
+                                      className={
+                                        cand.fit_score != null && cand.fit_score >= 70
+                                          ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium shrink-0'
+                                          : 'bg-amber-500/10 text-amber-600 border border-amber-500/20 font-medium shrink-0'
+                                      }
+                                    >
+                                      {cand.fit_score != null
+                                        ? `${cand.fit_score}% Fit`
+                                        : 'Pre-screened'}
+                                    </Badge>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Hiring Manager SLA Tracker Card */}
+                  {slaTracker.length > 0 && (
+                    <Card className="shadow-sm border-hairline bg-canvas/40 max-h-[450px] overflow-hidden flex flex-col">
+                      <CardHeader className="pb-3 shrink-0">
+                        <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
+                          <Mail className="size-4 text-rose-500" />
+                          HM Feedback SLA Tracker (DS08)
+                        </CardTitle>
+                        <CardDescription className="text-eyebrow">
+                          Track Hiring Manager feedback against the 48-hour SLA.
+                        </CardDescription>
+                      </CardHeader>
+
+                      {/* Search and Filters */}
+                      <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
+                          <Input
+                            type="text"
+                            placeholder="Search candidate, HM, or position..."
+                            className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
+                            value={slaSearchQuery}
+                            onChange={(e) => setSlaSearchQuery(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
+                          {(
+                            [
+                              { id: 'all', label: 'All' },
+                              { id: 'overdue', label: 'Overdue ⚠️' },
+                              { id: 'due_soon', label: 'Due soon' },
+                              { id: 'pending', label: 'Waiting HM' },
+                            ] as const
+                          ).map((tab) => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              className={cn(
+                                'flex-1 py-1 rounded-sm font-medium transition-all',
+                                slaFilterTab === tab.id
+                                  ? 'bg-surface text-ink shadow-sm'
+                                  : 'text-ink-subtle hover:text-ink hover:bg-surface-1',
+                              )}
+                              onClick={() => setSlaFilterTab(tab.id)}
+                            >
+                              {tab.label}
+                              {tab.id === 'overdue' && (
+                                <span className="ml-1 px-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400 text-[9px] font-bold">
+                                  {slaTracker.filter((i) => i.slaState === 'overdue').length}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <CardContent className="flex-1 overflow-y-auto pt-0">
+                        <div className="flex flex-col gap-2.5">
+                          {filteredSlaTracker.length === 0 ? (
+                            <div className="text-center py-6 text-ink-subtle text-xs">
+                              No matching feedback requests.
+                            </div>
+                          ) : (
+                            filteredSlaTracker.map((item) => {
+                              const isBreached = item.slaState === 'overdue';
+                              const isDueSoon = item.slaState === 'due_soon';
+                              const isReminding = remindingIds[item.id];
+                              const isSubmitted = item.slaState === 'submitted';
+                              const stateLabel = item.slaState.replace('_', ' ');
+
+                              return (
+                                <div
+                                  key={item.feedbackId}
+                                  className={cn(
+                                    'p-3 rounded-lg border flex flex-col gap-2 text-body-sm transition-all bg-surface hover:bg-canvas/50 relative overflow-hidden',
+                                    isBreached
+                                      ? 'border-rose-200/50 border-l-4 border-l-rose-500 bg-rose-50/5 dark:bg-rose-950/5'
+                                      : isDueSoon
+                                        ? 'border-amber-200/50 border-l-4 border-l-amber-500 bg-amber-50/5 dark:bg-amber-950/5'
+                                        : 'border-hairline border-l-4 border-l-emerald-500 bg-emerald-50/5 dark:bg-emerald-950/5',
+                                  )}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex flex-col">
+                                      <span className="font-bold text-ink text-sm flex items-center gap-1.5">
+                                        <User className="size-3.5 text-ink-subtle" />
+                                        {item.candidateName}
+                                      </span>
+                                      <span className="text-[11px] text-ink-subtle mt-0.5">
+                                        Position:{' '}
+                                        <span className="font-medium text-ink/80">
+                                          {item.position}
+                                        </span>
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                      {isBreached ? (
+                                        <Badge className="bg-rose-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 animate-pulse tracking-wider shadow-sm shadow-rose-500/20">
+                                          Overdue
+                                        </Badge>
+                                      ) : isDueSoon ? (
+                                        <Badge className="bg-amber-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
+                                          Due Soon
+                                        </Badge>
+                                      ) : (
+                                        <Badge className="bg-emerald-500 text-white font-bold text-[9px] uppercase px-1.5 py-0.5 tracking-wider">
+                                          {isSubmitted ? 'Submitted' : 'On Track'}
+                                        </Badge>
+                                      )}
+                                      <Badge className="bg-surface-1 border border-hairline font-mono text-[9px] px-1 py-0">
+                                        {stateLabel}
+                                      </Badge>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-xs text-ink-subtle flex flex-col gap-1 border-t border-hairline/50 pt-2 mt-1">
+                                    <div className="flex justify-between items-center">
+                                      <span>
+                                        HM:{' '}
+                                        <span className="font-medium text-ink">
+                                          {item.hiringManager}
+                                        </span>
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+                                      <Calendar className="size-3 text-ink-subtle" />
+                                      <span>Shortlisted: {formatSlaDate(item.shortlistedAt)}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+                                      <Clock className="size-3 text-ink-subtle" />
+                                      <span>Deadline: {formatSlaDate(item.feedbackDueAt)}</span>
+                                    </div>
+                                  </div>
+
+                                  {item.hmFeedbackText && (
+                                    <p className="text-[11px] text-ink-subtle bg-canvas/40 p-2 rounded italic border-l-2 border-primary/30 mt-1">
+                                      HM Feedback: "{item.hmFeedbackText}"
+                                    </p>
+                                  )}
+
+                                  {!isSubmitted && item.reminderAvailable && (
+                                    <div className="flex justify-end border-t border-hairline/50 pt-2 mt-1">
+                                      <Button
+                                        size="sm"
+                                        disabled={isReminding}
+                                        className={cn(
+                                          'h-7 text-[11px] px-3 py-1 font-medium rounded transition-all flex items-center gap-1',
+                                          'bg-rose-50 text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50 dark:hover:bg-rose-600 dark:hover:text-white',
+                                        )}
+                                        onClick={() => handleRemindHM(item)}
+                                      >
+                                        {isReminding ? (
+                                          <>
+                                            <Loader2 className="animate-spin size-3.5" />
+                                            <span>Queueing...</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Bell className="size-3.5" />
+                                            <span>Remind HM</span>
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
+              )}
             </div>
 
             {/* Right Side: CV Uploader Center */}
@@ -1610,12 +1710,31 @@ export function SmartrecruitPage() {
                         {activeCampaign.campaign.job_title} · {activeCampaign.campaign.status}
                       </CardDescription>
                     </div>
-                    <Badge
-                      variant={activeCampaign.campaign.failed_count > 0 ? 'warning' : 'success'}
-                    >
-                      {activeCampaign.campaign.screened_count}/
-                      {activeCampaign.campaign.total_candidates} screened
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={activeCampaign.campaign.failed_count > 0 ? 'warning' : 'success'}
+                      >
+                        {activeCampaign.campaign.screened_count}/
+                        {activeCampaign.campaign.total_candidates} screened
+                      </Badge>
+                      {canCancelActiveCampaign && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={cancelCampaignMutation.isPending}
+                          onClick={() => setShowCancelPipelineDialog(true)}
+                          className="text-destructive hover:bg-destructive-tint/10"
+                        >
+                          {cancelCampaignMutation.isPending ? (
+                            <Loader2 className="size-3.5 mr-1 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5 mr-1" />
+                          )}
+                          Cancel Pipeline
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3">
@@ -2851,6 +2970,58 @@ export function SmartrecruitPage() {
             </Card>
           </div>
         )}
+        <Dialog open={showCancelPipelineDialog} onOpenChange={setShowCancelPipelineDialog}>
+          <DialogContent hideClose={cancelCampaignMutation.isPending} className="max-w-md">
+            <DialogHeader>
+              <div className="flex items-start gap-3">
+                <div className="size-10 rounded-full bg-destructive-tint/20 text-destructive flex items-center justify-center shrink-0">
+                  <AlertTriangle className="size-5" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <DialogTitle>Cancel screening pipeline?</DialogTitle>
+                  <DialogDescription>
+                    This stops the current SmartRecruit campaign. Pending jobs will be ignored, and
+                    unsent candidates will be marked as rejected so the run no longer stays pending.
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+            {activeCampaign?.campaign && (
+              <div className="rounded-lg border border-hairline bg-surface-1 p-3 text-body-sm">
+                <div className="font-medium text-ink truncate">
+                  {activeCampaign.campaign.job_title}
+                </div>
+                <div className="text-ink-subtle">
+                  Status: {activeCampaign.campaign.status} - Campaign ID:{' '}
+                  {activeCampaign.campaign.id.slice(0, 8)}
+                </div>
+              </div>
+            )}
+            <DialogFooter className="gap-2 sm:space-x-0">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={cancelCampaignMutation.isPending}
+                onClick={() => setShowCancelPipelineDialog(false)}
+              >
+                Keep Pipeline
+              </Button>
+              <Button
+                type="button"
+                disabled={cancelCampaignMutation.isPending}
+                onClick={handleCancelActiveCampaign}
+                className="bg-destructive text-white hover:bg-destructive/90"
+              >
+                {cancelCampaignMutation.isPending ? (
+                  <Loader2 className="size-4 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4 mr-2" />
+                )}
+                Cancel Pipeline
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         {showReportModal && activeCampaignId && (
           <HMReportModal campaignId={activeCampaignId} onClose={() => setShowReportModal(false)} />
         )}

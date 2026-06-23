@@ -605,3 +605,88 @@ This file records completed implementation steps so another IDE session or agent
 - Run screening for multiple CV formats and confirm Decoded Contact Details always uses the same Name/Email/Phone labels.
 - Enter Gate 2 normally and confirm the first candidate with a generated draft immediately shows Personalized Outreach Email without replay.
 - Edit a draft, wait through multiple polling intervals and confirm unsaved text is not overwritten.
+
+## 2026-06-23 - SmartRecruit New Campaign UX And Launch Responsiveness
+
+### Completed
+
+- Fixed the Launch Screening Pipeline delay by switching the UI to the Active Pipeline tab immediately after the backend returns `campaignId` and `runId`.
+- Changed the initial campaign progress fetch to run in the background; a progress refresh failure now shows a toast instead of blocking the transition.
+- Added explicit launch loading states: `Creating campaign...` and `Starting workflow...`.
+- Moved the launch CTA directly under the JD form so users do not need to scroll past demo-only widgets before starting a real campaign.
+- Collapsed Mock Dataset Mode, mock pool screening, passed mock candidates and HM SLA utilities behind `Demo & Operations Tools`.
+- Kept the production path focused on the main flow: configure JD, upload CVs, launch, then monitor Active Pipeline.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm exec biome format --write apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
+
+### Manual Retest
+
+- Open `/smartrecruit`, enter JD and upload at least one ready CV.
+- Click `Launch Screening Pipeline` and confirm the button immediately shows a loading label.
+- Confirm the screen switches to `Active Pipeline` as soon as the workflow start request returns instead of waiting for the first campaign progress query.
+- Expand `Demo & Operations Tools` only when mock dataset, mock pool screening or SLA testing is needed.
+
+## 2026-06-23 - SmartRecruit Cancel Pipeline Control
+
+### Completed
+
+- Added a tenant-scoped cancel endpoint: `POST /api/smartrecruit/v1/campaigns/:id/cancel`.
+- Added `cancelSmartrecruitCampaign`, which marks the campaign as `canceled`, stores a cancel reason and marks unsent/non-terminal campaign candidates as `rejected`.
+- Added Graphile worker guards so pending campaign coordinator and per-candidate jobs skip canceled campaigns.
+- Added transaction-time cancel checks so an item job that was already running does not overwrite a campaign after it has been canceled.
+- Added frontend API/hook support via `smartrecruitApi.cancelCampaign` and `useCancelCampaign`.
+- Added best-effort frontend cancellation for the linked agent workflow run via `POST /api/agent/v1/workflows/runs/:runId/cancel`.
+- Added `Cancel Pipeline` button in Active Pipeline for non-terminal campaigns.
+- Added a dismissed-run guard so a canceled still-running workflow run is not automatically re-selected by the Active Pipeline auto-sync effect.
+
+### Files
+
+- `packages/smartrecruit/src/backend/domain/campaign.ts`
+- `packages/smartrecruit/src/backend/http/routes.ts`
+- `packages/smartrecruit/src/backend/jobs/campaign-jobs.ts`
+- `apps/web/src/modules/smartrecruit/api/smartrecruit-client.ts`
+- `apps/web/src/modules/smartrecruit/hooks/use-smartrecruit.ts`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm exec biome format --write ...` passed on the six changed files.
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed again after wiring linked workflow-run cancellation.
+- `pnpm exec biome check ...` returned exit code 0; it still reports existing warnings in SmartRecruit web client/hooks (`any` and non-null assertions).
+
+### Manual Retest
+
+- Start a campaign and wait until it is pending/running in Active Pipeline.
+- Click `Cancel Pipeline`, confirm the prompt and verify the UI returns to New Campaign.
+- Refresh the page and confirm the canceled run is not auto-selected again.
+- Verify the campaign row has status `canceled` and remaining candidates are `rejected` rather than stuck in `queued`, `screening`, `drafting` or `sending`.
+- Check worker logs after cancel; pending SmartRecruit campaign jobs should skip without changing the canceled campaign.
+
+## 2026-06-23 - SmartRecruit Cancel Confirmation Dialog
+
+### Completed
+
+- Replaced the browser `window.confirm` cancel prompt with an in-app `Dialog`.
+- The cancel confirmation no longer shows the browser-origin title from the native confirm dialog.
+- Added campaign context in the dialog: job title, campaign status and short campaign ID.
+- Kept cancel action disabled while cancellation is pending and shows the existing loading state.
+- Changed the dialog status separator to ASCII `-` to avoid encoding artifacts.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `rg` confirmed `window.confirm` is no longer used in the SmartRecruit page.
+- `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.

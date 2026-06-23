@@ -26,6 +26,7 @@ import {
 } from '../db/schema.ts';
 import {
   addCandidatesToCampaign,
+  cancelSmartrecruitCampaign,
   createSmartrecruitCampaign,
   getCampaignKPIs,
   getCampaignView,
@@ -149,6 +150,10 @@ const createReportSchema = z.object({
   recruiterNote: z.string().trim().max(2_000).optional(),
 });
 
+const cancelCampaignSchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
 const slaTrackerQuerySchema = z.object({
   status: z.enum(['all', 'on_track', 'due_soon', 'overdue', 'submitted', 'data_error']).optional(),
   search: z.string().trim().max(200).optional(),
@@ -219,6 +224,29 @@ export function registerSmartrecruitRoutes(
     const view = await getCampaignView({
       campaignId: c.req.param('id'),
       tenantId: session.tenant_id,
+    });
+
+    if (!view) {
+      return c.json({ error: 'NOT_FOUND', message: 'Campaign not found' }, 404);
+    }
+
+    return c.json(view);
+  });
+
+  app.post('/api/smartrecruit/v1/campaigns/:id/cancel', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = cancelCampaignSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'VALIDATION', details: parsed.error.flatten() }, 400);
+    }
+
+    const view = await cancelSmartrecruitCampaign({
+      campaignId: c.req.param('id'),
+      tenantId: session.tenant_id,
+      userId: session.user_id,
+      reason: parsed.data.reason,
     });
 
     if (!view) {

@@ -58,6 +58,19 @@ export function useCreateCampaign() {
   });
 }
 
+export function useCancelCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { campaignId: string; reason?: string }) =>
+      smartrecruitApi.cancelCampaign(input.campaignId, input.reason),
+    onSuccess: (_, variables) => {
+      qc.invalidateQueries({ queryKey: smartrecruitQueryKeys.campaign(variables.campaignId) });
+      qc.invalidateQueries({ queryKey: smartrecruitQueryKeys.campaigns('self') });
+      qc.invalidateQueries({ queryKey: smartrecruitQueryKeys.campaigns('tenant') });
+    },
+  });
+}
+
 export function useSearchPoolCandidates(
   campaignId: string,
   filters: { limit?: number; minSimilarity?: number },

@@ -42,6 +42,19 @@ export const smartrecruitApi = {
     return request<any>(`/api/smartrecruit/v1/campaigns/${id}`);
   },
 
+  async cancelCampaign(campaignId: string, reason?: string): Promise<any> {
+    return request<any>(`/api/smartrecruit/v1/campaigns/${campaignId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async cancelWorkflowRun(runId: string): Promise<any> {
+    return request<any>(`/api/agent/v1/workflows/runs/${runId}/cancel`, {
+      method: 'POST',
+    });
+  },
+
   async createCampaign(input: {
     jobTitle: string;
     jdText: string;
