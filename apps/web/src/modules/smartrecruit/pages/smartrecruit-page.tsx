@@ -223,6 +223,9 @@ export function SmartrecruitPage() {
 
   const [uploadedCvs, setUploadedCvs] = useState<UploadedCv[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isUploadingJd, setIsUploadingJd] = useState(false);
+  const [uploadedJdFilename, setUploadedJdFilename] = useState<string | null>(null);
+  const [jdUploadError, setJdUploadError] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isImportingMockData, setIsImportingMockData] = useState(false);
   const [isScreeningMockPool, setIsScreeningMockPool] = useState(false);
@@ -607,6 +610,27 @@ export function SmartrecruitPage() {
   ]);
 
   // --- CV Upload Handler ---
+  const handleJdUpload = async (file: File) => {
+    setIsUploadingJd(true);
+    setJdUploadError(null);
+    setErrorMsg(null);
+
+    try {
+      const data = await smartrecruitApi.uploadJd(file);
+      setJdText(data.text);
+      setUploadedJdFilename(data.filename || file.name);
+      toast.success('Job description text extracted.', {
+        description: 'Review or edit the extracted text before launching the pipeline.',
+      });
+    } catch (err) {
+      const message = (err as Error).message || 'Failed to extract text from the JD file.';
+      setJdUploadError(message);
+      toast.error('JD upload failed.', { description: message });
+    } finally {
+      setIsUploadingJd(false);
+    }
+  };
+
   const handleCvUpload = async (file: File) => {
     setIsUploading(true);
     setErrorMsg(null);
@@ -1031,6 +1055,36 @@ export function SmartrecruitPage() {
                     <label className="text-body-sm font-medium text-ink">
                       Job Description Text
                     </label>
+                    <Dropzone
+                      accept="application/pdf"
+                      onFile={handleJdUpload}
+                      isPending={isUploadingJd}
+                      pendingLabel="Extracting JD Text..."
+                      label="Upload a JD PDF or drag it here"
+                      hint="Extracted text will populate the editable JD field below"
+                      className="border-hairline"
+                    />
+                    {(uploadedJdFilename || jdUploadError) && (
+                      <div
+                        className={cn(
+                          'rounded-lg border px-3 py-2 text-body-xs flex items-start gap-2',
+                          jdUploadError
+                            ? 'border-red-200 bg-red-50 text-red-700'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-800',
+                        )}
+                      >
+                        {jdUploadError ? (
+                          <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                        ) : (
+                          <Check className="size-4 shrink-0 mt-0.5" />
+                        )}
+                        <span>
+                          {jdUploadError
+                            ? jdUploadError
+                            : `Extracted text from ${uploadedJdFilename}. Review or edit it before launching.`}
+                        </span>
+                      </div>
+                    )}
                     <Textarea
                       value={jdText}
                       onChange={(e) => setJdText(e.target.value)}

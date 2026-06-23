@@ -178,6 +178,21 @@ export const smartrecruitApi = {
     return res.json() as Promise<{ filename: string; text: string }>;
   },
 
+  async uploadJd(file: File): Promise<{ filename: string; text: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch('/api/smartrecruit/v1/upload-jd', {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      throw new Error(body.message || body.error || `Failed to upload JD: ${res.status}`);
+    }
+    return res.json() as Promise<{ filename: string; text: string }>;
+  },
+
   async extractCandidateInfo(
     cvText: string,
   ): Promise<{ name: string; email: string; phone: string | null }> {
