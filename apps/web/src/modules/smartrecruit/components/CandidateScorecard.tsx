@@ -40,6 +40,11 @@ interface CandidateState {
     yoeExplanation: string;
     overallJustification: string;
     piiMapping?: Record<string, string>;
+    contactDetails?: {
+      name: string;
+      email: string;
+      phone: string | null;
+    };
     mustHaveMatches: MatchItem[];
     niceToHaveMatches: MatchItem[];
     scoreBreakdown?: {
@@ -150,6 +155,16 @@ export function CandidateScorecard({
   const report = selectedCandidate.screening_report;
   const pros = report?.pros ?? [];
   const gaps = report?.gaps ?? [];
+  const contactDetails = report?.contactDetails ?? {
+    name: selectedCandidate.display_name,
+    email: selectedCandidate.email,
+    phone: selectedCandidate.phone,
+  };
+  const decodedContactRows = [
+    { label: 'Candidate name', value: contactDetails.name },
+    { label: 'Email', value: contactDetails.email },
+    { label: 'Phone', value: contactDetails.phone },
+  ].filter((item): item is { label: string; value: string } => Boolean(item.value));
 
   return (
     <div className="flex flex-col gap-5">
@@ -480,17 +495,19 @@ export function CandidateScorecard({
         </p>
       </div>
 
-      {/* PII Decryption if available */}
-      {report?.piiMapping && Object.keys(report.piiMapping).length > 0 && (
+      {/* Canonical contact details, independent from model-generated redaction placeholders. */}
+      {decodedContactRows.length > 0 && (
         <div className="border-t border-neutral-200 pt-4 flex flex-col gap-2">
           <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
             Decoded Contact Details
           </span>
           <div className="grid grid-cols-2 gap-3 p-3 bg-neutral-50 rounded-lg border border-neutral-200 text-xs">
-            {Object.entries(report.piiMapping).map(([key, val]) => (
-              <div key={key} className="flex flex-col gap-0.5 min-w-0">
-                <span className="text-[10px] text-neutral-400 font-semibold uppercase">{key}</span>
-                <span className="font-semibold text-neutral-800 truncate">{val}</span>
+            {decodedContactRows.map((item) => (
+              <div key={item.label} className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-[10px] text-neutral-400 font-semibold uppercase">
+                  {item.label}
+                </span>
+                <span className="font-semibold text-neutral-800 truncate">{item.value}</span>
               </div>
             ))}
           </div>

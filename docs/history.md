@@ -572,3 +572,36 @@ This file records completed implementation steps so another IDE session or agent
 - At Gate 1, click Browse and verify the request returns quickly without screening/LLM logs.
 - Confirm rejected non-reengageable and recently contacted candidates are absent.
 - Select candidates, approve Gate 1 and confirm only selected candidates enter queued/screening states.
+
+## 2026-06-23 - Stable Contact Details And Gate 2 Draft Synchronization
+
+### Completed
+
+- Added canonical `screening_report.contactDetails` with stable `name`, `email` and `phone` values sourced from validated candidate inputs.
+- Kept the full `piiMapping` only for redact/de-anonymize behavior; the scorecard no longer renders arbitrary LLM-generated placeholders such as city, country or university as contact fields.
+- Added validation for residual LLM mapping entries: placeholders must use bracketed uppercase format, occur in anonymized text, have a non-empty original value and may not overwrite deterministic mappings.
+- Updated Candidate Scorecard to render canonical contact rows and fall back to candidate database columns for historical screening reports.
+- Updated Gate 2 selection synchronization to prefer a candidate with an available outreach draft.
+- Draft polling now attaches a newly created draft automatically but preserves recruiter edits when the current draft ID has not changed.
+- Completed the in-progress TanStack Query page refactor sufficiently for Web typecheck: query-dependent state is declared before hooks, the workflow-start hook is wired, Talent Pool handlers use the new API/mutation layer and unused imports/helpers were removed.
+
+### Files
+
+- `packages/smartrecruit/src/backend/domain/anonymize.ts`
+- `packages/smartrecruit/src/backend/domain/screen-cv.ts`
+- `apps/web/src/modules/smartrecruit/components/CandidateScorecard.tsx`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+- `packages/smartrecruit/tests/unit/contact-details.test.ts`
+
+### Verification
+
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+- `pnpm --filter=@seta/web typecheck` passed.
+- Biome passed on all five related implementation/test files.
+- Contact details unit tests passed: 1 file, 2 tests.
+
+### Manual Retest
+
+- Run screening for multiple CV formats and confirm Decoded Contact Details always uses the same Name/Email/Phone labels.
+- Enter Gate 2 normally and confirm the first candidate with a generated draft immediately shows Personalized Outreach Email without replay.
+- Edit a draft, wait through multiple polling intervals and confirm unsaved text is not overwritten.

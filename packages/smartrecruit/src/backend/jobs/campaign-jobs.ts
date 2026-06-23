@@ -216,6 +216,8 @@ async function recordAiUsage(args: {
   latencyMs: number;
   attempt: number;
   ocrSource?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
 }): Promise<void> {
   await smartrecruitDb()
     .insert(campaignAiUsage)
@@ -229,6 +231,8 @@ async function recordAiUsage(args: {
       latency_ms: args.latencyMs,
       attempt: args.attempt,
       ocr_source: args.ocrSource ?? null,
+      input_tokens: args.inputTokens ?? null,
+      output_tokens: args.outputTokens ?? null,
     });
 }
 
@@ -320,6 +324,8 @@ export const campaignJobs: TaskList = {
         latencyMs: Date.now() - startedAt,
         attempt: helpers.job.attempts,
         ocrSource: screened.report.ocrSource,
+        inputTokens: screened.inputTokens,
+        outputTokens: screened.outputTokens,
       });
       await withEmit(actor(session), async (tx) => {
         await tx
@@ -408,7 +414,13 @@ export const campaignJobs: TaskList = {
     const [row] = await db
       .select()
       .from(campaignCandidates)
-      .where(eq(campaignCandidates.id, payload.campaignCandidateId))
+      .where(
+        and(
+          eq(campaignCandidates.id, payload.campaignCandidateId),
+          eq(campaignCandidates.tenant_id, session.tenant_id),
+          eq(campaignCandidates.campaign_id, payload.campaignId),
+        ),
+      )
       .limit(1);
     if (!row || TERMINAL.drafting.has(row.status)) return;
     await db
@@ -430,6 +442,7 @@ export const campaignJobs: TaskList = {
             eq(outreachDrafts.tenant_id, session.tenant_id),
             eq(outreachDrafts.campaign_id, payload.campaignId),
             eq(outreachDrafts.candidate_id, payload.candidateId),
+            inArray(outreachDrafts.status, ['draft', 'approved']),
           ),
         )
         .limit(1);
@@ -440,6 +453,8 @@ export const campaignJobs: TaskList = {
           templateId: payload.templateId,
           session,
         }));
+      const inputTokens = 'inputTokens' in draft ? draft.inputTokens : undefined;
+      const outputTokens = 'outputTokens' in draft ? draft.outputTokens : undefined;
       await recordAiUsage({
         session,
         payload,
@@ -447,6 +462,8 @@ export const campaignJobs: TaskList = {
         promptVersion: 'outreach-v2-grounded',
         latencyMs: Date.now() - startedAt,
         attempt: helpers.job.attempts,
+        inputTokens,
+        outputTokens,
       });
       await withEmit(actor(session), async (tx) => {
         await tx
@@ -559,7 +576,13 @@ export const campaignJobs: TaskList = {
     const [row] = await db
       .select()
       .from(campaignCandidates)
-      .where(eq(campaignCandidates.id, payload.campaignCandidateId))
+      .where(
+        and(
+          eq(campaignCandidates.id, payload.campaignCandidateId),
+          eq(campaignCandidates.tenant_id, session.tenant_id),
+          eq(campaignCandidates.campaign_id, payload.campaignId),
+        ),
+      )
       .limit(1);
     if (!row || TERMINAL.sending.has(row.status)) return;
     await db

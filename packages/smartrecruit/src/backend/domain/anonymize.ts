@@ -8,6 +8,24 @@ export interface AnonymizeResult {
   mapping: Record<string, string>;
 }
 
+export interface CanonicalContactDetails {
+  name: string;
+  email: string;
+  phone: string | null;
+}
+
+export function buildCanonicalContactDetails(input: {
+  candidateName: string;
+  candidateEmail: string;
+  candidatePhone?: string;
+}): CanonicalContactDetails {
+  return {
+    name: input.candidateName.trim(),
+    email: input.candidateEmail.trim().toLowerCase(),
+    phone: input.candidatePhone?.trim() || null,
+  };
+}
+
 export function localAnonymize(cvText: string, candidateName?: string): AnonymizeResult {
   if (!cvText?.trim()) {
     return { anonymizedText: '', mapping: {} };
@@ -112,7 +130,17 @@ Do not modify or summarize professional experience, project details, or technica
     if (parsed) {
       const finalMapping = { ...localResult.mapping };
       for (const item of parsed.mapping) {
-        finalMapping[item.placeholder] = item.originalValue;
+        const placeholder = item.placeholder.trim();
+        const originalValue = item.originalValue.trim();
+        if (
+          !/^\[[A-Z][A-Z0-9_]*\]$/.test(placeholder) ||
+          !originalValue ||
+          !parsed.anonymizedText.includes(placeholder) ||
+          finalMapping[placeholder]
+        ) {
+          continue;
+        }
+        finalMapping[placeholder] = originalValue;
       }
       return {
         anonymizedText: parsed.anonymizedText,
