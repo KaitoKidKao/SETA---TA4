@@ -136,6 +136,8 @@ services:
       CRYPTO_LOCAL_PRIMARY_KID: ${CRYPTO_LOCAL_PRIMARY_KID:-}
       AWS_REGION: ${AWS_REGION:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MAILER_DEFAULT_TRANSPORT: ${MAILER_DEFAULT_TRANSPORT:-dev-stub}
+      MAILER_DEFAULT_SENDER: ${MAILER_DEFAULT_SENDER:-noreply@seta.example}
     expose:
       - "9464"  # Prometheus metrics scrape port
     networks:
@@ -180,6 +182,8 @@ services:
       CRYPTO_LOCAL_PRIMARY_KID: ${CRYPTO_LOCAL_PRIMARY_KID:-}
       AWS_REGION: ${AWS_REGION:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MAILER_DEFAULT_TRANSPORT: ${MAILER_DEFAULT_TRANSPORT:-dev-stub}
+      MAILER_DEFAULT_SENDER: ${MAILER_DEFAULT_SENDER:-noreply@seta.example}
     networks:
       - seta-internal
       - seta-edge  # egress for OpenAI / external embedding APIs

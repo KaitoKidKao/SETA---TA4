@@ -804,3 +804,30 @@ This file records completed implementation steps so another IDE session or agent
 ### Deployment
 
 - Rebuild and release the server image, reproduce the launch once, then use the returned `error`, `details.stage`, `details.causeCode` and `details.errorId` to identify the production root cause.
+
+## 2026-06-24 - Production Mailer Environment Wiring
+
+### Completed
+
+- Fixed SmartRecruit outreach approval jobs failing with Zod `invalid_value` on `MAILER_DEFAULT_TRANSPORT`.
+- Added `MAILER_DEFAULT_TRANSPORT` and `MAILER_DEFAULT_SENDER` to both the server and worker container environments in `compose.yml`.
+- Preserved `dev-stub` and `noreply@seta.example` as compose-level defaults when deployment variables are absent.
+
+### Root Cause
+
+- The release workflow wrote the mailer values to `/opt/seta/.env`, but Compose did not forward them into either application container.
+- `executeOutreach()` parses `process.env` directly with the shared mailer schema, where both values are required, so the campaign candidate was marked `send_failed` before transport resolution.
+
+### Files
+
+- `compose.yml`
+
+### Verification
+
+- `docker compose --env-file .env config --quiet` passed. Local warnings only reported unset ECR image variables and inaccessible user-level Docker config; the Compose model itself was valid.
+
+### Deployment
+
+- No database migration is required.
+- Run Hackathon Release again so the EC2 deployment fetches the updated `compose.yml` and recreates server/worker containers.
+- The current release configuration uses `dev-stub`; it validates the workflow without delivering a real external email. Real delivery requires `smtp` plus an SMTP URL/credentials configuration.
