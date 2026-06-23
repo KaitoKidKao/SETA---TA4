@@ -421,7 +421,7 @@ export const campaignJobs: TaskList = {
         and(
           eq(campaignCandidates.tenant_id, session.tenant_id),
           eq(campaignCandidates.campaign_id, payload.campaignId),
-          inArray(campaignCandidates.status, ['shortlisted', 'drafting', 'screening_failed']),
+          inArray(campaignCandidates.status, ['shortlisted', 'drafting', 'screened']),
         ),
       );
     for (const row of rows) {

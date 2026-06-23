@@ -69,7 +69,6 @@ import {
   useOutreachDrafts,
   usePendingApprovals,
   useScreenCandidatesFromPool,
-  useSendOutreachDraft,
   useSkillGaps,
   useSlaTracker,
   useSmartrecruitCampaign,
@@ -237,7 +236,7 @@ export function SmartrecruitPage() {
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
   const [dismissedRunIds, setDismissedRunIds] = useState<Record<string, boolean>>({});
   const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
-  const [slaSearchQuery, setSlaSearchQuery] = useState('');
+  const [slaSearchQuery] = useState('');
 
   // Local UI State
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
@@ -290,7 +289,6 @@ export function SmartrecruitPage() {
   const [isProgressCollapsed, setIsProgressCollapsed] = useState(false);
   const gate2Ref = useRef<HTMLDivElement>(null);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
-  const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
 
   // React Query Client & Queries
   const queryClient = useQueryClient();
@@ -368,7 +366,7 @@ export function SmartrecruitPage() {
   const submitDecisionMutation = useSubmitDecision();
   const addPoolCandidatesMutation = useAddPoolCandidates();
   const updateOutreachDraftMutation = useUpdateOutreachDraft();
-  const sendOutreachDraftMutation = useSendOutreachDraft();
+
   const approveSlaReminderMutation = useApproveSlaReminder();
 
   const handleRemindHM = useCallback(
@@ -981,13 +979,6 @@ export function SmartrecruitPage() {
     setIsSavingDraft(false);
   };
 
-  const handleSendIndividualEmail = async (draftId: string) => {
-    setSentDrafts((prev) => ({ ...prev, [draftId]: true }));
-    try {
-      await sendOutreachDraftMutation.mutateAsync(draftId);
-    } catch (_err) {}
-  };
-
   const handleApproveOutreachBulk = async () => {
     if (!activeApproval || isApprovingOutreach) return;
     setIsApprovingOutreach(true);
@@ -1181,11 +1172,10 @@ export function SmartrecruitPage() {
                   <div>
                     <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
                       <RefreshCw className="size-4 text-primary" />
-                      Demo & Operations Tools
+                      Mock Sourcing & SLA Utilities
                     </CardTitle>
                     <CardDescription className="text-eyebrow mt-1">
-                      Optional mock dataset, pool screening, shortlisted candidates, and HM SLA
-                      utilities.
+                      Optional mock dataset, pool screening, and hiring manager SLA utilities.
                     </CardDescription>
                   </div>
                   <ChevronRight
@@ -1321,16 +1311,6 @@ export function SmartrecruitPage() {
 
                       {/* Search and Filters */}
                       <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
-                          <Input
-                            type="text"
-                            placeholder="Search candidate, HM, or position..."
-                            className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
-                            value={slaSearchQuery}
-                            onChange={(e) => setSlaSearchQuery(e.target.value)}
-                          />
-                        </div>
                         <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
                           {(
                             [
@@ -2615,14 +2595,6 @@ export function SmartrecruitPage() {
                                   className="h-8"
                                 >
                                   {isSavingDraft ? 'Saving...' : 'Save Draft'}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleSendIndividualEmail(editingDraft.id)}
-                                  disabled={sentDrafts[editingDraft.id]}
-                                  className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
-                                >
-                                  {sentDrafts[editingDraft.id] ? 'Sent!' : 'Send Now'}
                                 </Button>
                               </div>
                             </div>

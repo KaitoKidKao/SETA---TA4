@@ -108,7 +108,7 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
           .limit(1);
 
         if (cc) {
-          const score = cc.effective_fit_score ?? cc.fit_score ?? 0;
+          const score = cc.reviewed_fit_score ?? cc.fit_score ?? 0;
           if (score < 70 || cc.status === 'screening_failed') {
             isRejection = true;
           }

@@ -197,7 +197,7 @@ export const smartrecruitJobs: TaskList = {
         and(
           eq(campaignCandidates.tenant_id, session.tenant_id),
           eq(campaignCandidates.campaign_id, campaignId),
-          eq(campaignCandidates.status, 'shortlisted'),
+          inArray(campaignCandidates.status, ['shortlisted', 'drafting', 'screened']),
         ),
       );
 
