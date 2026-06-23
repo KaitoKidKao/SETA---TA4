@@ -104,6 +104,7 @@ Do not modify or summarize professional experience, project details, or technica
             ),
           }),
         },
+        modelSettings: { temperature: 0, seed: 42 },
       }),
     );
 

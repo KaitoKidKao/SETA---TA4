@@ -571,6 +571,7 @@ export function registerSmartrecruitRoutes(
             phone: z.string().nullable().describe('Phone number of the candidate'),
           }),
         },
+        modelSettings: { temperature: 0, seed: 42 },
       });
 
       return c.json(
