@@ -27,6 +27,7 @@ function makeMastra(opts: {
   start?: ReturnType<typeof vi.fn>;
   runId?: string;
   unknownWorkflow?: boolean;
+  createRunError?: Error;
   /** Mastra-intrinsic workflow id (defaults to a `planner.<alias>` shape mirroring real wiring). */
   intrinsicId?: string;
 }): Mastra {
@@ -35,10 +36,13 @@ function makeMastra(opts: {
       if (opts.unknownWorkflow) return undefined;
       return {
         id: opts.intrinsicId ?? `planner.${alias}`,
-        createRun: async () => ({
-          runId: opts.runId ?? randomUUID(),
-          start: opts.start ?? vi.fn().mockResolvedValue(undefined),
-        }),
+        createRun: async () => {
+          if (opts.createRunError) throw opts.createRunError;
+          return {
+            runId: opts.runId ?? randomUUID(),
+            start: opts.start ?? vi.fn().mockResolvedValue(undefined),
+          };
+        },
       };
     },
   } as unknown as Mastra;
@@ -123,6 +127,28 @@ describe('POST /api/agent/v1/workflows/runs/:workflowId/start', () => {
         body: JSON.stringify({}),
       });
       expect(res.status).toBe(404);
+    });
+  });
+
+  it('returns a structured error when workflow run creation fails', async () => {
+    await withAgentTestDb(async ({ pool }) => {
+      const createRunError = Object.assign(new Error('storage unavailable'), {
+        code: 'ECONNREFUSED',
+      });
+      const app = makeApp(session(), makeMastra({ createRunError }), pool);
+      const res = await app.request('/api/agent/v1/workflows/runs/smartrecruit/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: randomUUID() }),
+      });
+
+      expect(res.status).toBe(500);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      expect(await res.json()).toMatchObject({
+        error: 'workflow_storage_unavailable',
+        message: 'Workflow storage is unavailable. Check the server database connection.',
+        details: { stage: 'create_run' },
+      });
     });
   });
 

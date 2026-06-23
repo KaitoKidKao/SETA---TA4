@@ -44,6 +44,7 @@
     "@seta/shared-embeddings": "workspace:^",
     "@seta/shared-retrieval": "workspace:^",
     "@seta/shared-storage": "workspace:^",
+    "@seta/smartrecruit": "workspace:^",
     "ai": "^6.0.191",
     "drizzle-orm": "^0.45.2",
     "graphile-worker": "^0.16.6",

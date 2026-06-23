@@ -13,6 +13,7 @@ import { Activity, AlertTriangle, CheckCircle, Loader2, RefreshCw, Users } from 
 import { useEffect, useMemo, useState } from 'react';
 import { useCampaignWarnings, useSmartrecruitCampaign, useSmartrecruitCampaigns } from '..';
 import { CampaignKPIDashboard } from '../components/CampaignKPIDashboard';
+import { SlaMonitoringSection } from '../components/SlaMonitoringSection';
 
 interface CampaignSummary {
   id: string;
@@ -103,6 +104,8 @@ export function SmartrecruitMonitoringPage() {
             Refresh
           </Button>
         </div>
+
+        <SlaMonitoringSection />
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
           <Card className="h-fit border-hairline shadow-sm lg:sticky lg:top-4">

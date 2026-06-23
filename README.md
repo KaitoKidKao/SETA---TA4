@@ -2,127 +2,166 @@
 
 > **Architecture Reference:** For the complete implementation details and design principles, see [`docs/architecture.md`](docs/architecture.md). This is the single source of truth for the platform's implementation shape.
 
+---
+
 ## 1. System Overview & Repo Structure
 
 ### What is Seta Agentic Platform?
 
-Seta Agentic Platform is an open-source, AI-first, multi-tenant enterprise platform foundation. It's conceptually similar to next-gen ERP or SAP architectures, but built specifically for the agentic era.
-
-The defining characteristic is simple. Every business module in the Seta Agentic Platform embeds an Agentic Agent directly within its operational boundaries. Rather than acting as a simple QA chatbot, the agent reads current system state, reasons across domains, and proposes concrete transactional actions. Upon explicit human authorization, it executes those mutations directly.
+Seta Agentic Platform is an open-source, AI-first, multi-tenant enterprise platform foundation. It embeds an Agentic Agent directly within operational boundaries of each business module. The agent reads current system state, reasons across domains, and proposes concrete transactional actions. Upon explicit human authorization (Human-in-the-Loop), it executes those mutations directly.
 
 ### Layered Architecture
 
-The platform architecture is organized into four decoupled tiers. This design ensures horizontal scalability and clear separation of concerns:
+The platform architecture is organized into four decoupled tiers:
 
 ```mermaid
 graph TD
-    subgraph Presentation["1. Presentation Tier (apps/web)"]
-        SPA["React 19 SPA"]
+    Client["💻 Client (React 19 SPA)"]
+    
+    subgraph Monolith ["Node 24 LTS Monolith"]
+        Server["🌐 apps/server (Hono HTTP)"]
+        Worker["⚙️ apps/worker (Graphile Worker)"]
+    end
+    
+    subgraph Domain ["📦 packages/smartrecruit"]
+        Agent["🤖 Mastra Workflow (Dual-Gate AI Agents)"]
     end
 
-    subgraph Application["2. Application & API Tier (apps/server)"]
-        Hono["Hono HTTP Server"]
-        Mastra["Mastra Agent Core"]
+    subgraph Data ["🗄️ Database Layer"]
+        DB[("PostgreSQL 17")]
+        Vector[("pgvector (Vector Search)")]
+        Outbox[("Outbox (core.events)")]
     end
 
-    subgraph Background["3. Async Worker Tier (apps/worker)"]
-        Worker["Embeddings"]
-        Agent["Agent Steps"]
-        Jobs["Sync Jobs"]
+    subgraph Ext ["🔌 External Integrations"]
+        LLM["gpt-5-nano (LLM & Vision)"]
+        Tess["Tesseract.js WASM (Local OCR)"]
+        SMTP["SMTP (Email Dispatch)"]
     end
 
-    subgraph Storage["4. Database & Storage Tier"]
-        DB["Relational Database"]
-        Vector["pgvector"]
-    end
-
-    Presentation -->|HTTP / WebSocket APIs| Application
-    Application -->|Enqueue Long Jobs| Background
-    Application -->|Read / Write| Storage
-    Background -->|Read / Write| Storage
+    Client <-->|HTTPS / SSE| Server
+    Server <--> Domain
+    Worker <--> Domain
+    Domain <--> DB & Vector & Outbox
+    Domain <--> LLM & Tess & SMTP
 ```
 
-- **SPA** (`apps/web/`): Built on React 19, Vite, and TanStack Router. It manages the core UI layout shell, handles dynamic injection of custom module components, and registers client-side navigation.
-- **Server** (`apps/server/`): A high-performance Hono HTTP server acting as the gateway. It handles request authentication, enforces RBAC middleware checks, orchestrates REST APIs, and runs the Mastra agent core.
-- **Worker** (`apps/worker/`): A resource-isolated process powered by graphile-worker. It processes async database tasks, generates text vector embeddings, handles calendar sync, and runs asynchronous workflow steps.
-- **Database** (Postgres 17): Stores standard relational application data with schemas for Core, Identity, Planner, and your custom modules. It also includes a dedicated pgvector HNSW index for fast semantic similarity search.
-
-### Core Agent Engine (Mastra Integration)
-
-The platform backend wraps and configures key modules from the Mastra runtime:
-
-- Specialist Agent and Tool declarations via `@mastra/core`
-- Deterministic multi-step process orchestration via `@mastra/core/workflows`
-- Short-term memory and long-term context indexing via `@mastra/memory` and `@mastra/pg`
-- System response auditing and testing via `@mastra/evals`
-
-The platform architecture remains flexible. While Mastra is configured by default, you can implement or plug in alternative agent frameworks if your use case requires it.
-
-### Folder Directory Layout
-
-```
-├── apps/
-│   ├── web/          React 19 SPA — module views, app shell, navigation
-│   ├── server/       Hono API + Mastra agent host
-│   ├── worker/       graphile-worker async jobs
-│   └── cli/          scaffolding & infra tooling
-│
-├── packages/
-│   ├── core/         event bus + RBAC foundation (everything depends on it)
-│   ├── identity/     auth, multi-tenancy, user profiles
-│   ├── planner/      REFERENCE MODULE — canonical business module
-│   ├── agent/        the assembled Mastra agent (supervisor + specialists)
-│   ├── knowledge/    knowledge base & document management
-│   ├── staffing/     resource allocation & team management
-│   ├── notifications/ multi-channel notifications
-│   ├── integrations/ external systems (M365, etc.)
-│   ├── shared-*/     shared infra (db, rbac, ui, crypto, storage, …)
-│   └── your-module/  BUILD YOUR CUSTOM MODULE HERE
-│
-├── sdks/
-│   ├── agent/        SDK for authoring agent tools (HITL support)
-│   └── module/       SDK for plugging module UI into the app shell
-│
-└── docs/             guides indexed below
-```
-
-**Documentation:**
-- **[`docs/architecture.md`](docs/architecture.md)** — system architecture & design principles (single source of truth)
-- **[`docs/agent-architecture.md`](docs/agent-architecture.md)** — three-tier supervisor agent system
-- **[`docs/dev-quickstart.md`](docs/dev-quickstart.md)** — local setup & first run
-- **[`docs/creating-modules.md`](docs/creating-modules.md)** — building a module with `pnpm gen module`
-- **[`docs/hosting/`](docs/hosting/)** — self-hosting (Docker Compose, AWS, scaling, upgrades)
-- **[`AGENTS.md`](AGENTS.md)** — contract for AI coding agents working in this repo
+*   **SPA** (`apps/web/`): React 19, Vite, and TanStack Router. Handles UI layouts, chat interfaces, and client routing.
+*   **Server** (`apps/server/`): Hono HTTP server. Manages request authentication, RBAC checks, REST APIs, and runs the Mastra agent core.
+*   **Worker** (`apps/worker/`): Background task runner powered by `graphile-worker`. Processes async database tasks, generates vector embeddings, and executes workflow background steps.
+*   **Database** (Postgres 17 + pgvector): Stores relational application data and manages pgvector HNSW indices for semantic similarity search.
 
 ---
 
-## 2. Getting Started
+## 2. Setup & Getting Started
 
-**Prerequisites:** Node 24 LTS, pnpm 11+, and Docker running.
+Follow this onboarding flow to yield a working local environment in under 5 minutes.
 
+### Prerequisites
+Make sure you have the following installed and running on your system:
+*   **Node.js**: Version 24 LTS or later
+*   **pnpm**: Version 11 or later
+*   **Docker**: Running (needed for Postgres/Redis services)
+
+### Step-by-Step Installation
+
+1.  **Clone the Repository & Install Dependencies:**
+    ```bash
+    git clone <repository-url> && cd SETA---TA4
+    pnpm install
+    ```
+
+2.  **Environment Configuration:**
+    Copy the sample environment file to `.env`:
+    ```bash
+    cp .env.example .env
+    ```
+    Open the `.env` file and generate/configure the required variables:
+    *   `BETTER_AUTH_SECRET`: Generate a 32-byte secret using `openssl rand -hex 32`
+    *   `CRYPTO_LOCAL_MASTER_KEY`: Generate a 32-byte (64 hex characters) key using `pnpm --filter @seta/shared-crypto crypto:gen-local-key`
+    *   `OPENAI_API_KEY` or `AGENT_MODELS`: Configure your LLM API keys (OpenAI or compatible provider).
+
+3.  **Start Database Infrastructure:**
+    Spin up PostgreSQL 17 + pgvector + Redis services in Docker:
+    ```bash
+    pnpm db:up
+    ```
+
+4.  **Database Migrations:**
+    Apply Drizzle schemas and migrations across all modules:
+    ```bash
+    pnpm db:migrate
+    ```
+
+5.  **Tenant Bootstrapping & Seeding:**
+    Bootstrap the default sandbox tenants and seed initial data:
+    *   **Option A (Recommended for Hackathon / Core testing):** Seed the pre-defined demo database (~300 users, boards, tasks):
+        ```bash
+        pnpm db:seed
+        ```
+    *   **Option B (Clean Sandbox Bootstrap):** Create a fresh sandbox tenant with a clean admin account:
+        ```bash
+        bash scripts/tenant-bootstrap.sh
+        ```
+    *   **Option C (Demo Org Bootstrap):** Run the dedicated demo organization bootstrap:
+        ```bash
+        pnpm demo:bootstrap
+        ```
+
+6.  **Run Dev Server:**
+    Start both the Hono API server and Vite React frontend in development mode:
+    ```bash
+    pnpm dev
+    ```
+    The application will be served at **[http://localhost:5173](http://localhost:5173)**.
+
+### Access Credentials
+Once bootstrapped, you can sign in at **[http://localhost:5173/login](http://localhost:5173/login)** using any of these default accounts:
+*   **Seeded Tenant:** `admin@hackathon.com` / `ChangeMe@2026`
+*   **Sandbox Tenant:** `admin@sandbox.test` / `ChangeMe@2026`
+*   **Demo Tenant:** `admin@demo.local` / `ChangeMe@2026`
+
+---
+
+## 3. Command Reference
+
+### Infrastructure Control
+*   `pnpm db:up` — Start Postgres and telemetry services.
+*   `pnpm db:down` — Shut down Postgres and database containers.
+*   `pnpm db:reset` — Clean database volumes, restart, re-migrate, and re-seed the environment.
+
+### Development & Verification
+*   `pnpm dev` — Start the local server and web client.
+*   `pnpm typecheck` — Run TypeScript compilation check across all workspaces.
+
+### Running Tests
+All unit and integration tests run against real Postgres databases using Testcontainers:
+*   **Unit & Integration Tests:**
+    ```bash
+    pnpm test
+    ```
+*   **End-to-End (E2E) Browser Tests (Playwright):**
+    ```bash
+    pnpm test:e2e
+    ```
+
+### Code Quality & Linting
+The CI pipeline enforces strict module isolation, style consistency, and security boundaries. You must verify these checks pass before proposing changes:
 ```bash
-git clone https://github.com/Seta-International/agent-platform.git && cd agent-platform
-pnpm install
-cp .env.example .env     # then fill BETTER_AUTH_SECRET, CRYPTO_LOCAL_MASTER_KEY, OPENAI_API_KEY
-pnpm db:up               # Postgres + Redis + telemetry, all in Docker
-pnpm db:migrate          # apply every module's schema
-pnpm db:seed             # load the demo tenant (~300 users, plans, tasks)
-pnpm dev                 # serves the app at http://localhost:5173
+pnpm lint
 ```
-
-Sign in at <http://localhost:5173/login> as `admin@hackathon.com` / `ChangeMe@2026`.
-
-New here? The full walkthrough — secret generation, env reference, data-loading
-options, and troubleshooting — is in **[`docs/dev-quickstart.md`](docs/dev-quickstart.md)**.
-To build a business module, see **[`docs/creating-modules.md`](docs/creating-modules.md)**.
+This runs a combination of check scripts:
+*   `pnpm depcruise` — Enforces module dependency cruiser constraints.
+*   `pnpm lint:raw-sql` — Rejects direct raw SQL queries crossing schemas.
+*   `pnpm lint:styles` — Rejects stray CSS/Tailwind configuration files outside `@seta/shared-ui`.
+*   `pnpm lint:module-shape` — Validates the structural conventions of packages.
+*   `pnpm lint:rbac-coverage` — Verifies RBAC permission coverage.
 
 ---
 
-## 3. Agent Runtime Architecture
+## 4. Agent Runtime Architecture
 
-### Conceptual Runtime Flow
-
-An agentic request follows a recurring cycle. This high-level representation does not reference explicit file configurations or database queries.
+An agentic request follows a recurring cycle:
 
 ```mermaid
 flowchart TD
@@ -151,21 +190,13 @@ flowchart TD
     Exec --> EndStream
 ```
 
-### Detailed request flow
-
-For the full step-by-step sequence — request ingestion, RBAC, specialist delegation, read-tool context gathering, HITL approval, and the transactional outbox commit — see **[`docs/agent-architecture.md`](docs/agent-architecture.md)**.
+*   **Detailed sequence:** For the full step-by-step sequence (request ingestion, RBAC callee check, specialist delegation, read-tool context gathering, HITL approval, and the transactional outbox commit), see **[`docs/agent-architecture.md`](docs/agent-architecture.md)**.
 
 ---
 
-## 4. Hackathon & Cloud Deployment
+## 5. Hackathon & Cloud Deployment
 
-> This section is specific to deploying on the Seta hackathon AWS environment.
-> For local development use [§2 Getting Started](#2-getting-started); for general
-> self-hosting (Docker Compose, AWS, scaling, upgrades) see [`docs/hosting/`](docs/hosting/).
-
-> Each hackathon team is allocated a secure, isolated cloud sandbox environment in AWS.
-
-### Allocated Cloud Architecture per Team
+Each hackathon team is allocated a secure, isolated cloud sandbox environment in AWS.
 
 ```mermaid
 graph TD
@@ -189,4 +220,4 @@ graph TD
     Docker -->|Secure Asset Sync| S3
 ```
 
-For the full deployment walkthrough — CI/CD setup, secrets configuration, ECR push, EC2 deployment, and troubleshooting — see **[`hackathon/DEPLOY.md`](hackathon/DEPLOY.md)**.
+For the full deployment walkthrough (CI/CD setup, secrets configuration, ECR push, EC2 deployment, and troubleshooting), see **[`hackathon/DEPLOY.md`](hackathon/DEPLOY.md)**.

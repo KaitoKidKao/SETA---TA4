@@ -1729,7 +1729,7 @@ export function SmartrecruitPage() {
                         className="bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5"
                       >
                         <FileText className="size-4" />
-                        Export and Manage HM Report
+                        HM Report
                       </Button>
                     </div>
                     <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">

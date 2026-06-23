@@ -757,3 +757,106 @@ This file records completed implementation steps so another IDE session or agent
 
 - `rg` confirmed `window.confirm` is no longer used in the SmartRecruit page.
 - `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+
+## 2026-06-23 - SmartRecruit Production Mock Dataset Path
+
+### Completed
+
+- Fixed mock dataset resolution after `pnpm deploy` packages SmartRecruit under the server's `node_modules` tree.
+- The default import now checks `APP_HOME/mock-data/04_ta_cv_screening.xlsx` first in production. With the server Docker image configuration, this resolves to `/app/mock-data/04_ta_cv_screening.xlsx`.
+- Preserved local development and explicit relative-path fallbacks through `process.cwd()` and the source checkout root.
+
+### Files
+
+- `packages/smartrecruit/src/backend/http/routes.ts`
+
+### Verification
+
+- `pnpm exec biome check --write packages/smartrecruit/src/backend/http/routes.ts` passed.
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+
+### Deployment
+
+- No database migration is required.
+- Rebuild and release the server image before retesting Mock Dataset Import in production.
+
+## 2026-06-23 - Workflow Start Error Diagnostics
+
+### Completed
+
+- Hardened `POST /api/agent/v1/workflows/runs/:workflowId/start` so synchronous Mastra/storage failures return structured JSON instead of Hono's plain `500 Internal Server Error` response.
+- Added stage tracking for workflow lookup, deduplication, Mastra run creation and lifecycle projection.
+- Added production-safe classifications for missing Agent schema, database permission failures and unavailable workflow storage.
+- Added an error ID to the response and structured server log so a production failure can be correlated without exposing the full stack trace to the browser.
+- Added a regression test covering a synchronous workflow storage connection failure.
+
+### Files
+
+- `packages/agent/src/backend/routes.ts`
+- `packages/agent/tests/integration/routes.workflow-start.test.ts`
+
+### Verification
+
+- `node_modules/.bin/biome check --write packages/agent/src/backend/routes.ts packages/agent/tests/integration/routes.workflow-start.test.ts` passed.
+- `packages/agent/node_modules/.bin/tsc -b --noEmit` passed.
+- The targeted integration test could not execute because no PostgreSQL container runtime is available on the current Windows environment; Vitest stopped during global setup before running assertions.
+
+### Deployment
+
+- Rebuild and release the server image, reproduce the launch once, then use the returned `error`, `details.stage`, `details.causeCode` and `details.errorId` to identify the production root cause.
+
+## 2026-06-24 - Production Mailer Environment Wiring
+
+### Completed
+
+- Fixed SmartRecruit outreach approval jobs failing with Zod `invalid_value` on `MAILER_DEFAULT_TRANSPORT`.
+- Added `MAILER_DEFAULT_TRANSPORT` and `MAILER_DEFAULT_SENDER` to both the server and worker container environments in `compose.yml`.
+- Preserved `dev-stub` and `noreply@seta.example` as compose-level defaults when deployment variables are absent.
+
+### Root Cause
+
+- The release workflow wrote the mailer values to `/opt/seta/.env`, but Compose did not forward them into either application container.
+- `executeOutreach()` parses `process.env` directly with the shared mailer schema, where both values are required, so the campaign candidate was marked `send_failed` before transport resolution.
+
+### Files
+
+- `compose.yml`
+
+### Verification
+
+- `docker compose --env-file .env config --quiet` passed. Local warnings only reported unset ECR image variables and inaccessible user-level Docker config; the Compose model itself was valid.
+
+### Deployment
+
+- No database migration is required.
+- Run Hackathon Release again so the EC2 deployment fetches the updated `compose.yml` and recreates server/worker containers.
+- The current release configuration uses `dev-stub`; it validates the workflow without delivering a real external email. Real delivery requires `smtp` plus an SMTP URL/credentials configuration.
+
+## 2026-06-24 - SLA Tracker Restored In Monitoring
+
+### Completed
+
+- Restored HM Feedback SLA tracking as a dedicated, campaign-independent section on the SmartRecruit Monitoring page.
+- Added a persistent empty state and `Import DS08` action so the section no longer disappears when the tenant has no feedback records.
+- Added debounced candidate/HM/position search and status filters for overdue, due soon, on track, submitted and data-error records.
+- Added per-record SLA dates, HM details, feedback text, reminder status and failure code visibility.
+- Added explicit `Send reminder` and `Retry reminder` actions with pending states and success/error toasts.
+- Added a 10-second optional polling interval to `useSlaTracker` so queued reminder status can update without a page reload.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/components/SlaMonitoringSection.tsx`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-monitoring-page.tsx`
+- `apps/web/src/modules/smartrecruit/hooks/use-smartrecruit.ts`
+
+### Verification
+
+- Biome check/write passed for all three changed web files. It only reported pre-existing non-null assertion warnings in the shared SmartRecruit hooks file.
+- `apps/web/node_modules/.bin/tsc -b --noEmit` passed.
+- Automated browser inspection was unavailable in the current session, so visual acceptance remains to be checked manually on `/smartrecruit/monitoring`.
+
+### Manual Retest
+
+- Open SmartRecruit > Monitoring and confirm the SLA section appears above Campaign Monitoring even when it has no rows.
+- Click `Import DS08`, verify counts and rows appear, then exercise search and each status filter.
+- On a due-soon or overdue item, click `Send reminder` and confirm its status progresses from queued to sent; use `Retry reminder` when the latest attempt is failed.

@@ -382,11 +382,15 @@ export function useUpdateScoringWeights() {
   });
 }
 
-export function useSlaTracker(filters: { status?: string; search?: string }) {
+export function useSlaTracker(
+  filters: { status?: string; search?: string },
+  options: { refetchInterval?: number } = {},
+) {
   return useQuery({
     queryKey: smartrecruitQueryKeys.slaTracker(filters),
     queryFn: () => smartrecruitApi.getSlaTracker(filters),
     placeholderData: (previousData) => previousData,
+    refetchInterval: options.refetchInterval,
   });
 }
 
