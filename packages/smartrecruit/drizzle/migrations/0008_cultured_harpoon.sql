@@ -1,0 +1,1 @@
+ALTER TABLE "smartrecruit"."outreach_drafts" ADD COLUMN "message_type" text DEFAULT 'outreach' NOT NULL;

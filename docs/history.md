@@ -527,6 +527,73 @@ This file records completed implementation steps so another IDE session or agent
 
 - `pnpm --filter=@seta/web typecheck` passed.
 - `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+
+## 2026-06-23 - SmartRecruit Monitoring Navigation
+
+### Completed
+
+- Added a `Monitoring` navigation item under the Smartrecruit group in the left workspace sidebar.
+- Added route `/smartrecruit/monitoring` and generated the TanStack route tree.
+- Removed Campaign KPI rendering from the Active Pipeline workflow page so operational actions are no longer mixed with analytics.
+- Added a dedicated monitoring page with campaign selection, live screening progress, candidate totals, shortlist/draft/failure counts, KPI data, data-quality warnings and per-candidate status.
+- Simplified Campaign KPI styling by removing large colored panels and using compact neutral metric tiles.
+- Kept campaign monitoring polling scoped to the selected campaign.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/manifest.ts`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-monitoring-page.tsx`
+- `apps/web/src/modules/smartrecruit/components/CampaignKPIDashboard.tsx`
+- `apps/web/src/routes/_authed/smartrecruit_.monitoring.tsx`
+- `apps/web/src/routeTree.gen.ts`
+
+### Verification
+
+- `pnpm --filter=@seta/web generate-routes` passed.
+- Route tree contains `/smartrecruit/monitoring`.
+- Biome passed on the five manually changed UI/route files.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
+
+## 2026-06-23 - Stable SLA Search And Reminder Feedback
+
+### Completed
+
+- Debounced HM Feedback SLA search by 350 ms so typing no longer triggers an API request for every keystroke.
+- Kept the previous SLA query data visible while the debounced request is loading.
+- Changed the SLA tracker from a variable max height to a stable 450 px panel to prevent page layout jumps during filtering.
+- Made existing reminder drafts actionable through a `Send reminder` button instead of rendering a disabled `Reminder drafted` state.
+- Added inline success/error notices inside the affected SLA card after remind or retry actions, in addition to toast feedback.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+- `apps/web/src/modules/smartrecruit/hooks/use-smartrecruit.ts`
+
+### Verification
+
+- `pnpm exec biome check --write ...` returned exit code 0; existing non-null assertion warnings remain in the shared SmartRecruit hooks file.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
+
+## 2026-06-23 - HM Feedback Reminder Actions
+
+### Completed
+
+- Updated every non-submitted HM Feedback SLA card to show a reminder action row instead of hiding the action when a reminder is unavailable.
+- Shows `Remind HM` when the feedback request is eligible and no reminder attempt exists.
+- Shows `Retry reminder` when the latest reminder attempt failed.
+- Shows disabled `Reminder queued`, `Reminder sent` or `Reminder drafted` states to prevent duplicate delivery.
+- Shows `HM email required` and a disabled action when the request has no valid Hiring Manager email.
+- Added per-attempt retry loading state and success/error toast feedback.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm exec biome check --write apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
 - Code search confirmed `fetchPoolCandidates` is called only by `handleBrowseTalentPool`, not by the Gate 1 effect or re-engagement success path.
 
 ### Manual Retest

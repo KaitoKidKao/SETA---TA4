@@ -55,30 +55,29 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
   };
 
   return (
-    <Card className="mb-6 shadow-sm border border-neutral-200">
-      <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+    <Card className="border-hairline shadow-sm">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
         <div>
-          <CardTitle className="text-base font-bold">Campaign Performance KPIs</CardTitle>
+          <CardTitle className="text-body-base font-semibold">Performance</CardTitle>
+          <p className="mt-1 text-xs text-ink-subtle">Operational speed and AI usage.</p>
         </div>
         <Button
-          variant="secondary"
+          variant="ghost"
           size="sm"
-          className="h-8 px-2 flex items-center gap-1.5 text-xs"
+          className="h-8 px-2 flex items-center gap-1.5 text-xs text-ink-subtle"
           onClick={() => setShowConfig(!showConfig)}
         >
           <Settings className="w-3.5 h-3.5" />
-          {showConfig ? 'Close settings' : 'Token pricing'}
+          {showConfig ? 'Close' : 'Pricing'}
         </Button>
       </CardHeader>
       <CardContent>
         {showConfig && (
-          <div className="mb-4 p-3 bg-neutral-50 rounded-lg border border-neutral-200 text-xs space-y-3">
-            <h4 className="font-semibold text-neutral-700">
-              API token pricing ($ per 1 million tokens):
-            </h4>
+          <div className="mb-4 space-y-3 rounded-md border border-hairline bg-surface-1 p-3 text-xs">
+            <h4 className="font-semibold text-ink">API token pricing ($ per 1 million tokens):</h4>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-neutral-500 mb-1 font-medium">
+                <label className="mb-1 block font-medium text-ink-subtle">
                   Input Tokens (Prompt)
                 </label>
                 <input
@@ -86,11 +85,11 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
                   step="0.01"
                   value={inputPrice}
                   onChange={(e) => setInputPrice(Number(e.target.value))}
-                  className="w-full px-2.5 py-1 border border-neutral-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="w-full rounded border border-hairline bg-surface px-2.5 py-1 text-ink focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
               <div>
-                <label className="block text-neutral-500 mb-1 font-medium">
+                <label className="mb-1 block font-medium text-ink-subtle">
                   Output Tokens (Completion)
                 </label>
                 <input
@@ -98,7 +97,7 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
                   step="0.01"
                   value={outputPrice}
                   onChange={(e) => setOutputPrice(Number(e.target.value))}
-                  className="w-full px-2.5 py-1 border border-neutral-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="w-full rounded border border-hairline bg-surface px-2.5 py-1 text-ink focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
             </div>
@@ -107,46 +106,46 @@ export function CampaignKPIDashboard({ campaignId }: CampaignKPIDashboardProps) 
 
         {isLoading && !kpis ? (
           <div className="flex items-center justify-center py-6">
-            <Loader2 className="w-6 h-6 animate-spin text-neutral-400" />
+            <Loader2 className="w-5 h-5 animate-spin text-ink-subtle" />
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
-            <div className="p-3 bg-blue-50/50 rounded-lg border border-blue-100 flex items-start gap-3">
-              <div className="p-2 bg-blue-100 rounded-md text-blue-600">
-                <Clock className="w-5 h-5" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="flex items-start gap-3 rounded-md border border-hairline p-3">
+              <div className="rounded-md bg-primary/10 p-2 text-primary">
+                <Clock className="w-4 h-4" />
               </div>
               <div>
-                <span className="block text-xs text-neutral-500 font-medium">Time-to-Screen</span>
-                <span className="text-sm font-bold text-neutral-800">
+                <span className="block text-xs font-medium text-ink-subtle">Time-to-Screen</span>
+                <span className="text-body-sm font-semibold text-ink">
                   {kpis ? formatDuration(kpis.timeToScreenSec) : 'N/A'}
                 </span>
               </div>
             </div>
 
-            <div className="p-3 bg-emerald-50/50 rounded-lg border border-emerald-100 flex items-start gap-3">
-              <div className="p-2 bg-emerald-100 rounded-md text-emerald-600">
-                <TrendingUp className="w-5 h-5" />
+            <div className="flex items-start gap-3 rounded-md border border-hairline p-3">
+              <div className="rounded-md bg-emerald-500/10 p-2 text-emerald-600">
+                <TrendingUp className="w-4 h-4" />
               </div>
               <div>
-                <span className="block text-xs text-neutral-500 font-medium">Shortlist rate</span>
-                <span className="text-sm font-bold text-neutral-800">
+                <span className="block text-xs font-medium text-ink-subtle">Shortlist rate</span>
+                <span className="text-body-sm font-semibold text-ink">
                   {kpis ? `${kpis.shortlistRate}%` : 'N/A'}
                 </span>
               </div>
             </div>
 
-            <div className="p-3 bg-purple-50/50 rounded-lg border border-purple-100 flex items-start gap-3">
-              <div className="p-2 bg-purple-100 rounded-md text-purple-600">
-                <DollarSign className="w-5 h-5" />
+            <div className="flex items-start gap-3 rounded-md border border-hairline p-3">
+              <div className="rounded-md bg-surface-2 p-2 text-ink-subtle">
+                <DollarSign className="w-4 h-4" />
               </div>
               <div>
-                <span className="block text-xs text-neutral-500 font-medium">
+                <span className="block text-xs font-medium text-ink-subtle">
                   Estimated API cost
                 </span>
-                <span className="text-sm font-bold text-neutral-800">
+                <span className="text-body-sm font-semibold text-ink">
                   {kpis ? `$${kpis.estimatedCostUsd.toFixed(4)}` : 'N/A'}
                 </span>
-                <span className="block text-[10px] text-neutral-400">
+                <span className="block text-[10px] text-ink-subtle">
                   {kpis ? `${kpis.totalInputTokens + kpis.totalOutputTokens} tokens` : ''}
                 </span>
               </div>

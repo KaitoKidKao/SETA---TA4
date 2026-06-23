@@ -34,7 +34,9 @@ import {
   Calendar,
   Check,
   CheckCircle,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock,
   FileText,
   Loader2,
@@ -43,13 +45,14 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Send,
   Settings,
   Sparkles,
   Trash2,
   Upload,
   User,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   smartrecruitApi,
   useAddPoolCandidates,
@@ -66,7 +69,6 @@ import {
   useOutreachDrafts,
   usePendingApprovals,
   useScreenCandidatesFromPool,
-  useSendOutreachDraft,
   useSkillGaps,
   useSlaTracker,
   useSmartrecruitCampaign,
@@ -77,7 +79,6 @@ import {
   useWorkflowRun,
   useWorkflowRuns,
 } from '..';
-import { CampaignKPIDashboard } from '../components/CampaignKPIDashboard';
 import { CandidateScorecard } from '../components/CandidateScorecard';
 import { HMReportModal } from '../components/HMReportModal';
 
@@ -235,7 +236,7 @@ export function SmartrecruitPage() {
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
   const [dismissedRunIds, setDismissedRunIds] = useState<Record<string, boolean>>({});
   const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
-  const [slaSearchQuery, setSlaSearchQuery] = useState('');
+  const [slaSearchQuery] = useState('');
 
   // Local UI State
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
@@ -285,8 +286,9 @@ export function SmartrecruitPage() {
   // Gate 2: Candidate Scorecard & Email workspace
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateState | null>(null);
   const [editingDraft, setEditingDraft] = useState<DraftState | null>(null);
+  const [isProgressCollapsed, setIsProgressCollapsed] = useState(false);
+  const gate2Ref = useRef<HTMLDivElement>(null);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
-  const [sentDrafts, setSentDrafts] = useState<Record<string, boolean>>({});
 
   // React Query Client & Queries
   const queryClient = useQueryClient();
@@ -364,7 +366,7 @@ export function SmartrecruitPage() {
   const submitDecisionMutation = useSubmitDecision();
   const addPoolCandidatesMutation = useAddPoolCandidates();
   const updateOutreachDraftMutation = useUpdateOutreachDraft();
-  const sendOutreachDraftMutation = useSendOutreachDraft();
+
   const approveSlaReminderMutation = useApproveSlaReminder();
 
   const handleRemindHM = useCallback(
@@ -622,6 +624,19 @@ export function SmartrecruitPage() {
       setActiveCriteria(null);
     }
   }, [criteriaDetailsQuery.data, criteriaIdToLoad]);
+
+  // Auto collapse progress details and scroll to Gate 2 when Gate 2 becomes active
+  useEffect(() => {
+    if (runStatus === 'paused' && isGate2Active) {
+      setIsProgressCollapsed(true);
+      const timer = setTimeout(() => {
+        gate2Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
+      return () => clearTimeout(timer);
+    } else {
+      setIsProgressCollapsed(false);
+    }
+  }, [runStatus, isGate2Active]);
 
   // Sync pending run on mount / change
   useEffect(() => {
@@ -964,13 +979,6 @@ export function SmartrecruitPage() {
     setIsSavingDraft(false);
   };
 
-  const handleSendIndividualEmail = async (draftId: string) => {
-    setSentDrafts((prev) => ({ ...prev, [draftId]: true }));
-    try {
-      await sendOutreachDraftMutation.mutateAsync(draftId);
-    } catch (_err) {}
-  };
-
   const handleApproveOutreachBulk = async () => {
     if (!activeApproval || isApprovingOutreach) return;
     setIsApprovingOutreach(true);
@@ -1164,11 +1172,10 @@ export function SmartrecruitPage() {
                   <div>
                     <CardTitle className="text-body-lg font-semibold flex items-center gap-2 text-ink">
                       <RefreshCw className="size-4 text-primary" />
-                      Demo & Operations Tools
+                      Mock Sourcing & SLA Utilities
                     </CardTitle>
                     <CardDescription className="text-eyebrow mt-1">
-                      Optional mock dataset, pool screening, shortlisted candidates, and HM SLA
-                      utilities.
+                      Optional mock dataset, pool screening, and hiring manager SLA utilities.
                     </CardDescription>
                   </div>
                   <ChevronRight
@@ -1304,16 +1311,6 @@ export function SmartrecruitPage() {
 
                       {/* Search and Filters */}
                       <div className="px-6 pb-3 shrink-0 flex flex-col gap-2">
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-ink-subtle" />
-                          <Input
-                            type="text"
-                            placeholder="Search candidate, HM, or position..."
-                            className="pl-8 h-8 text-xs bg-surface-1 border-hairline"
-                            value={slaSearchQuery}
-                            onChange={(e) => setSlaSearchQuery(e.target.value)}
-                          />
-                        </div>
                         <div className="flex gap-1 bg-surface-2 p-0.5 rounded-md border border-hairline text-[11px]">
                           {(
                             [
@@ -1593,13 +1590,36 @@ export function SmartrecruitPage() {
                     <div className="flex items-center gap-2">
                       <RefreshCw
                         className={cn(
-                          'size-4 text-primary',
-                          runStatus === 'running' && 'animate-spin',
+                          'size-4',
+                          ['running', 'waiting', 'pending'].includes(runStatus || '')
+                            ? 'text-blue-500 animate-spin'
+                            : runStatus === 'paused'
+                              ? 'text-amber-500'
+                              : runStatus === 'success'
+                                ? 'text-emerald-500'
+                                : 'text-ink-subtle',
                         )}
                       />
-                      <span className="text-body-sm font-semibold text-ink">
-                        Pipeline Status:{' '}
-                        <span className="capitalize text-primary font-bold">{runStatus}</span>
+                      <span className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                        Pipeline Status:
+                        <span
+                          className={cn(
+                            'font-bold px-2 py-0.5 rounded text-[11px] uppercase tracking-wider',
+                            ['running', 'waiting', 'pending'].includes(runStatus || '')
+                              ? 'bg-blue-50 text-blue-600 border border-blue-200 animate-pulse'
+                              : runStatus === 'paused'
+                                ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                                : runStatus === 'success'
+                                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                                  : 'bg-canvas text-ink-subtle border border-hairline',
+                          )}
+                        >
+                          {runStatus === 'waiting'
+                            ? 'Processing'
+                            : runStatus === 'paused'
+                              ? 'Action Required'
+                              : runStatus || 'Idle'}
+                        </span>
                       </span>
                     </div>
                     <span className="text-eyebrow text-ink-subtle font-mono">
@@ -1618,7 +1638,7 @@ export function SmartrecruitPage() {
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
                           runStatus === 'paused' && isGate1Active
                             ? 'bg-amber-500 border-amber-600 text-white'
-                            : runStatus === 'running'
+                            : ['running', 'waiting', 'pending'].includes(runStatus || '')
                               ? 'bg-primary border-primary text-white'
                               : 'bg-surface-1 border-hairline-strong text-ink-subtle',
                         )}
@@ -1633,7 +1653,8 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          runStatus === 'running' && !activeApproval
+                          ['running', 'waiting', 'pending'].includes(runStatus || '') &&
+                            !activeApproval
                             ? 'bg-amber-500 border-amber-600 text-white'
                             : 'bg-surface-1 border-hairline-strong text-ink-subtle',
                         )}
@@ -1677,8 +1698,6 @@ export function SmartrecruitPage() {
               </CardContent>
             </Card>
 
-            {activeCampaignId && <CampaignKPIDashboard campaignId={activeCampaignId} />}
-
             {/* Run error layout */}
             {runError && (
               <div className="bg-destructive-tint/20 border border-destructive/20 text-destructive p-4 rounded-xl flex items-start gap-3">
@@ -1699,24 +1718,58 @@ export function SmartrecruitPage() {
             )}
 
             {activeCampaign && (
-              <Card className="shadow-sm border-hairline bg-surface">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
+              <Card className="shadow-sm border-hairline bg-surface overflow-hidden">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between gap-4 flex-wrap">
                     <div>
-                      <CardTitle className="text-body-lg font-semibold">
+                      <CardTitle className="text-body-lg font-semibold flex items-center gap-2">
                         Campaign Progress
                       </CardTitle>
                       <CardDescription>
                         {activeCampaign.campaign.job_title} · {activeCampaign.campaign.status}
                       </CardDescription>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {isProgressCollapsed && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => setShowReportModal(true)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5 h-8 text-xs shrink-0"
+                        >
+                          <FileText className="size-3.5" />
+                          HM Report
+                        </Button>
+                      )}
+
                       <Badge
                         variant={activeCampaign.campaign.failed_count > 0 ? 'warning' : 'success'}
+                        className="h-8 flex items-center shrink-0"
                       >
                         {activeCampaign.campaign.screened_count}/
                         {activeCampaign.campaign.total_candidates} screened
                       </Badge>
+
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setIsProgressCollapsed((prev) => !prev)}
+                        className="h-8 text-xs flex items-center gap-1 shrink-0"
+                      >
+                        {isProgressCollapsed ? (
+                          <>
+                            <ChevronDown className="size-3.5" />
+                            <span>Show Details</span>
+                          </>
+                        ) : (
+                          <>
+                            <ChevronUp className="size-3.5" />
+                            <span>Hide Details</span>
+                          </>
+                        )}
+                      </Button>
+
                       {canCancelActiveCampaign && (
                         <Button
                           type="button"
@@ -1724,7 +1777,7 @@ export function SmartrecruitPage() {
                           size="sm"
                           disabled={cancelCampaignMutation.isPending}
                           onClick={() => setShowCancelPipelineDialog(true)}
-                          className="text-destructive hover:bg-destructive-tint/10"
+                          className="text-destructive hover:bg-destructive-tint/10 h-8 text-xs shrink-0"
                         >
                           {cancelCampaignMutation.isPending ? (
                             <Loader2 className="size-3.5 mr-1 animate-spin" />
@@ -1737,8 +1790,8 @@ export function SmartrecruitPage() {
                     </div>
                   </div>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3">
-                  <div className="h-2 rounded-full bg-canvas overflow-hidden border border-hairline">
+                {isProgressCollapsed && (
+                  <div className="h-1 bg-canvas overflow-hidden w-full">
                     <div
                       className="h-full bg-primary transition-all"
                       style={{
@@ -1754,121 +1807,141 @@ export function SmartrecruitPage() {
                       }}
                     />
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-body-sm">
-                    <div className="rounded border border-hairline p-2">
-                      <div className="text-ink-subtle">Shortlisted</div>
-                      <div className="font-semibold">
-                        {activeCampaign.campaign.shortlisted_count}
-                      </div>
-                    </div>
-                    <div className="rounded border border-hairline p-2">
-                      <div className="text-ink-subtle">Failed</div>
-                      <div className="font-semibold">{activeCampaign.campaign.failed_count}</div>
-                    </div>
-                    <div className="rounded border border-hairline p-2">
-                      <div className="text-ink-subtle">Drafted</div>
-                      <div className="font-semibold">{activeCampaign.campaign.drafted_count}</div>
-                    </div>
-                    <div className="rounded border border-hairline p-2">
-                      <div className="text-ink-subtle">Sent</div>
-                      <div className="font-semibold">{activeCampaign.campaign.sent_count}</div>
-                    </div>
-                    <div className="rounded border border-hairline p-2">
-                      <div className="text-ink-subtle">Campaign ID</div>
-                      <div className="font-mono text-xs">
-                        {activeCampaign.campaign.id.slice(0, 8)}
-                      </div>
-                    </div>
-                  </div>
-                  {campaignMetrics && (
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-body-sm">
-                      <div className="rounded border border-hairline p-2">
-                        <div className="text-ink-subtle">Time to screen</div>
-                        <div className="font-semibold">
-                          {campaignMetrics.timeToScreenMs == null
-                            ? 'Pending'
-                            : `${Math.round(campaignMetrics.timeToScreenMs / 1000)}s`}
-                        </div>
-                      </div>
-                      <div className="rounded border border-hairline p-2">
-                        <div className="text-ink-subtle">CV / minute</div>
-                        <div className="font-semibold">
-                          {campaignMetrics.candidatesPerMinute ?? 'Pending'}
-                        </div>
-                      </div>
-                      <div className="rounded border border-hairline p-2">
-                        <div className="text-ink-subtle">Retries</div>
-                        <div className="font-semibold">{campaignMetrics.retryCount}</div>
-                      </div>
-                      <div className="rounded border border-hairline p-2">
-                        <div className="text-ink-subtle">AI latency</div>
-                        <div className="font-semibold">
-                          {Math.round(campaignMetrics.aiLatencyMs / 1000)}s
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {campaignWarnings.filter((warning) => !warning.resolved_at).length > 0 && (
-                    <div className="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
-                      <div className="font-semibold text-body-sm">Data quality warnings</div>
-                      <ul className="mt-1 list-disc pl-5 text-body-sm">
-                        {campaignWarnings
-                          .filter((warning) => !warning.resolved_at)
-                          .map((warning) => (
-                            <li key={warning.id}>{warning.message}</li>
-                          ))}
-                      </ul>
-                    </div>
-                  )}
-                  <div className="flex justify-between items-center border-t border-hairline pt-3">
-                    <div className="text-body-sm text-ink-subtle">
-                      Shortlist Report for Hiring Manager
-                    </div>
-                    <Button
-                      type="button"
-                      onClick={() => setShowReportModal(true)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5"
-                    >
-                      <FileText className="size-4" />
-                      Export and Manage HM Report
-                    </Button>
-                  </div>
-                  <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">
-                    {activeCampaign.candidates.map(({ campaignCandidate, candidate }: any) => (
+                )}
+                {!isProgressCollapsed && (
+                  <CardContent className="flex flex-col gap-3">
+                    <div className="h-2 rounded-full bg-canvas overflow-hidden border border-hairline">
                       <div
-                        key={campaignCandidate.candidate_id}
-                        className="flex items-center justify-between gap-3 p-3 bg-canvas/30"
-                      >
-                        <div className="min-w-0">
-                          <div className="font-medium truncate">
-                            {candidate?.display_name ?? campaignCandidate.candidate_id}
-                          </div>
-                          <div className="text-xs text-ink-subtle truncate">
-                            {campaignCandidate.error_reason ||
-                              candidate?.email ||
-                              'No candidate detail available'}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {campaignCandidate.status === 'screening_failed' ||
-                          campaignCandidate.status === 'draft_failed' ||
-                          campaignCandidate.status === 'send_failed' ? (
-                            <Badge variant="destructive">{campaignCandidate.status}</Badge>
-                          ) : (
-                            <Badge variant="secondary">{campaignCandidate.status}</Badge>
-                          )}
-                          {campaignCandidate.status === 'screening_failed' ? (
-                            <span className="text-xs text-rose-600">Screening failed</span>
-                          ) : (
-                            <span className="text-xs font-semibold">
-                              {campaignCandidate.fit_score ?? 0}% Fit
-                            </span>
-                          )}
+                        className="h-full bg-primary transition-all"
+                        style={{
+                          width: `${
+                            activeCampaign.campaign.total_candidates > 0
+                              ? Math.round(
+                                  (activeCampaign.campaign.screened_count /
+                                    activeCampaign.campaign.total_candidates) *
+                                    100,
+                                )
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-body-sm">
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Shortlisted</div>
+                        <div className="font-semibold">
+                          {activeCampaign.campaign.shortlisted_count}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </CardContent>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Failed</div>
+                        <div className="font-semibold">{activeCampaign.campaign.failed_count}</div>
+                      </div>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Drafted</div>
+                        <div className="font-semibold">{activeCampaign.campaign.drafted_count}</div>
+                      </div>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Sent</div>
+                        <div className="font-semibold">{activeCampaign.campaign.sent_count}</div>
+                      </div>
+                      <div className="rounded border border-hairline p-2">
+                        <div className="text-ink-subtle">Campaign ID</div>
+                        <div className="font-mono text-xs">
+                          {activeCampaign.campaign.id.slice(0, 8)}
+                        </div>
+                      </div>
+                    </div>
+                    {campaignMetrics && (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-body-sm">
+                        <div className="rounded border border-hairline p-2">
+                          <div className="text-ink-subtle">Time to screen</div>
+                          <div className="font-semibold">
+                            {campaignMetrics.timeToScreenMs == null
+                              ? 'Pending'
+                              : `${Math.round(campaignMetrics.timeToScreenMs / 1000)}s`}
+                          </div>
+                        </div>
+                        <div className="rounded border border-hairline p-2">
+                          <div className="text-ink-subtle">CV / minute</div>
+                          <div className="font-semibold">
+                            {campaignMetrics.candidatesPerMinute ?? 'Pending'}
+                          </div>
+                        </div>
+                        <div className="rounded border border-hairline p-2">
+                          <div className="text-ink-subtle">Retries</div>
+                          <div className="font-semibold">{campaignMetrics.retryCount}</div>
+                        </div>
+                        <div className="rounded border border-hairline p-2">
+                          <div className="text-ink-subtle">AI latency</div>
+                          <div className="font-semibold">
+                            {Math.round(campaignMetrics.aiLatencyMs / 1000)}s
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {campaignWarnings.filter((warning) => !warning.resolved_at).length > 0 && (
+                      <div className="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                        <div className="font-semibold text-body-sm">Data quality warnings</div>
+                        <ul className="mt-1 list-disc pl-5 text-body-sm">
+                          {campaignWarnings
+                            .filter((warning) => !warning.resolved_at)
+                            .map((warning) => (
+                              <li key={warning.id}>{warning.message}</li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center border-t border-hairline pt-3">
+                      <div className="text-body-sm text-ink-subtle">
+                        Shortlist Report for Hiring Manager
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => setShowReportModal(true)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5"
+                      >
+                        <FileText className="size-4" />
+                        Export and Manage HM Report
+                      </Button>
+                    </div>
+                    <div className="rounded-lg border border-hairline divide-y divide-hairline overflow-hidden">
+                      {activeCampaign.candidates.map(({ campaignCandidate, candidate }: any) => (
+                        <div
+                          key={campaignCandidate.candidate_id}
+                          className="flex items-center justify-between gap-3 p-3 bg-canvas/30"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium truncate">
+                              {candidate?.display_name ?? campaignCandidate.candidate_id}
+                            </div>
+                            <div className="text-xs text-ink-subtle truncate">
+                              {campaignCandidate.error_reason ||
+                                candidate?.email ||
+                                'No candidate detail available'}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {campaignCandidate.status === 'screening_failed' ||
+                            campaignCandidate.status === 'draft_failed' ||
+                            campaignCandidate.status === 'send_failed' ? (
+                              <Badge variant="destructive">{campaignCandidate.status}</Badge>
+                            ) : (
+                              <Badge variant="secondary">{campaignCandidate.status}</Badge>
+                            )}
+                            {campaignCandidate.status === 'screening_failed' ? (
+                              <span className="text-xs text-rose-600">Screening failed</span>
+                            ) : (
+                              <span className="text-xs font-semibold">
+                                {campaignCandidate.fit_score ?? 0}% Fit
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                )}
               </Card>
             )}
 
@@ -2294,7 +2367,7 @@ export function SmartrecruitPage() {
             )}
 
             {/* PIPELINE SCANNING STATE */}
-            {runStatus === 'running' && !activeApproval && (
+            {['running', 'waiting', 'pending'].includes(runStatus || '') && !activeApproval && (
               <Card className="shadow-sm border-hairline bg-canvas/40 py-12 flex flex-col items-center justify-center gap-4">
                 <div className="relative">
                   <div className="size-16 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
@@ -2312,14 +2385,17 @@ export function SmartrecruitPage() {
 
             {/* GATE 2 PANEL: SCORECARD & EMAIL WORKSPACE */}
             {runStatus === 'paused' && isGate2Active && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-300">
+              <div
+                ref={gate2Ref}
+                className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-300 scroll-mt-6"
+              >
                 {/* Left Side: Candidates list */}
                 <div className="lg:col-span-5 flex flex-col gap-4">
                   <Card className="shadow-sm border-hairline overflow-hidden bg-surface flex flex-col h-[600px]">
                     <div className="p-4 border-b border-hairline flex items-center justify-between bg-canvas/30">
                       <div className="flex flex-col gap-0.5">
                         <CardTitle className="text-body-md font-bold text-ink">
-                          Gate 2: Shortlist Candidates ({candidatesList.length})
+                          Gate 2: Shortlist Candidates
                         </CardTitle>
                         <CardDescription className="text-eyebrow">
                           Select candidate to review or edit outreach mail.
@@ -2328,17 +2404,9 @@ export function SmartrecruitPage() {
                       <div className="flex items-center gap-2">
                         <Button
                           size="sm"
-                          variant="secondary"
-                          onClick={handleDeclineWorkflow}
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                        >
-                          Cancel Pipeline
-                        </Button>
-                        <Button
-                          size="sm"
                           onClick={handleApproveOutreachBulk}
                           disabled={isSavingDraft || isApprovingOutreach}
-                          className="bg-primary hover:bg-primary-hover text-white font-medium shadow flex items-center gap-1.5"
+                          className="bg-primary hover:bg-primary-hover text-white font-semibold shadow-sm flex items-center gap-1.5 h-9 px-4 rounded-lg text-xs"
                         >
                           {isApprovingOutreach ? (
                             <>
@@ -2346,7 +2414,10 @@ export function SmartrecruitPage() {
                               <span>Sending...</span>
                             </>
                           ) : (
-                            <span>Approve & Send All</span>
+                            <>
+                              <Send className="size-3.5" />
+                              <span>Approve & Send All</span>
+                            </>
                           )}
                         </Button>
                       </div>
@@ -2524,14 +2595,6 @@ export function SmartrecruitPage() {
                                   className="h-8"
                                 >
                                   {isSavingDraft ? 'Saving...' : 'Save Draft'}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleSendIndividualEmail(editingDraft.id)}
-                                  disabled={sentDrafts[editingDraft.id]}
-                                  className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
-                                >
-                                  {sentDrafts[editingDraft.id] ? 'Sent!' : 'Send Now'}
                                 </Button>
                               </div>
                             </div>

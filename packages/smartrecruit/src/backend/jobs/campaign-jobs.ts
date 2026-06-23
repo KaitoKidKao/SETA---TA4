@@ -421,7 +421,7 @@ export const campaignJobs: TaskList = {
         and(
           eq(campaignCandidates.tenant_id, session.tenant_id),
           eq(campaignCandidates.campaign_id, payload.campaignId),
-          inArray(campaignCandidates.status, ['shortlisted', 'drafting']),
+          inArray(campaignCandidates.status, ['shortlisted', 'drafting', 'screened']),
         ),
       );
     for (const row of rows) {
@@ -479,6 +479,7 @@ export const campaignJobs: TaskList = {
         (await draftOutreach({
           candidateId: payload.candidateId,
           templateId: payload.templateId,
+          campaignId: payload.campaignId,
           session,
         }));
       const inputTokens = 'inputTokens' in draft ? draft.inputTokens : undefined;

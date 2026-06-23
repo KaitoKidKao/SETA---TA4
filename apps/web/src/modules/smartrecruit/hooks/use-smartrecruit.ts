@@ -386,6 +386,7 @@ export function useSlaTracker(filters: { status?: string; search?: string }) {
   return useQuery({
     queryKey: smartrecruitQueryKeys.slaTracker(filters),
     queryFn: () => smartrecruitApi.getSlaTracker(filters),
+    placeholderData: (previousData) => previousData,
   });
 }
 

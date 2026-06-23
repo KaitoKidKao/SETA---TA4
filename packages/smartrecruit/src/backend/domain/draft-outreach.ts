@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { trace as otelTrace, type Span } from '@opentelemetry/api';
 import type { SessionScope } from '@seta/core';
 import { withEmit } from '@seta/core/events';
-import { and, eq, gte } from 'drizzle-orm';
+import { and, eq, gte, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 
@@ -30,6 +30,8 @@ type VerificationResult = z.infer<typeof VerificationSchema>;
 
 import { smartrecruitDb } from '../db/client.ts';
 import {
+  campaignCandidates,
+  campaigns,
   candidates,
   interactionHistories,
   outreachDrafts,
@@ -42,6 +44,7 @@ import { withRetry } from './retry.ts';
 export interface DraftOutreachInput {
   candidateId: string;
   templateId?: string;
+  campaignId?: string;
   session: SessionScope;
   abortSignal?: AbortSignal;
 }
@@ -63,6 +66,7 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
   return tracer.startActiveSpan('smartrecruit.draftOutreach', async (span: Span) => {
     span.setAttribute('candidate_id', input.candidateId);
     if (input.templateId) span.setAttribute('template_id', input.templateId);
+    if (input.campaignId) span.setAttribute('campaign_id', input.campaignId);
 
     try {
       const db = smartrecruitDb();
@@ -83,6 +87,58 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
 
       if (!cand) {
         throw new Error(`Candidate with ID ${input.candidateId} not found.`);
+      }
+
+      // Check for screening outcome (Passed vs Failed)
+      let isRejection = false;
+      let screeningReport: any = null;
+      let jobTitle = 'the position';
+
+      if (input.campaignId) {
+        const [cc] = await db
+          .select()
+          .from(campaignCandidates)
+          .where(
+            and(
+              eq(campaignCandidates.campaign_id, input.campaignId),
+              eq(campaignCandidates.candidate_id, input.candidateId),
+              eq(campaignCandidates.tenant_id, input.session.tenant_id),
+            ),
+          )
+          .limit(1);
+
+        if (cc) {
+          const score = cc.reviewed_fit_score ?? cc.fit_score ?? 0;
+          if (score < 70 || cc.status === 'screening_failed') {
+            isRejection = true;
+          }
+          screeningReport = cc.screening_report;
+        }
+
+        // Fetch campaign to get job title
+        const [campaignRow] = await db
+          .select({ job_title: campaigns.job_title })
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.id, input.campaignId),
+              eq(campaigns.tenant_id, input.session.tenant_id),
+            ),
+          )
+          .limit(1);
+        if (campaignRow) {
+          jobTitle = campaignRow.job_title;
+        }
+      } else {
+        // Fallback to candidate's own fit score
+        const score = cand.fit_score ?? 0;
+        if (score < 70) {
+          isRejection = true;
+        }
+        screeningReport = cand.screening_report;
+        if (cand.applied_position) {
+          jobTitle = cand.applied_position;
+        }
       }
 
       // Check for recent outreach in the last 30 days (Anti-Spam check)
@@ -117,6 +173,22 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
           )
           .limit(1);
         templ = t;
+      } else if (isRejection) {
+        // Find a template designed for rejection / failure
+        const [t] = await db
+          .select()
+          .from(outreachTemplates)
+          .where(
+            and(
+              eq(outreachTemplates.tenant_id, input.session.tenant_id),
+              or(
+                eq(outreachTemplates.use_case, 'Rejection'),
+                eq(outreachTemplates.target_status, 'rejected'),
+              ),
+            ),
+          )
+          .limit(1);
+        templ = t;
       } else {
         const [t] = await db
           .select()
@@ -127,21 +199,44 @@ export async function draftOutreach(input: DraftOutreachInput): Promise<DraftOut
       }
 
       // Fallback default template if none configured/seeded in DB
-      const subjectTemplate =
-        templ?.subject_template ?? 'Career opportunities at SETA for {{candidateName}}';
-      const bodyTemplate =
-        templ?.body_template ??
-        `Hi {{candidateName}},
+      let subjectTemplate: string;
+      let bodyTemplate: string;
+
+      if (isRejection) {
+        subjectTemplate =
+          templ?.subject_template ?? 'Thank you for your application to SETA - {{candidateName}}';
+        bodyTemplate =
+          templ?.body_template ??
+          `Hi {{candidateName}},
+
+Thank you for your interest in the {{jobTitle}} position at SETA and for taking the time to share your background with us.
+
+After carefully reviewing your application and experience, we regret to inform you that we will not be moving forward with your candidacy at this time. Our team was looking for specific criteria, particularly in {{skills}}, that didn't fully align with your current profile.
+
+We will keep your resume in our talent database for future opportunities that match your qualifications.
+
+We wish you the very best in your job search and future professional endeavors.
+
+Sincerely,
+SETA Recruitment Team`;
+      } else {
+        subjectTemplate =
+          templ?.subject_template ?? 'Career opportunities at SETA for {{candidateName}}';
+        bodyTemplate =
+          templ?.body_template ??
+          `Hi {{candidateName}},
 
 We reviewed your impressive background and your experience with {{skills}}. We would love to discuss a potential fit at SETA.
 
 Looking forward to your reply.
 Best regards,
 SETA Recruitment Team`;
-      const templateContext = `Template Name: ${templ?.name ?? 'Default SETA outreach template'}
+      }
+
+      const templateContext = `Template Name: ${templ?.name ?? (isRejection ? 'Default SETA rejection template' : 'Default SETA outreach template')}
 Template Channel: ${templ?.source_channel ?? 'Email'}
-Template Use Case: ${templ?.use_case ?? 'General outreach'}
-Template Target Status: ${templ?.target_status ?? 'Any'}
+Template Use Case: ${templ?.use_case ?? (isRejection ? 'Rejection' : 'General outreach')}
+Template Target Status: ${templ?.target_status ?? (isRejection ? 'rejected' : 'Any')}
 Template Language: ${templ?.language ?? 'English'}`;
 
       // 3. Prepare Anonymization
@@ -188,8 +283,9 @@ Drafting rules:
 2. Do not invent years of experience, seniority, interview availability, salary, offer details, client names, project names, or company names.
 3. Do not mention rejection reasons, internal recruiter notes, fit score, screening flags, or private evaluation details.
 4. Match the template target status/use case. For re-engagement or in-pool candidates, use a light exploratory tone. For shortlisted candidates, use a clearer next-step tone. Do not promise an interview or offer.
-5. Keep the subject concise and specific. Keep the body professional, warm, and under 180 words unless the template is longer.
-6. Preserve placeholders only if the needed value is unknown; otherwise replace them with grounded candidate facts.
+5. If this is a rejection email (template use case is Rejection), maintain a polite, encouraging, and respectful tone. Ground any explanation of missing alignment in the actual candidate context, without revealing internal score numbers or technical flags.
+6. Keep the subject concise and specific. Keep the body professional, warm, and under 180 words unless the template is longer.
+7. Preserve placeholders only if the needed value is unknown; otherwise replace them with grounded candidate facts.
 
 ${templateContext}
 Template Subject: ${subjectTemplate}
@@ -206,6 +302,7 @@ Candidate Current Status: ${cand.status}
 Candidate Source Status: ${cand.source_status ?? 'Unknown'}
 Candidate Pipeline Stage: ${cand.pipeline_stage ?? 'Unknown'}
 Candidate Applied Position: ${cand.applied_position ?? 'Unknown'}
+Job Title: ${jobTitle}
 Candidate Current Title: ${cand.current_title ?? 'Unknown'}
 Candidate Current Company: ${cand.current_company ?? 'Unknown'}
 Candidate Past Companies: ${cand.past_companies ?? 'Unknown'}
@@ -215,6 +312,7 @@ Candidate English Level: ${cand.english_level ?? 'Unknown'}
 Candidate Education: ${[cand.highest_education, cand.education_major].filter(Boolean).join(' - ') || 'Unknown'}
 Candidate Re-engagement Eligible: ${cand.re_engagement_eligible ? 'Yes' : 'No'}
 Candidate Re-engagement Notes: ${cand.re_engagement_notes ?? 'None'}
+Missing skills / gaps (if rejection): ${screeningReport?.gaps?.join(', ') || 'None'}
 Candidate CV Content:
 ${anonymizedCvText}`;
 
@@ -325,8 +423,8 @@ ${body}`;
 
       if (hasRecentOutreach) {
         errorReason = errorReason
-          ? `${errorReason}. [SPAM_WARNING] Cảnh báo: Ứng viên này đã được liên hệ trong vòng 30 ngày qua.`
-          : `[SPAM_WARNING] Cảnh báo: Ứng viên này đã được liên hệ trong vòng 30 ngày qua.`;
+          ? `${errorReason}. [SPAM_WARNING] Warning: This candidate has been contacted within the last 30 days.`
+          : `[SPAM_WARNING] Warning: This candidate has been contacted within the last 30 days.`;
       }
 
       if (!draftResult) {
