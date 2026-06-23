@@ -13,7 +13,7 @@ import { requirePermission, SMARTRECRUIT_WRITE } from '../../rbac.ts';
 import { smartrecruitDb } from '../db/client.ts';
 import { candidates, criteria } from '../db/schema.ts';
 import { upsertCandidateCvEmbedding } from '../embeddings/vector-store.ts';
-import { anonymizeCvText } from './anonymize.ts';
+import { anonymizeCvText, buildCanonicalContactDetails } from './anonymize.ts';
 import { getModelConfig } from './model.ts';
 import { performOcr } from './ocr.ts';
 import { withRetry } from './retry.ts';
@@ -126,7 +126,14 @@ export interface ScreenCvOutput {
     scoringVersion?: string;
     model?: string;
     ocrSource?: string;
+    contactDetails?: {
+      name: string;
+      email: string;
+      phone: string | null;
+    };
   };
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 function calculateDurationInMonths(startStr: string, endStr: string): number {
@@ -235,6 +242,11 @@ export async function screenCv(input: ScreenCvInput): Promise<ScreenCvOutput> {
       const anonymizedResult = await anonymizeCvText(cvContentText, input.candidateName);
       const anonymizedCvText = anonymizedResult.anonymizedText;
       const piiMapping = anonymizedResult.mapping;
+      const contactDetails = buildCanonicalContactDetails({
+        candidateName: input.candidateName,
+        candidateEmail: input.candidateEmail,
+        candidatePhone: input.candidatePhone,
+      });
 
       const response = await withRetry(() =>
         agent.generate(
@@ -318,6 +330,8 @@ ${anonymizedCvText}`,
       if (!parsed) {
         throw new Error('Failed to screen CV. LLM returned empty result.');
       }
+      const inputTokens = response.usage?.inputTokens ?? 0;
+      const outputTokens = response.usage?.outputTokens ?? 0;
 
       // Calculate Years of Experience (YOE)
       let totalMonths = 0;
@@ -465,6 +479,7 @@ ${anonymizedCvText}`,
         },
         flags: [...new Set([...(parsed.fitAnalysis.flags || []), ...deterministic.flags])],
         piiMapping,
+        contactDetails,
         solvedTeamGaps,
         missingTeamGaps,
         appliedTeamGaps,
@@ -552,6 +567,8 @@ ${anonymizedCvText}`,
         fitScore: finalFitScore,
         totalYoe,
         report: screeningReport,
+        inputTokens,
+        outputTokens,
       };
     } catch (err) {
       span.recordException(err as Error);

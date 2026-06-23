@@ -15,6 +15,14 @@ export interface PgContainerHandle {
  * Postgres process. Set `TESTCONTAINERS_REUSE_ENABLE=false` to disable.
  */
 export async function startPgContainer(opts?: { image?: string }): Promise<PgContainerHandle> {
+  if (process.env.LOCAL_PG_URL) {
+    const baseUrl = process.env.LOCAL_PG_URL.replace(/\/[^/]+$/, '');
+    return {
+      baseUrl,
+      templateDbName: '',
+      stop: async () => {},
+    };
+  }
   const image = opts?.image ?? 'pgvector/pgvector:pg17-trixie';
   const c: StartedPostgreSqlContainer = await new PostgreSqlContainer(image)
     .withUsername('seta')

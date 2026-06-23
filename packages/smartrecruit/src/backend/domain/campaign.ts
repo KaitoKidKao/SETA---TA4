@@ -105,6 +105,18 @@ const DRAFTED_STATUSES = new Set<CampaignCandidateStatus>([
   'sent',
   'send_failed',
 ]);
+const CANCELABLE_CANDIDATE_STATUSES: CampaignCandidateStatus[] = [
+  'queued',
+  'screening',
+  'screened',
+  'shortlisted',
+  'screening_failed',
+  'drafting',
+  'drafted',
+  'draft_failed',
+  'sending',
+  'send_failed',
+];
 
 export async function createSmartrecruitCampaign(
   input: CreateCampaignInput,
@@ -287,6 +299,56 @@ export async function updateCampaignStatus(args: {
       updated_at: new Date(),
     })
     .where(and(eq(campaigns.id, args.campaignId), eq(campaigns.tenant_id, args.tenantId)));
+}
+
+export async function cancelSmartrecruitCampaign(args: {
+  campaignId: string;
+  tenantId: string;
+  userId: string;
+  reason?: string;
+}): Promise<CampaignView | null> {
+  const db = smartrecruitDb();
+  const [campaign] = await db
+    .select({ id: campaigns.id, status: campaigns.status })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, args.campaignId), eq(campaigns.tenant_id, args.tenantId)))
+    .limit(1);
+
+  if (!campaign) return null;
+
+  const reason =
+    args.reason?.trim() || `Campaign canceled by user ${args.userId} after a bad or stale run.`;
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(campaigns)
+      .set({
+        status: 'canceled',
+        error_reason: reason,
+        completed_at: now,
+        updated_at: now,
+      })
+      .where(and(eq(campaigns.id, args.campaignId), eq(campaigns.tenant_id, args.tenantId)));
+
+    await tx
+      .update(campaignCandidates)
+      .set({
+        status: 'rejected',
+        error_reason: reason,
+        updated_at: now,
+      })
+      .where(
+        and(
+          eq(campaignCandidates.campaign_id, args.campaignId),
+          eq(campaignCandidates.tenant_id, args.tenantId),
+          inArray(campaignCandidates.status, CANCELABLE_CANDIDATE_STATUSES),
+        ),
+      );
+  });
+
+  await recomputeCampaignCounters({ campaignId: args.campaignId, tenantId: args.tenantId });
+  return getCampaignView({ campaignId: args.campaignId, tenantId: args.tenantId });
 }
 
 export async function addCandidatesToCampaign(args: {

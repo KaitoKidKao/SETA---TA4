@@ -506,3 +506,187 @@ This file records completed implementation steps so another IDE session or agent
 ### Conclusion
 
 - Phase 3 is a UI/helper scaffold, not a completed enterprise implementation. Do not mark Phase 3 complete until the routes invoke real integrations, secrets/configuration are persisted securely, migrations are committed and automated acceptance tests pass.
+
+## 2026-06-23 - Manual Talent Pool Browsing
+
+### Completed
+
+- Removed automatic Talent Pool search when Gate 1 opens.
+- Added an explicit `Browse Existing Candidates` button; vector search and candidate screening now run only after recruiter action.
+- After a search, the button becomes `Refresh Results` so repeated token-consuming searches remain explicit.
+- Kept `Re-engage Candidates` separate and visible only when search results exist.
+- Removed the automatic pool re-search after adding selected candidates; added candidates are removed from the current result list locally.
+- Added distinct not-searched, loading, empty-result and error states.
+- Reset Talent Pool browse state when the approval/run changes or the pipeline is reset.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm --filter=@seta/web typecheck` passed.
+- `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- Code search confirmed `fetchPoolCandidates` is called only by `handleBrowseTalentPool`, not by the Gate 1 effect or re-engagement success path.
+
+### Manual Retest
+
+- Start the dev server and open a campaign at Gate 1.
+- Confirm no `/pool-search` request is made automatically.
+- Click `Browse Existing Candidates` and confirm exactly one request is made.
+- Select candidates and click `Re-engage Candidates`; confirm no second pool-search request is triggered automatically.
+
+## 2026-06-23 - Retrieval-Only Talent Pool Recommendations
+
+### Completed
+
+- Split Talent Pool recommendation from the existing batch-screening operation.
+- Campaign `/pool-search` now uses `recommendCandidatePool` and does not call `screenCv` or any screening LLM.
+- Kept `criteria/:id/screen-candidates` on the existing `screenCandidatePool` path for explicit batch screening.
+- Added a default cosine similarity threshold of `0.55` and return `similarityScore` to the UI.
+- Excluded candidates already present in the campaign.
+- Excluded candidates contacted during the previous 30 days.
+- Excluded rejected candidates unless `re_engagement_eligible` is true.
+- Metadata fallback is LLM-free and accepts only an exact historical position match or explicit re-engagement eligibility.
+- Metadata fallback applies tenant/status/position/exclusion filters in SQL with a bounded result set instead of loading the tenant's full candidate table.
+- Updated Talent Pool cards to show vector similarity rather than a stale fit score from another criteria.
+- Selected candidates continue to enter the campaign as `queued`; normal campaign workers screen only those selected candidates after Gate 1 approval.
+
+### Files
+
+- `packages/smartrecruit/src/backend/domain/screen-candidate-pool.ts`
+- `packages/smartrecruit/src/backend/http/routes.ts`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+- `packages/smartrecruit/tests/unit/candidate-pool-recommendation.test.ts`
+
+### Verification
+
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+- `pnpm --filter=@seta/web typecheck` passed.
+- Biome passed on all four changed implementation/test files.
+- Candidate recommendation unit tests passed: 1 file, 3 tests.
+- Code search confirmed campaign pool search calls `recommendCandidatePool`; only the explicit batch-screening endpoint calls `screenCandidatePool`/`screenCv`.
+
+### Manual Retest
+
+- At Gate 1, click Browse and verify the request returns quickly without screening/LLM logs.
+- Confirm rejected non-reengageable and recently contacted candidates are absent.
+- Select candidates, approve Gate 1 and confirm only selected candidates enter queued/screening states.
+
+## 2026-06-23 - Stable Contact Details And Gate 2 Draft Synchronization
+
+### Completed
+
+- Added canonical `screening_report.contactDetails` with stable `name`, `email` and `phone` values sourced from validated candidate inputs.
+- Kept the full `piiMapping` only for redact/de-anonymize behavior; the scorecard no longer renders arbitrary LLM-generated placeholders such as city, country or university as contact fields.
+- Added validation for residual LLM mapping entries: placeholders must use bracketed uppercase format, occur in anonymized text, have a non-empty original value and may not overwrite deterministic mappings.
+- Updated Candidate Scorecard to render canonical contact rows and fall back to candidate database columns for historical screening reports.
+- Updated Gate 2 selection synchronization to prefer a candidate with an available outreach draft.
+- Draft polling now attaches a newly created draft automatically but preserves recruiter edits when the current draft ID has not changed.
+- Completed the in-progress TanStack Query page refactor sufficiently for Web typecheck: query-dependent state is declared before hooks, the workflow-start hook is wired, Talent Pool handlers use the new API/mutation layer and unused imports/helpers were removed.
+
+### Files
+
+- `packages/smartrecruit/src/backend/domain/anonymize.ts`
+- `packages/smartrecruit/src/backend/domain/screen-cv.ts`
+- `apps/web/src/modules/smartrecruit/components/CandidateScorecard.tsx`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+- `packages/smartrecruit/tests/unit/contact-details.test.ts`
+
+### Verification
+
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+- `pnpm --filter=@seta/web typecheck` passed.
+- Biome passed on all five related implementation/test files.
+- Contact details unit tests passed: 1 file, 2 tests.
+
+### Manual Retest
+
+- Run screening for multiple CV formats and confirm Decoded Contact Details always uses the same Name/Email/Phone labels.
+- Enter Gate 2 normally and confirm the first candidate with a generated draft immediately shows Personalized Outreach Email without replay.
+- Edit a draft, wait through multiple polling intervals and confirm unsaved text is not overwritten.
+
+## 2026-06-23 - SmartRecruit New Campaign UX And Launch Responsiveness
+
+### Completed
+
+- Fixed the Launch Screening Pipeline delay by switching the UI to the Active Pipeline tab immediately after the backend returns `campaignId` and `runId`.
+- Changed the initial campaign progress fetch to run in the background; a progress refresh failure now shows a toast instead of blocking the transition.
+- Added explicit launch loading states: `Creating campaign...` and `Starting workflow...`.
+- Moved the launch CTA directly under the JD form so users do not need to scroll past demo-only widgets before starting a real campaign.
+- Collapsed Mock Dataset Mode, mock pool screening, passed mock candidates and HM SLA utilities behind `Demo & Operations Tools`.
+- Kept the production path focused on the main flow: configure JD, upload CVs, launch, then monitor Active Pipeline.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm exec biome format --write apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
+
+### Manual Retest
+
+- Open `/smartrecruit`, enter JD and upload at least one ready CV.
+- Click `Launch Screening Pipeline` and confirm the button immediately shows a loading label.
+- Confirm the screen switches to `Active Pipeline` as soon as the workflow start request returns instead of waiting for the first campaign progress query.
+- Expand `Demo & Operations Tools` only when mock dataset, mock pool screening or SLA testing is needed.
+
+## 2026-06-23 - SmartRecruit Cancel Pipeline Control
+
+### Completed
+
+- Added a tenant-scoped cancel endpoint: `POST /api/smartrecruit/v1/campaigns/:id/cancel`.
+- Added `cancelSmartrecruitCampaign`, which marks the campaign as `canceled`, stores a cancel reason and marks unsent/non-terminal campaign candidates as `rejected`.
+- Added Graphile worker guards so pending campaign coordinator and per-candidate jobs skip canceled campaigns.
+- Added transaction-time cancel checks so an item job that was already running does not overwrite a campaign after it has been canceled.
+- Added frontend API/hook support via `smartrecruitApi.cancelCampaign` and `useCancelCampaign`.
+- Added best-effort frontend cancellation for the linked agent workflow run via `POST /api/agent/v1/workflows/runs/:runId/cancel`.
+- Added `Cancel Pipeline` button in Active Pipeline for non-terminal campaigns.
+- Added a dismissed-run guard so a canceled still-running workflow run is not automatically re-selected by the Active Pipeline auto-sync effect.
+
+### Files
+
+- `packages/smartrecruit/src/backend/domain/campaign.ts`
+- `packages/smartrecruit/src/backend/http/routes.ts`
+- `packages/smartrecruit/src/backend/jobs/campaign-jobs.ts`
+- `apps/web/src/modules/smartrecruit/api/smartrecruit-client.ts`
+- `apps/web/src/modules/smartrecruit/hooks/use-smartrecruit.ts`
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `pnpm exec biome format --write ...` passed on the six changed files.
+- `pnpm --filter=@seta/smartrecruit typecheck` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed.
+- `pnpm --filter=@seta/web exec tsc -b --noEmit` passed again after wiring linked workflow-run cancellation.
+- `pnpm exec biome check ...` returned exit code 0; it still reports existing warnings in SmartRecruit web client/hooks (`any` and non-null assertions).
+
+### Manual Retest
+
+- Start a campaign and wait until it is pending/running in Active Pipeline.
+- Click `Cancel Pipeline`, confirm the prompt and verify the UI returns to New Campaign.
+- Refresh the page and confirm the canceled run is not auto-selected again.
+- Verify the campaign row has status `canceled` and remaining candidates are `rejected` rather than stuck in `queued`, `screening`, `drafting` or `sending`.
+- Check worker logs after cancel; pending SmartRecruit campaign jobs should skip without changing the canceled campaign.
+
+## 2026-06-23 - SmartRecruit Cancel Confirmation Dialog
+
+### Completed
+
+- Replaced the browser `window.confirm` cancel prompt with an in-app `Dialog`.
+- The cancel confirmation no longer shows the browser-origin title from the native confirm dialog.
+- Added campaign context in the dialog: job title, campaign status and short campaign ID.
+- Kept cancel action disabled while cancellation is pending and shows the existing loading state.
+- Changed the dialog status separator to ASCII `-` to avoid encoding artifacts.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- `rg` confirmed `window.confirm` is no longer used in the SmartRecruit page.
+- `pnpm exec biome check apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx` passed.
