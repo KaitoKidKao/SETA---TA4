@@ -1,7 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Mastra } from '@mastra/core';
-import { AgentRegistry } from '@seta/agent-sdk';
 import type { ContributionRegistry } from '@seta/core';
 import { smartrecruitAgentTools } from './backend/agent-tools.ts';
 import * as schema from './backend/db/schema.ts';
@@ -22,9 +21,11 @@ import { SMARTRECRUIT_PERMISSIONS } from './rbac.ts';
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 export function registerSmartrecruitContributions(reg: ContributionRegistry): void {
-  // Register workflow to AgentRegistry (static registry used by agent routes)
-  AgentRegistry.registerWorkflow(smartrecruitWorkflowSpec);
-
+  // NOTE: the workflow spec is registered into AgentRegistry from the
+  // engine-pinned side-effect module `@seta/smartrecruit/agent-tools/register`
+  // (imported by the agent package's init-registry before freeze). Registering
+  // it here as well would double-register in single-instance dev and, in the
+  // bundled build, write to the wrong @seta/agent-sdk singleton.
   reg.module({
     name: 'smartrecruit',
     schema,

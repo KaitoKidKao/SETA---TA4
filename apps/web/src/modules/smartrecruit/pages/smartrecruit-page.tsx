@@ -1202,7 +1202,7 @@ export function SmartrecruitPage() {
                         ? 'Creating campaign...'
                         : startWorkflowMutation.isPending
                           ? 'Starting workflow...'
-                          : `Launch Screening Pipeline${uploadedCvs.length > 0 ? ` (${uploadedCvs.length} CVs)` : ''}`}
+                          : `Launch Screening Pipeline: ''}`}
                     </Button>
                     {errorMsg && (
                       <div className="flex items-center gap-2 bg-destructive-tint/20 border border-destructive/20 text-destructive text-body-sm p-3 rounded-lg">

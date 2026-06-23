@@ -5,6 +5,7 @@ import { AgentRegistry } from '@seta/agent-sdk';
 import '@seta/planner/agent-tools/register';
 import '@seta/identity/agent-tools/register';
 import '@seta/knowledge/agent-tools/register';
+import '@seta/smartrecruit/agent-tools/register';
 import './agent-tools/register-meta.ts';
 
 export function initAgentRegistry(): void {
