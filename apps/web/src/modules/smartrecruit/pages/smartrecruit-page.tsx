@@ -2015,10 +2015,11 @@ export function SmartrecruitPage() {
                               <span>Confirming...</span>
                             </>
                           ) : (
-                            <span>Confirm Criteria</span>
+                            <>
+                              <CheckCircle className="size-4" />
+                              <span>Confirm Criteria & Run Screening</span>
+                            </>
                           )}
-                          <CheckCircle className="size-4" />
-                          Confirm & Run Screener
                         </Button>
                       </div>
                     </div>

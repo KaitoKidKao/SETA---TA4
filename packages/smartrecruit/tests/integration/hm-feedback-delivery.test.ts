@@ -11,7 +11,7 @@
  */
 
 import { eq, sql } from 'drizzle-orm';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hmFeedbackReminderAttempts, hmFeedbackRequests } from '../../src/backend/db/schema.ts';
 import {
   approveHmFeedbackReminder,
@@ -19,6 +19,27 @@ import {
   sendHmFeedbackReminderAttempt,
 } from '../../src/backend/domain/hm-feedback.ts';
 import { withSmartrecruitTestDb } from './helpers.ts';
+
+// ---------------------------------------------------------------------------
+// Hoisted Module Mock
+// ---------------------------------------------------------------------------
+
+const mockSend = vi.fn();
+
+vi.mock('@seta/shared-mailer', async (importActual) => {
+  const actual = await importActual<typeof import('@seta/shared-mailer')>();
+  return {
+    ...actual,
+    resolveTransport: async () => ({
+      transport: {
+        send: (input: any) => mockSend(input),
+      },
+      sender: 'noreply@example.com',
+      senderDisplayName: 'SETA',
+      transportKind: 'dev-stub',
+    }),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,28 +61,15 @@ function makePendingRequest(tenantId: string, overdue = true) {
   };
 }
 
-// Minimal spy transport injected via module mock
-function makeFakeTransport(opts: { fail?: boolean } = {}) {
-  const sent: Array<{ to: string; subject: string }> = [];
-  return {
-    sent,
-    transport: {
-      kind: 'dev-stub' as const,
-      async send(input: { to: string; subject: string; html: string; text: string }) {
-        if (opts.fail)
-          throw Object.assign(new Error('SMTP_CONNECTION_REFUSED'), { name: 'SmtpError' });
-        sent.push({ to: input.to, subject: input.subject });
-        return { messageId: `fake:${crypto.randomUUID()}` };
-      },
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('HM feedback reminder delivery (task 4.8)', () => {
+  beforeEach(() => {
+    mockSend.mockReset();
+  });
+
   it('approved delivery succeeds → status sent, reminder_sent event emitted', async () => {
     await withSmartrecruitTestDb(async ({ db, session }) => {
       const [request] = await db
@@ -80,26 +88,13 @@ describe('HM feedback reminder delivery (task 4.8)', () => {
       expect(attempt.status).toBe('queued');
       expect(addJob).toHaveBeenCalledOnce();
 
-      // Simulate what the worker does — send using a fake transport injected via vi.mock
-      const fake = makeFakeTransport();
-      vi.doMock('@seta/shared-mailer', async (importActual) => {
-        const actual = await importActual<typeof import('@seta/shared-mailer')>();
-        return {
-          ...actual,
-          resolveTransport: async () => ({
-            transport: fake.transport,
-            sender: 'noreply@example.com',
-            senderDisplayName: 'SETA',
-            transportKind: 'dev-stub',
-          }),
-        };
+      const fakeSent: any[] = [];
+      mockSend.mockImplementation(async (input: any) => {
+        fakeSent.push({ to: input.to, subject: input.subject });
+        return { messageId: `fake:${crypto.randomUUID()}` };
       });
 
-      // Re-import after mock
-      const { sendHmFeedbackReminderAttempt: send } = await import(
-        '../../src/backend/domain/hm-feedback.ts'
-      );
-      await send({ attemptId: attempt.id, userId: session.user_id });
+      await sendHmFeedbackReminderAttempt({ attemptId: attempt.id, userId: session.user_id });
 
       const [updated] = await db
         .select()
@@ -110,6 +105,7 @@ describe('HM feedback reminder delivery (task 4.8)', () => {
       expect(updated?.status).toBe('sent');
       expect(updated?.sent_at).not.toBeNull();
       expect(updated?.provider_message_id).toMatch(/^fake:/);
+      expect(fakeSent).toHaveLength(1);
 
       // Verify the reminder_sent domain event was committed
       const events = await db.execute(
@@ -117,8 +113,6 @@ describe('HM feedback reminder delivery (task 4.8)', () => {
             AND event_type = 'smartrecruit.hm_feedback.reminder_sent'`,
       );
       expect(events.rows).toHaveLength(1);
-
-      vi.doUnmock('@seta/shared-mailer');
     });
   });
 
@@ -192,26 +186,13 @@ describe('HM feedback reminder delivery (task 4.8)', () => {
       });
 
       // Inject failing transport
-      const fake = makeFakeTransport({ fail: true });
-      vi.doMock('@seta/shared-mailer', async (importActual) => {
-        const actual = await importActual<typeof import('@seta/shared-mailer')>();
-        return {
-          ...actual,
-          resolveTransport: async () => ({
-            transport: fake.transport,
-            sender: 'noreply@example.com',
-            senderDisplayName: 'SETA',
-            transportKind: 'dev-stub',
-          }),
-        };
+      mockSend.mockImplementation(async () => {
+        throw Object.assign(new Error('SMTP_CONNECTION_REFUSED'), { name: 'SmtpError' });
       });
 
-      const { sendHmFeedbackReminderAttempt: send } = await import(
-        '../../src/backend/domain/hm-feedback.ts'
-      );
-      await expect(send({ attemptId: attempt.id, userId: session.user_id })).rejects.toThrow(
-        /SMTP_CONNECTION_REFUSED/i,
-      );
+      await expect(
+        sendHmFeedbackReminderAttempt({ attemptId: attempt.id, userId: session.user_id }),
+      ).rejects.toThrow(/SMTP_CONNECTION_REFUSED/i);
 
       const [failed] = await db
         .select()
@@ -228,8 +209,6 @@ describe('HM feedback reminder delivery (task 4.8)', () => {
             AND event_type = 'smartrecruit.hm_feedback.reminder_failed'`,
       );
       expect(events.rows).toHaveLength(1);
-
-      vi.doUnmock('@seta/shared-mailer');
     });
   });
 
@@ -248,33 +227,18 @@ describe('HM feedback reminder delivery (task 4.8)', () => {
         addJob,
       });
 
-      // Simulate a successful send first
-      const fake = makeFakeTransport();
-      vi.doMock('@seta/shared-mailer', async (importActual) => {
-        const actual = await importActual<typeof import('@seta/shared-mailer')>();
-        return {
-          ...actual,
-          resolveTransport: async () => ({
-            transport: fake.transport,
-            sender: 'noreply@example.com',
-            senderDisplayName: 'SETA',
-            transportKind: 'dev-stub',
-          }),
-        };
+      const fakeSent: any[] = [];
+      mockSend.mockImplementation(async (input: any) => {
+        fakeSent.push({ to: input.to, subject: input.subject });
+        return { messageId: `fake:${crypto.randomUUID()}` };
       });
 
-      const { sendHmFeedbackReminderAttempt: send } = await import(
-        '../../src/backend/domain/hm-feedback.ts'
-      );
-      await send({ attemptId: attempt.id, userId: session.user_id });
+      await sendHmFeedbackReminderAttempt({ attemptId: attempt.id, userId: session.user_id });
 
       // A second call on the same attempt (already sent) must be a no-op
-      await send({ attemptId: attempt.id, userId: session.user_id });
+      await sendHmFeedbackReminderAttempt({ attemptId: attempt.id, userId: session.user_id });
 
-      const sentCount = fake.sent.length;
-      expect(sentCount).toBe(1); // transport.send only called once
-
-      vi.doUnmock('@seta/shared-mailer');
+      expect(fakeSent).toHaveLength(1); // transport.send only called once
     });
   });
 
