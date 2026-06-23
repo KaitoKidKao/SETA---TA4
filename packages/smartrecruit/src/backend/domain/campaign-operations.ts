@@ -100,7 +100,7 @@ export async function refreshCampaignWarnings(args: { campaignId: string; tenant
       .from(criteria)
       .where(and(eq(criteria.tenant_id, args.tenantId), eq(criteria.id, view.campaign.criteria_id)))
       .limit(1);
-    if (criterion && !criterion.jd_id) {
+    if (criterion && !criterion.jd_id && criterion.external_criteria_id) {
       desired.push({
         warningCode: 'CRITERIA_JD_ID_MISSING',
         severity: 'warning',

@@ -391,13 +391,17 @@ export function SmartrecruitPage() {
   const dataWarnings = useMemo(() => {
     const list: string[] = [];
     if (activeCriteria) {
-      const jdId = activeCriteria.jd_id || activeCriteria.external_criteria_id;
-      if (!jdId) {
-        list.push('Warning: linked job description ID (jd_id) was not found.');
-      } else if (!/^[A-Z]{2,4}-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/.test(jdId) && jdId.length <= 6) {
-        list.push(
-          `Warning: linked JD ID (${jdId}) may not match the full expected format (example: JD-AI-SR-001).`,
-        );
+      if (!activeCriteria.jd_id) {
+        if (activeCriteria.external_criteria_id) {
+          list.push('Warning: linked job description ID (jd_id) was not found.');
+        }
+      } else {
+        const jdId = activeCriteria.jd_id;
+        if (!/^[A-Z]{2,4}-[A-Z]{2,4}-[A-Z]{2,4}-\d{3}$/.test(jdId) && jdId.length <= 6) {
+          list.push(
+            `Warning: linked JD ID (${jdId}) may not match the full expected format (example: JD-AI-SR-001).`,
+          );
+        }
       }
       if (!activeCriteria.must_have_skills || activeCriteria.must_have_skills.length === 0) {
         list.push('Warning: must-have skills are not configured for this screening run.');
@@ -2017,10 +2021,11 @@ export function SmartrecruitPage() {
                               <span>Confirming...</span>
                             </>
                           ) : (
-                            <span>Confirm Criteria</span>
+                            <>
+                              <CheckCircle className="size-4" />
+                              <span>Confirm Criteria & Run Screening</span>
+                            </>
                           )}
-                          <CheckCircle className="size-4" />
-                          Confirm & Run Screener
                         </Button>
                       </div>
                     </div>
