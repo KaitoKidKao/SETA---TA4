@@ -80,3 +80,5 @@ team-4
 # history.md
 
 openspec/
+.agents/
+.agent/
