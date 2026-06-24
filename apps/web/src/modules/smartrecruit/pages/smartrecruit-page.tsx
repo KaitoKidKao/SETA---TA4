@@ -299,21 +299,43 @@ export function SmartrecruitPage() {
 
   const isPipelineProcessing = ['running', 'waiting', 'pending'].includes(runStatus || '');
   const activeCampaignStatus = activeCampaign?.campaign.status;
-  const isScreeningOrLater =
+  const pipelineStep =
+    runStatus === 'success' ||
+    ['sending', 'sent', 'completed', 'completed_with_errors'].includes(activeCampaignStatus ?? '')
+      ? 4
+      : isGate2Active ||
+          ['drafting', 'drafting_completed', 'awaiting_outreach_approval'].includes(
+            activeCampaignStatus ?? '',
+          )
+        ? 3
+        : ['screening', 'screening_completed'].includes(activeCampaignStatus ?? '')
+          ? 2
+          : 1;
+  const isCampaignProcessing =
     activeCampaignStatus != null &&
-    [
-      'screening',
-      'screening_completed',
-      'drafting',
-      'drafting_completed',
-      'sending',
-      'sent',
-      'completed',
-      'completed_with_errors',
-    ].includes(activeCampaignStatus);
-  const isJdAnalysisPhase =
-    isPipelineProcessing && !activeApproval && !isScreeningOrLater && !activeCriteria;
-  const isCandidateAnalysisPhase = isPipelineProcessing && !activeApproval && !isJdAnalysisPhase;
+    !['completed', 'completed_with_errors', 'failed', 'canceled'].includes(activeCampaignStatus);
+  const isPipelineDisplayProcessing =
+    runStatus !== 'paused' && (isPipelineProcessing || isCampaignProcessing);
+  const pipelineDisplayStatus =
+    runStatus === 'paused'
+      ? 'paused'
+      : activeCampaignStatus === 'completed'
+        ? 'success'
+        : activeCampaignStatus === 'completed_with_errors'
+          ? 'completed_with_errors'
+          : isPipelineDisplayProcessing
+            ? 'processing'
+            : runStatus;
+
+  const pipelineStepClass = (step: number): string => {
+    if (pipelineStep > step) return 'bg-emerald-500 border-emerald-600 text-white';
+    if (pipelineStep < step) return 'bg-surface-1 border-hairline-strong text-ink-subtle';
+    if (pipelineDisplayStatus === 'success') {
+      return 'bg-emerald-500 border-emerald-600 text-white';
+    }
+    if (pipelineDisplayStatus === 'paused') return 'bg-amber-500 border-amber-600 text-white';
+    return 'bg-primary border-primary text-white';
+  };
 
   const criteriaIdToLoad = isGate1Active
     ? activeApproval?.proposedPayload?.primary?.argsPatch?.criteriaId || null
@@ -1419,11 +1441,11 @@ export function SmartrecruitPage() {
                       <RefreshCw
                         className={cn(
                           'size-4',
-                          isPipelineProcessing
+                          isPipelineDisplayProcessing
                             ? 'text-blue-500 animate-spin'
-                            : runStatus === 'paused'
+                            : pipelineDisplayStatus === 'paused'
                               ? 'text-amber-500'
-                              : runStatus === 'success'
+                              : pipelineDisplayStatus === 'success'
                                 ? 'text-emerald-500'
                                 : 'text-ink-subtle',
                         )}
@@ -1433,20 +1455,22 @@ export function SmartrecruitPage() {
                         <span
                           className={cn(
                             'font-bold px-2 py-0.5 rounded text-[11px] uppercase tracking-wider',
-                            isPipelineProcessing
+                            isPipelineDisplayProcessing
                               ? 'bg-blue-50 text-blue-600 border border-blue-200 animate-pulse'
-                              : runStatus === 'paused'
+                              : pipelineDisplayStatus === 'paused'
                                 ? 'bg-amber-50 text-amber-600 border border-amber-200'
-                                : runStatus === 'success'
+                                : pipelineDisplayStatus === 'success'
                                   ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                                  : 'bg-canvas text-ink-subtle border border-hairline',
+                                  : pipelineDisplayStatus === 'completed_with_errors'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'bg-canvas text-ink-subtle border border-hairline',
                           )}
                         >
-                          {runStatus === 'waiting'
+                          {isPipelineDisplayProcessing
                             ? 'Processing'
-                            : runStatus === 'paused'
+                            : pipelineDisplayStatus === 'paused'
                               ? 'Action Required'
-                              : runStatus || 'Idle'}
+                              : pipelineDisplayStatus?.replaceAll('_', ' ') || 'Idle'}
                         </span>
                       </span>
                     </div>
@@ -1464,11 +1488,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          runStatus === 'paused' && isGate1Active
-                            ? 'bg-amber-500 border-amber-600 text-white'
-                            : isJdAnalysisPhase
-                              ? 'bg-primary border-primary text-white'
-                              : 'bg-surface-1 border-hairline-strong text-ink-subtle',
+                          pipelineStepClass(1),
                         )}
                       >
                         1
@@ -1481,9 +1501,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          isCandidateAnalysisPhase
-                            ? 'bg-amber-500 border-amber-600 text-white'
-                            : 'bg-surface-1 border-hairline-strong text-ink-subtle',
+                          pipelineStepClass(2),
                         )}
                       >
                         2
@@ -1496,9 +1514,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          runStatus === 'paused' && isGate2Active
-                            ? 'bg-amber-500 border-amber-600 text-white'
-                            : 'bg-surface-1 border-hairline-strong text-ink-subtle',
+                          pipelineStepClass(3),
                         )}
                       >
                         3
@@ -1511,9 +1527,7 @@ export function SmartrecruitPage() {
                       <div
                         className={cn(
                           'size-7 rounded-full flex items-center justify-center text-body-sm font-bold border-2',
-                          runStatus === 'success'
-                            ? 'bg-emerald-500 border-emerald-600 text-white'
-                            : 'bg-surface-1 border-hairline-strong text-ink-subtle',
+                          pipelineStepClass(4),
                         )}
                       >
                         4
@@ -2194,7 +2208,7 @@ export function SmartrecruitPage() {
             )}
 
             {/* PIPELINE SCANNING STATE */}
-            {isPipelineProcessing && !activeApproval && (
+            {isPipelineDisplayProcessing && !activeApproval && (
               <Card className="shadow-sm border-hairline bg-canvas/40 py-12 flex flex-col items-center justify-center gap-4">
                 <div className="relative">
                   <div className="size-16 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
@@ -2202,14 +2216,22 @@ export function SmartrecruitPage() {
                 </div>
                 <div className="flex flex-col items-center gap-1 text-center">
                   <h2 className="text-body-lg font-bold text-ink">
-                    {isJdAnalysisPhase
+                    {pipelineStep === 1
                       ? 'Analyzing Job Description...'
-                      : 'Analyzing candidate CVs...'}
+                      : pipelineStep === 2
+                        ? 'Analyzing candidate CVs...'
+                        : pipelineStep === 3
+                          ? 'Drafting outreach emails...'
+                          : 'Dispatching outreach emails...'}
                   </h2>
                   <p className="text-body-sm text-ink-subtle max-w-md">
-                    {isJdAnalysisPhase
+                    {pipelineStep === 1
                       ? 'Our AI agent is extracting screening criteria from the job description before Gate 1 review.'
-                      : 'Our AI agent is matching candidates against the criteria, calculating work duration, and checking for hallucination-free outreach.'}
+                      : pipelineStep === 2
+                        ? 'Our AI agent is matching candidates against the criteria and calculating evidence-based fit scores.'
+                        : pipelineStep === 3
+                          ? 'The system is preparing and validating personalized outreach drafts.'
+                          : 'Approved outreach is being dispatched and delivery status will update per candidate.'}
                   </p>
                 </div>
               </Card>

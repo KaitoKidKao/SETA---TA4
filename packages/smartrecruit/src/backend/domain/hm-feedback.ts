@@ -278,6 +278,16 @@ export async function prepareHmFeedbackReminderDraft(input: {
     feedbackStatus: request.feedback_status,
     now: input.now,
   });
+  const approval = canApproveReminder({
+    state: sla.state,
+    hiringManagerEmail: request.hiring_manager_email,
+  });
+  if (!approval.allowed) {
+    throw new SmartrecruitError('CONFLICT', approval.reason, {
+      feedbackRequestId: request.id,
+      slaState: sla.state,
+    });
+  }
   const stage = reminderStageForState(sla.state);
   if (!stage) throw new Error('HM feedback request is not eligible for a reminder.');
 

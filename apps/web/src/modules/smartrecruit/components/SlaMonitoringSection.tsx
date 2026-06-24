@@ -23,7 +23,13 @@ import {
   Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useApproveSlaReminder, useImportSlaTracker, useRetrySlaReminder, useSlaTracker } from '..';
+import {
+  useApproveSlaReminder,
+  useImportSlaTracker,
+  useRetrySlaReminder,
+  useSlaTracker,
+  useUpdateSlaContact,
+} from '..';
 
 type SlaState = 'on_track' | 'due_soon' | 'overdue' | 'submitted' | 'data_error';
 type SlaFilter = 'all' | SlaState;
@@ -82,6 +88,7 @@ export function SlaMonitoringSection() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filter, setFilter] = useState<SlaFilter>('all');
   const [pendingReminderId, setPendingReminderId] = useState<string | null>(null);
+  const [emailDrafts, setEmailDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -95,6 +102,7 @@ export function SlaMonitoringSection() {
   const importMutation = useImportSlaTracker();
   const approveMutation = useApproveSlaReminder();
   const retryMutation = useRetrySlaReminder();
+  const updateContactMutation = useUpdateSlaContact();
   const tracker = (trackerQuery.data?.tracker ?? []) as SlaTrackerItem[];
 
   const counts = useMemo(() => {
@@ -152,6 +160,33 @@ export function SlaMonitoringSection() {
       toast.success('Reminder queued for retry.');
     } catch (error) {
       toast.error('Could not retry reminder.', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setPendingReminderId(null);
+    }
+  };
+
+  const saveHmEmail = async (item: SlaTrackerItem) => {
+    const hiringManagerEmail = emailDrafts[item.id]?.trim() ?? '';
+    if (!hiringManagerEmail) {
+      toast.error('Enter a valid Hiring Manager email address.');
+      return;
+    }
+    setPendingReminderId(item.id);
+    try {
+      await updateContactMutation.mutateAsync({
+        feedbackRequestId: item.id,
+        hiringManagerEmail,
+      });
+      toast.success('Hiring Manager email saved.');
+      setEmailDrafts((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+    } catch (error) {
+      toast.error('Could not save Hiring Manager email.', {
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -254,8 +289,9 @@ export function SlaMonitoringSection() {
           <div className="max-h-[520px] divide-y divide-hairline overflow-y-auto rounded-md border border-hairline">
             {filteredTracker.map((item) => {
               const reminderStatus = item.latestReminder?.status;
-              const canSend = item.reminderAvailable || reminderStatus === 'draft';
-              const canRetry = reminderStatus === 'failed';
+              const hasHmEmail = Boolean(item.hiringManagerEmail);
+              const canSend = hasHmEmail && (item.reminderAvailable || reminderStatus === 'draft');
+              const canRetry = hasHmEmail && reminderStatus === 'failed';
               const isPending = pendingReminderId === item.id;
 
               return (
@@ -292,6 +328,41 @@ export function SlaMonitoringSection() {
                         Reminder failure: {item.latestReminder.failureCode}
                       </div>
                     )}
+                    {!hasHmEmail && item.slaState !== 'submitted' && (
+                      <div className="mt-3 flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 sm:flex-row sm:items-end">
+                        <div className="min-w-0 flex-1">
+                          <label
+                            htmlFor={`hm-email-${item.id}`}
+                            className="text-xs font-semibold text-amber-900"
+                          >
+                            Hiring Manager email required
+                          </label>
+                          <Input
+                            id={`hm-email-${item.id}`}
+                            type="email"
+                            value={emailDrafts[item.id] ?? ''}
+                            onChange={(event) =>
+                              setEmailDrafts((current) => ({
+                                ...current,
+                                [item.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="hiring.manager@company.com"
+                            className="mt-1 bg-surface"
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={isPending}
+                          onClick={() => saveHmEmail(item)}
+                        >
+                          {isPending && <Loader2 className="mr-2 size-4 animate-spin" />}
+                          Save email
+                        </Button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-end">
@@ -299,6 +370,8 @@ export function SlaMonitoringSection() {
                       <span className="flex items-center gap-1 text-xs font-medium text-emerald-700">
                         <CheckCircle className="size-4" /> Feedback received
                       </span>
+                    ) : !hasHmEmail ? (
+                      <span className="text-xs font-medium text-amber-700">Email required</span>
                     ) : canRetry ? (
                       <Button
                         type="button"

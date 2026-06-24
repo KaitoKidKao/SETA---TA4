@@ -404,6 +404,17 @@ export function useImportSlaTracker() {
   });
 }
 
+export function useUpdateSlaContact() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { feedbackRequestId: string; hiringManagerEmail: string }) =>
+      smartrecruitApi.updateSlaContact(input.feedbackRequestId, input.hiringManagerEmail),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['smartrecruit', 'slaTracker'] });
+    },
+  });
+}
+
 export function useCreateSlaReminderDraft() {
   return useMutation({
     mutationFn: (feedbackRequestId: string) =>
