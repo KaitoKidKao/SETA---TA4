@@ -20,6 +20,7 @@ import {
   candidates,
   criteria,
   hmFeedbackReminderAttempts,
+  hmFeedbackRequests,
   interviewSchedules,
   outreachDrafts,
   outreachTemplates,
@@ -101,7 +102,10 @@ const importMockDataSchema = z.object({
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 
-function resolveMockDataFilePath(filePath?: string): string {
+function resolveMockDataFilePath(
+  filePath?: string,
+  defaultFileName = '04_ta_cv_screening.xlsx',
+): string {
   if (filePath) {
     if (isAbsolute(filePath)) return filePath;
 
@@ -115,7 +119,7 @@ function resolveMockDataFilePath(filePath?: string): string {
     );
   }
 
-  const relativePath = 'mock-data/04_ta_cv_screening.xlsx';
+  const relativePath = `mock-data/${defaultFileName}`;
   const candidates = [
     ...(process.env.APP_HOME ? [resolve(process.env.APP_HOME, relativePath)] : []),
     resolve(process.cwd(), relativePath),
@@ -170,6 +174,10 @@ const cancelCampaignSchema = z.object({
 const slaTrackerQuerySchema = z.object({
   status: z.enum(['all', 'on_track', 'due_soon', 'overdue', 'submitted', 'data_error']).optional(),
   search: z.string().trim().max(200).optional(),
+});
+
+const updateHmContactSchema = z.object({
+  hiringManagerEmail: z.email(),
 });
 
 export interface SmartrecruitRouteDeps {
@@ -1202,10 +1210,41 @@ export function registerSmartrecruitRoutes(
     }
 
     const result = await importHmFeedbackFromWorkbook({
-      filePath: resolveMockDataFilePath(parsed.data.filePath),
+      filePath: resolveMockDataFilePath(
+        parsed.data.filePath,
+        '03_ta_hire_request_jd_generation.xlsx',
+      ),
       session,
     });
     return c.json(result);
+  });
+
+  app.patch('/api/smartrecruit/v1/sla-tracker/:id/contact', async (c) => {
+    const session = c.get('user');
+    requirePermission(session, SMARTRECRUIT_WRITE);
+
+    const parsed = updateHmContactSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json(
+        { error: 'VALIDATION', message: 'Enter a valid Hiring Manager email address.' },
+        400,
+      );
+    }
+
+    const [updated] = await smartrecruitDb()
+      .update(hmFeedbackRequests)
+      .set({ hiring_manager_email: parsed.data.hiringManagerEmail, updated_at: new Date() })
+      .where(
+        and(
+          eq(hmFeedbackRequests.id, c.req.param('id')),
+          eq(hmFeedbackRequests.tenant_id, session.tenant_id),
+        ),
+      )
+      .returning();
+    if (!updated) {
+      return c.json({ error: 'NOT_FOUND', message: 'HM feedback request not found.' }, 404);
+    }
+    return c.json({ request: updated });
   });
 
   const hmFeedbackReminderUpdateSchema = z.object({

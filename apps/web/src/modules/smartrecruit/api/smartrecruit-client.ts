@@ -364,6 +364,19 @@ export const smartrecruitApi = {
     });
   },
 
+  async updateSlaContact(
+    feedbackRequestId: string,
+    hiringManagerEmail: string,
+  ): Promise<{ request: any }> {
+    return request<{ request: any }>(
+      `/api/smartrecruit/v1/sla-tracker/${feedbackRequestId}/contact`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ hiringManagerEmail }),
+      },
+    );
+  },
+
   async createSlaReminderDraft(feedbackRequestId: string): Promise<{ draft: any }> {
     return request<{ draft: any }>(
       `/api/smartrecruit/v1/sla-tracker/${feedbackRequestId}/reminder-draft`,
