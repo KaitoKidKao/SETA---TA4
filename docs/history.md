@@ -860,3 +860,67 @@ This file records completed implementation steps so another IDE session or agent
 - Open SmartRecruit > Monitoring and confirm the SLA section appears above Campaign Monitoring even when it has no rows.
 - Click `Import DS08`, verify counts and rows appear, then exercise search and each status filter.
 - On a due-soon or overdue item, click `Send reminder` and confirm its status progresses from queued to sent; use `Retry reminder` when the latest attempt is failed.
+
+## 2026-06-24 - HM Reminder Contact And Queue Hardening
+
+### Completed
+
+- Confirmed the DS08 sheet in `03_ta_hire_request_jd_generation.xlsx` contains Hiring Manager names but no Hiring Manager email column; the previous `A valid Hiring Manager email address is required` message was a valid data-quality rejection.
+- Changed the SLA import endpoint to use the correct `03_ta_hire_request_jd_generation.xlsx` workbook by default instead of the CV-screening `04` workbook.
+- Added a tenant-scoped API and Monitoring UI control to capture a valid Hiring Manager email for SLA records that lack one.
+- Disabled Send/Retry actions until an HM email is present and replaced them with an explicit email-required editor.
+- Prevented scheduled reminder drafts from being created when the record has no valid recipient.
+- Added a SmartRecruit domain error mapper so permission, conflict, not-found and service-unavailable failures return structured 4xx/503 JSON instead of generic HTTP 500.
+- Hardened queue failure handling: failed enqueue attempts become retryable `failed` records instead of remaining stuck in `queued`; repeated approval uses the same Graphile job key.
+- Added integration coverage for idempotent re-enqueue and queue-unavailable state recovery.
+
+### Files
+
+- `packages/smartrecruit/src/register.ts`
+- `packages/smartrecruit/src/backend/domain/hm-feedback.ts`
+- `packages/smartrecruit/src/backend/http/routes.ts`
+- `packages/smartrecruit/tests/integration/hm-feedback.test.ts`
+- `apps/web/src/modules/smartrecruit/api/smartrecruit-client.ts`
+- `apps/web/src/modules/smartrecruit/hooks/use-smartrecruit.ts`
+- `apps/web/src/modules/smartrecruit/components/SlaMonitoringSection.tsx`
+
+### Verification
+
+- Biome check/write completed; warnings are pre-existing explicit-any/non-null warnings in shared SmartRecruit client/hooks and one existing integration assertion.
+- `packages/smartrecruit/node_modules/.bin/tsc --noEmit` passed.
+- `apps/web/node_modules/.bin/tsc -b --noEmit` passed.
+- The targeted HM feedback integration test could not start because no PostgreSQL container runtime is available in the current Windows environment; Vitest stopped during global setup before assertions.
+
+### Manual Retest
+
+- Re-import DS08, open Monitoring, and locate an overdue/due-soon record with `Email required`.
+- Enter a valid HM email and save it; verify the Send or Retry action becomes available after refetch.
+- Send the reminder and verify its status progresses from queued to sent (or exposes a structured delivery failure).
+
+## 2026-06-24 - Pipeline Stepper Stage Consistency
+
+### Completed
+
+- Fixed the Active Pipeline stepper briefly jumping back to `Screen CVs` after Gate 2 approval while the campaign was already sending outreach.
+- Replaced the broad `isCandidateAnalysisPhase` inference with a deterministic step derived from persisted `campaign.status` plus the active approval gate.
+- Made campaign terminal state authoritative for the displayed pipeline status, avoiding a transient Success label while the campaign query still reports an active sending stage.
+- Added stage-specific processing copy for JD analysis, CV screening, outreach drafting and mail dispatch.
+- Completed prior steps are now visually distinguished from the current active step.
+
+### Root Cause
+
+- The old UI treated every processing state without an approval or JD phase as candidate analysis. The post-approval sending window therefore matched the Screen CV condition until workflow/campaign polling converged.
+
+### Files
+
+- `apps/web/src/modules/smartrecruit/pages/smartrecruit-page.tsx`
+
+### Verification
+
+- Biome check passed for the SmartRecruit page.
+- `apps/web/node_modules/.bin/tsc -b --noEmit` passed.
+
+### Manual Retest
+
+- Approve Gate 2 and verify the stepper moves directly to `Dispatch Mail` without highlighting `Screen CVs`.
+- While candidates are sending, verify the loading copy says `Dispatching outreach emails...`; after campaign completion, verify the status changes to Success.
