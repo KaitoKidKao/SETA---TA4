@@ -897,6 +897,24 @@ This file records completed implementation steps so another IDE session or agent
 - Enter a valid HM email and save it; verify the Send or Retry action becomes available after refetch.
 - Send the reminder and verify its status progresses from queued to sent (or exposes a structured delivery failure).
 
+## 2026-06-25 - SmartRecruit Database Design Documentation Refresh
+
+### Completed
+
+- Rewrote `docs/database_design.md` to match the implemented SmartRecruit schema instead of the outdated proposal-era design.
+- Documented the current Postgres/Drizzle architecture, tenant-scoped tables, no cross-schema FK rule, campaign aggregate, per-candidate progress tracking, AI usage, data warnings, reports, SLA reminder tables, interview schedules and pgvector indexes.
+- Removed stale references to SQLite/ChromaDB and old standalone `screening_results` design.
+- Noted the current migration-level `outreach_drafts.message_type` field and future OCR/pricing/report storage considerations.
+
+### Files
+
+- `docs/database_design.md`
+- `docs/history.md`
+
+### Verification
+
+- Documentation-only update; no typecheck or tests required.
+
 ## 2026-06-24 - Pipeline Stepper Stage Consistency
 
 ### Completed
