@@ -10,6 +10,19 @@ import {
 } from '../db/schema.ts';
 import { getCampaignView } from './campaign.ts';
 
+interface ScreeningSecurityReport {
+  security?: {
+    riskLevel?: 'low' | 'medium' | 'high';
+    requiresHumanReview?: boolean;
+    flags?: Array<{
+      code?: string;
+      severity?: 'warning' | 'error';
+      message?: string;
+      snippet?: string;
+    }>;
+  };
+}
+
 export async function getCampaignMetrics(args: { campaignId: string; tenantId: string }) {
   const view = await getCampaignView(args);
   if (!view) return null;
@@ -75,6 +88,21 @@ export async function refreshCampaignWarnings(args: { campaignId: string; tenant
     message: string;
   }> = [];
   for (const row of view.candidates) {
+    const report = (row.campaignCandidate.screening_report ?? {}) as ScreeningSecurityReport;
+    const security = report.security;
+    if (security?.requiresHumanReview) {
+      for (const flag of security.flags ?? []) {
+        desired.push({
+          warningCode: flag.code ?? 'CV_SECURITY_REVIEW_REQUIRED',
+          severity: flag.severity ?? (security.riskLevel === 'high' ? 'error' : 'warning'),
+          entityType: 'candidate',
+          entityId: row.campaignCandidate.candidate_id,
+          message:
+            flag.message ??
+            `Candidate ${row.candidate?.display_name ?? row.campaignCandidate.candidate_id} requires security review before recruiter approval.`,
+        });
+      }
+    }
     if (!row.candidate?.cv_text?.trim()) {
       desired.push({
         warningCode: 'CV_TEXT_MISSING',

@@ -353,10 +353,14 @@ export const campaignJobs: TaskList = {
       });
       await withEmit(actor(session), async (tx) => {
         if (await isCampaignCanceledTx(tx, session, payload.campaignId)) return;
+        const requiresHumanReview = Boolean(screened.report.security?.requiresHumanReview);
         await tx
           .update(campaignCandidates)
           .set({
-            status: isShortlistedScore(screened.fitScore) ? 'shortlisted' : 'screened',
+            status:
+              !requiresHumanReview && isShortlistedScore(screened.fitScore)
+                ? 'shortlisted'
+                : 'screened',
             fit_score: screened.fitScore,
             screening_report: screened.report,
             error_reason: null,

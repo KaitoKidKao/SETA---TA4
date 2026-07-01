@@ -14,6 +14,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import {
+  type CandidateSecurityState,
+  CandidateSecurityWarnings,
+} from './CandidateSecurityWarnings';
 
 interface MatchItem {
   jdSkill: string;
@@ -55,6 +59,7 @@ interface CandidateState {
       teamSkillGapBonus?: number;
     };
     flags?: string[];
+    security?: CandidateSecurityState;
     solvedTeamGaps?: string[];
     missingTeamGaps?: string[];
     teamSkillGapBonus?: number;
@@ -182,6 +187,8 @@ export function CandidateScorecard({
             </Badge>
           )}
         </div>
+
+        <CandidateSecurityWarnings security={report?.security} />
 
         {/* Breakdown counters */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

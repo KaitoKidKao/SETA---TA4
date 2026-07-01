@@ -19,6 +19,7 @@ export const SmartrecruitCandidateInputSchema = z.object({
   candidatePhone: z.string().optional(),
   cvPath: z.string().optional(),
   cvText: z.string(),
+  security: z.any().optional(),
 });
 export type SmartrecruitCandidateInput = z.infer<typeof SmartrecruitCandidateInputSchema>;
 
@@ -154,6 +155,7 @@ export async function createSmartrecruitCampaign(
           cv_path: cv.cvPath ?? null,
           cv_text: cv.cvText,
           status: 'applied',
+          screening_report: cv.security ? { security: cv.security } : null,
         });
         await tx.insert(campaignCandidates).values({
           id: crypto.randomUUID(),
