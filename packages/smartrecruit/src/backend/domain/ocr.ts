@@ -1,7 +1,9 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { Agent } from '@mastra/core/agent';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import { createCanvas } from '@napi-rs/canvas';
 import Tesseract from 'tesseract.js';
+import { getDocumentProxy } from 'unpdf';
 import { getModelConfig } from './model.ts';
 
 export async function performOcr(filePath: string): Promise<string> {
@@ -12,16 +14,52 @@ export async function performOcr(filePath: string): Promise<string> {
     throw new Error(`OCR target file not found: ${filePath}`);
   }
 
-  const fileBuffer = await fs.readFile(filePath);
   const ext = path.extname(filePath).toLowerCase();
 
-  // Decide mime-type
+  // Handle PDF files by rendering pages to canvases and running OCR on each
+  if (ext === '.pdf') {
+    try {
+      const fileBuffer = await fs.readFile(filePath);
+      const doc = await getDocumentProxy(new Uint8Array(fileBuffer));
+      const numPages = Math.min(doc.numPages, 3); // Limit to first 3 pages for performance
+      let fullOcrText = '';
+
+      for (let i = 1; i <= numPages; i++) {
+        try {
+          const page = await doc.getPage(i);
+          const viewport = page.getViewport({ scale: 2.0 });
+          const canvas = createCanvas(viewport.width, viewport.height);
+          const context = canvas.getContext('2d');
+
+          await page.render({
+            canvasContext: context as any,
+            viewport,
+          }).promise;
+
+          const pngBuffer = canvas.toBuffer('image/png');
+          const {
+            data: { text },
+          } = await Tesseract.recognize(pngBuffer, 'vie+eng');
+          fullOcrText += `${text}\n`;
+        } catch (pageErr) {
+          console.warn(`Failed to render or OCR page ${i} of PDF ${filePath}:`, pageErr);
+        }
+      }
+      return fullOcrText;
+    } catch (pdfErr) {
+      console.error(`Failed to perform OCR on PDF ${filePath}:`, pdfErr);
+      throw new Error(`OCR PDF processing failed: ${String(pdfErr)}`);
+    }
+  }
+
+  const fileBuffer = await fs.readFile(filePath);
+
+  // Decide mime-type for image files
   let mimeType = 'application/octet-stream';
   if (ext === '.png') mimeType = 'image/png';
   else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
   else if (ext === '.gif') mimeType = 'image/gif';
   else if (ext === '.webp') mimeType = 'image/webp';
-  else if (ext === '.pdf') mimeType = 'application/pdf';
 
   // Option 1: Vision API using gpt-4o-mini (for images only)
   if (mimeType.startsWith('image/')) {
@@ -70,9 +108,8 @@ export async function performOcr(filePath: string): Promise<string> {
     }
   }
 
-  // Option 2: Fallback to Local Tesseract WebAssembly
+  // Option 2: Fallback to Local Tesseract WebAssembly for non-PDF files
   try {
-    // Note: Tesseract.recognize accepts file path or Buffer
     const {
       data: { text },
     } = await Tesseract.recognize(fileBuffer, 'vie+eng');

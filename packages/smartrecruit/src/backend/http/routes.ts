@@ -2,9 +2,11 @@ import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from '@mastra/core/agent';
+import { createCanvas } from '@napi-rs/canvas';
 import type { SessionEnv, WorkerHandle } from '@seta/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Hono } from 'hono';
+import Tesseract from 'tesseract.js';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import {
@@ -44,6 +46,7 @@ import {
   listCampaignReports,
   renderCampaignReportPdf,
 } from '../domain/campaign-report.ts';
+import { scanCvSecurity } from '../domain/cv-security.ts';
 import { draftOutreach } from '../domain/draft-outreach.ts';
 import { executeOutreach } from '../domain/execute-outreach.ts';
 import {
@@ -77,6 +80,7 @@ const screenCvSchema = z.object({
   cvPath: z.string().optional(),
   cvText: z.string().min(1),
   criteriaId: z.string().uuid(),
+  security: z.any().optional(),
 });
 
 const createCampaignSchema = z.object({
@@ -91,6 +95,7 @@ const createCampaignSchema = z.object({
         candidatePhone: z.string().optional(),
         cvPath: z.string().optional(),
         cvText: z.string().min(1),
+        security: z.any().optional(),
       }),
     )
     .min(1),
@@ -519,8 +524,7 @@ export function registerSmartrecruitRoutes(
     }
   });
 
-  async function extractUploadedPdfText(file: File): Promise<string> {
-    const arrayBuffer = await file.arrayBuffer();
+  async function extractUploadedPdfText(arrayBuffer: ArrayBuffer): Promise<string> {
     const buffer = Buffer.from(arrayBuffer);
     const doc = await getDocumentProxy(new Uint8Array(buffer));
     const extracted = await extractText(doc, { mergePages: false });
@@ -544,9 +548,16 @@ export function registerSmartrecruitRoutes(
         return c.json({ error: 'No file uploaded or file parameter invalid' }, 400);
       }
 
+      let arrayBuffer: ArrayBuffer;
+      try {
+        arrayBuffer = await file.arrayBuffer();
+      } catch (err) {
+        return c.json({ error: 'FILE_READ_FAILED', message: 'Unable to read file content.' }, 400);
+      }
+
       let text = '';
       try {
-        text = await extractUploadedPdfText(file);
+        text = await extractUploadedPdfText(arrayBuffer);
       } catch (err) {
         return c.json(
           {
@@ -568,9 +579,66 @@ export function registerSmartrecruitRoutes(
         );
       }
 
+      let security = scanCvSecurity({
+        cvText: text,
+        nativeText: text,
+        filename: file.name,
+      });
+
+      // If prompt injection or approval manipulation is suspected in native text layer,
+      // run OCR to check if the suspect text is hidden (white text / bôi trắng)
+      if (
+        security.requiresHumanReview &&
+        security.flags.some(
+          (f) =>
+            f.code === 'PROMPT_INJECTION_SUSPECTED' || f.code === 'APPROVAL_MANIPULATION_SUSPECTED',
+        )
+      ) {
+        try {
+          const buffer = Buffer.from(arrayBuffer);
+          const doc = await getDocumentProxy(new Uint8Array(buffer));
+          const numPages = Math.min(doc.numPages, 3);
+          let ocrText = '';
+          for (let i = 1; i <= numPages; i++) {
+            try {
+              const page = await doc.getPage(i);
+              const viewport = page.getViewport({ scale: 2.0 });
+              const canvas = createCanvas(viewport.width, viewport.height);
+              const context = canvas.getContext('2d');
+              await page.render({
+                canvasContext: context as any,
+                viewport,
+              }).promise;
+              const pngBuffer = canvas.toBuffer('image/png');
+              const {
+                data: { text: pageText },
+              } = await Tesseract.recognize(pngBuffer, 'vie+eng');
+              ocrText += `${pageText}\n`;
+            } catch (pageErr) {
+              console.warn(
+                `Failed to OCR page ${i} during upload check for ${file.name}:`,
+                pageErr,
+              );
+            }
+          }
+          security = scanCvSecurity({
+            cvText: text,
+            nativeText: text,
+            ocrText,
+            filename: file.name,
+          });
+        } catch (ocrErr) {
+          console.warn(
+            `OCR execution failed during upload security check for ${file.name}:`,
+            ocrErr,
+          );
+        }
+      }
+
       return c.json({
         filename: file.name,
         text,
+        security,
       });
     } catch (err) {
       return c.json(
@@ -594,7 +662,8 @@ export function registerSmartrecruitRoutes(
 
       let text = '';
       try {
-        text = await extractUploadedPdfText(file);
+        const arrayBuffer = await file.arrayBuffer();
+        text = await extractUploadedPdfText(arrayBuffer);
       } catch (err) {
         return c.json(
           {
@@ -654,8 +723,13 @@ export function registerSmartrecruitRoutes(
         structuredOutput: {
           schema: z.object({
             name: z.string().describe('Full name of the candidate'),
-            email: z.string().email().describe('Email address of the candidate'),
-            phone: z.string().nullable().describe('Phone number of the candidate'),
+            email: z
+              .string()
+              .email()
+              .nullable()
+              .optional()
+              .describe('Email address of the candidate'),
+            phone: z.string().nullable().optional().describe('Phone number of the candidate'),
           }),
         },
         modelSettings: { temperature: 0, seed: 42 },
@@ -838,6 +912,7 @@ export function registerSmartrecruitRoutes(
       cvPath: parsed.data.cvPath,
       cvText: parsed.data.cvText,
       criteriaId: parsed.data.criteriaId,
+      precomputedSecurity: parsed.data.security,
       session,
     });
     return c.json(result, 201);

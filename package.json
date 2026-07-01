@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
+    "@napi-rs/canvas": "^1.0.0",
     "@seta/shared-config": "workspace:^",
     "@turbo/gen": "^2.9.15",
     "@types/eslint": "^9.6.1",
