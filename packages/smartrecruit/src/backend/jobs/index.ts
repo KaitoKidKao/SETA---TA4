@@ -127,7 +127,11 @@ export const smartrecruitJobs: TaskList = {
         await db
           .update(campaignCandidates)
           .set({
-            status: isShortlistedScore(screened.fitScore) ? 'shortlisted' : 'screened',
+            status:
+              !screened.report.security?.requiresHumanReview &&
+              isShortlistedScore(screened.fitScore)
+                ? 'shortlisted'
+                : 'screened',
             fit_score: screened.fitScore,
             screening_report: screened.report,
             error_reason: null,

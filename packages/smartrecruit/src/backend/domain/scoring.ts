@@ -1,3 +1,5 @@
+import { isInstructionLikeText } from './cv-security.ts';
+
 export const SCREENING_PROMPT_VERSION = 'screening-v2-evidence-extraction';
 export const SCORING_VERSION = 'deterministic-v1';
 
@@ -56,20 +58,25 @@ function normalizeLevel(value?: string | null): number | null {
 
 function sanitizeMatches(criteriaSkills: string[], matches: SkillMatch[]) {
   let evidenceMissing = false;
+  let invalidEvidencePromptInjection = false;
   const bySkill = new Map(matches.map((match) => [match.jdSkill.trim().toLowerCase(), match]));
   const sanitized = criteriaSkills.map((skill) => {
     const supplied = bySkill.get(skill.trim().toLowerCase());
     const hasEvidence = Boolean(supplied?.evidenceSnippet?.trim());
+    const evidenceIsInstruction = isInstructionLikeText(supplied?.evidenceSnippet);
     if (supplied?.matched && !hasEvidence) evidenceMissing = true;
+    if (supplied?.matched && evidenceIsInstruction) invalidEvidencePromptInjection = true;
     return {
       jdSkill: skill,
       cvSkill: supplied?.cvSkill ?? null,
-      matched: Boolean(supplied?.matched && hasEvidence),
-      justification: supplied?.justification ?? 'No evidence found in the CV.',
-      evidenceSnippet: hasEvidence ? supplied?.evidenceSnippet : null,
+      matched: Boolean(supplied?.matched && hasEvidence && !evidenceIsInstruction),
+      justification: evidenceIsInstruction
+        ? 'Evidence ignored because it contains instruction-like text from the CV.'
+        : (supplied?.justification ?? 'No evidence found in the CV.'),
+      evidenceSnippet: hasEvidence && !evidenceIsInstruction ? supplied?.evidenceSnippet : null,
     } satisfies SkillMatch;
   });
-  return { sanitized, evidenceMissing };
+  return { sanitized, evidenceMissing, invalidEvidencePromptInjection };
 }
 
 function weightedRatio(matches: SkillMatch[], weight: number): number {
@@ -96,6 +103,9 @@ export function calculateDeterministicScore(input: DeterministicScoreInput) {
   };
   const flags = [
     ...(mustHave.evidenceMissing || niceToHave.evidenceMissing ? ['EVIDENCE_MISSING'] : []),
+    ...(mustHave.invalidEvidencePromptInjection || niceToHave.invalidEvidencePromptInjection
+      ? ['INVALID_EVIDENCE_PROMPT_INJECTION']
+      : []),
     ...(requiredEnglish !== null && candidateEnglish === null ? ['ENGLISH_EVIDENCE_MISSING'] : []),
   ];
   return {

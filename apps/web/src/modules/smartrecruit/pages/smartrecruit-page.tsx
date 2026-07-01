@@ -77,6 +77,11 @@ import {
   useWorkflowRuns,
 } from '..';
 import { CandidateScorecard } from '../components/CandidateScorecard';
+import {
+  type CandidateSecurityState,
+  CandidateSecurityWarnings,
+  hasSecurityReviewRisk,
+} from '../components/CandidateSecurityWarnings';
 import { HMReportModal } from '../components/HMReportModal';
 
 interface UploadedCv {
@@ -88,6 +93,7 @@ interface UploadedCv {
   text: string;
   status: 'uploading' | 'extracting' | 'ready' | 'error';
   error?: string;
+  security?: CandidateSecurityState;
 }
 
 interface CriteriaState {
@@ -155,6 +161,7 @@ interface CandidateState {
       niceToHave: number;
     };
     flags?: string[];
+    security?: CandidateSecurityState;
   } | null;
 }
 
@@ -198,9 +205,9 @@ export function SmartrecruitPage() {
   const [selectedCriteriaId, setSelectedCriteriaId] = useState('');
 
   // Local UI State
-  const [candidateFilter, setCandidateFilter] = useState<'all' | 'pass' | 'fail' | 'hallucination'>(
-    'all',
-  );
+  const [candidateFilter, setCandidateFilter] = useState<
+    'all' | 'pass' | 'fail' | 'needsReview' | 'hallucination'
+  >('all');
 
   // Talent Pool states (Phase 2)
   const [poolCandidates, setPoolCandidates] = useState<PoolCandidate[]>([]);
@@ -222,6 +229,7 @@ export function SmartrecruitPage() {
 - Bachelor's degree in Computer Science, Mathematics, or related fields.`);
 
   const [uploadedCvs, setUploadedCvs] = useState<UploadedCv[]>([]);
+  const [expandedCvIds, setExpandedCvIds] = useState<Record<string, boolean>>({});
   const [isUploading, setIsUploading] = useState(false);
   const [isUploadingJd, setIsUploadingJd] = useState(false);
   const [uploadedJdFilename, setUploadedJdFilename] = useState<string | null>(null);
@@ -413,9 +421,11 @@ export function SmartrecruitPage() {
   );
 
   const filteredCandidates = candidatesList.filter((cand) => {
+    const needsSecurityReview = hasSecurityReviewRisk(cand.screening_report?.security);
     if (candidateFilter === 'all') return true;
-    if (candidateFilter === 'pass') return (cand.fit_score ?? 0) >= 70;
-    if (candidateFilter === 'fail') return (cand.fit_score ?? 0) < 70;
+    if (candidateFilter === 'pass') return !needsSecurityReview && (cand.fit_score ?? 0) >= 70;
+    if (candidateFilter === 'fail') return !needsSecurityReview && (cand.fit_score ?? 0) < 70;
+    if (candidateFilter === 'needsReview') return needsSecurityReview;
     if (candidateFilter === 'hallucination') return isHallucinationFail(cand.id);
     return true;
   });
@@ -690,7 +700,11 @@ export function SmartrecruitPage() {
       const data = await smartrecruitApi.uploadCv(file);
 
       setUploadedCvs((prev) =>
-        prev.map((c) => (c.id === tempId ? { ...c, text: data.text, status: 'extracting' } : c)),
+        prev.map((c) =>
+          c.id === tempId
+            ? { ...c, text: data.text, status: 'extracting', security: data.security }
+            : c,
+        ),
       );
 
       // Extract candidate details via LLM
@@ -703,6 +717,7 @@ export function SmartrecruitPage() {
                 name: dataInfo.name || file.name.replace(/\.[^/.]+$/, ''),
                 email: dataInfo.email || 'candidate@example.com',
                 phone: dataInfo.phone || '',
+                security: data.security,
                 status: 'ready',
               }
             : c,
@@ -757,6 +772,7 @@ export function SmartrecruitPage() {
           candidateEmail: c.email,
           candidatePhone: c.phone,
           cvText: c.text,
+          security: c.security,
         })),
       });
 
@@ -1198,81 +1214,136 @@ export function SmartrecruitPage() {
                           Uploaded Candidate Profiles ({uploadedCvs.length})
                         </h3>
                         <div className="max-h-[260px] overflow-y-auto border border-hairline rounded-lg divide-y divide-hairline bg-surface-1">
-                          {uploadedCvs.map((cv) => (
-                            <div
-                              key={cv.id}
-                              className="p-3.5 flex flex-col gap-3 transition-colors hover:bg-canvas"
-                            >
-                              <div className="flex items-start justify-between">
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <FileText className="size-5 text-ink-tertiary shrink-0" />
-                                  <div className="min-w-0">
-                                    <p className="text-body-sm font-medium text-ink truncate max-w-[240px]">
-                                      {cv.filename}
-                                    </p>
+                          {uploadedCvs.map((cv) => {
+                            const isExpanded = !!expandedCvIds[cv.id];
+                            return (
+                              <div
+                                key={cv.id}
+                                className="p-3 flex flex-col gap-2.5 transition-colors hover:bg-canvas"
+                              >
+                                <div className="flex items-center justify-between gap-2.5">
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <FileText className="size-4.5 text-ink-tertiary shrink-0" />
+                                    <div className="min-w-0">
+                                      <p
+                                        className="text-body-sm font-medium text-ink truncate max-w-[200px]"
+                                        title={cv.filename}
+                                      >
+                                        {cv.filename}
+                                      </p>
+                                      {cv.status === 'ready' && cv.name && (
+                                        <p className="text-eyebrow text-ink-subtle truncate max-w-[200px]">
+                                          {cv.name} {cv.email ? `(${cv.email})` : ''}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 shrink-0">
                                     {cv.status === 'uploading' && (
-                                      <span className="text-eyebrow text-blue-500 animate-pulse">
+                                      <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded font-medium animate-pulse border border-blue-100">
                                         Uploading...
                                       </span>
                                     )}
                                     {cv.status === 'extracting' && (
-                                      <span className="text-eyebrow text-amber-500 animate-pulse">
-                                        Extracting info...
+                                      <span className="text-[10px] bg-amber-50 text-amber-600 px-2 py-0.5 rounded font-medium animate-pulse border border-amber-100">
+                                        Extracting...
                                       </span>
                                     )}
                                     {cv.status === 'ready' && (
-                                      <span className="text-eyebrow text-emerald-500 font-medium flex items-center gap-1">
-                                        <Check className="size-3" /> Ready
+                                      <span
+                                        className={cn(
+                                          'text-[10px] px-2 py-0.5 rounded font-medium border',
+                                          hasSecurityReviewRisk(cv.security)
+                                            ? 'bg-amber-50 text-amber-600 border-amber-100'
+                                            : 'bg-emerald-50 text-emerald-600 border-emerald-100',
+                                        )}
+                                      >
+                                        {hasSecurityReviewRisk(cv.security) ? 'Review' : 'Ready'}
                                       </span>
                                     )}
                                     {cv.status === 'error' && (
-                                      <span className="text-eyebrow text-rose-500">
-                                        Error: {cv.error}
+                                      <span className="text-[10px] bg-rose-50 text-rose-600 px-2 py-0.5 rounded font-medium border border-rose-100">
+                                        Error
                                       </span>
                                     )}
+
+                                    {cv.status === 'ready' && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() =>
+                                          setExpandedCvIds((prev) => ({
+                                            ...prev,
+                                            [cv.id]: !prev[cv.id],
+                                          }))
+                                        }
+                                        className="h-7 w-7 p-0 text-ink-subtle hover:text-ink rounded-full"
+                                      >
+                                        {isExpanded ? (
+                                          <ChevronUp className="size-4" />
+                                        ) : (
+                                          <ChevronDown className="size-4" />
+                                        )}
+                                      </Button>
+                                    )}
+
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleRemoveCv(cv.id)}
+                                      className="h-7 w-7 p-0 text-ink-subtle hover:text-rose-500 rounded-full"
+                                    >
+                                      <Trash2 className="size-4" />
+                                    </Button>
                                   </div>
                                 </div>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRemoveCv(cv.id)}
-                                  className="h-8 w-8 p-0 text-ink-subtle hover:text-rose-500 rounded-full"
-                                >
-                                  <Trash2 className="size-4" />
-                                </Button>
+
+                                {isExpanded && (
+                                  <div className="flex flex-col gap-3 pt-2 border-t border-hairline/50">
+                                    <CandidateSecurityWarnings security={cv.security} compact />
+                                    {cv.status === 'ready' && (
+                                      <div className="grid grid-cols-2 gap-2.5 bg-canvas p-2.5 rounded-lg border border-hairline">
+                                        <div className="flex flex-col gap-1">
+                                          <label className="text-eyebrow text-ink-subtle">
+                                            Candidate Name
+                                          </label>
+                                          <Input
+                                            value={cv.name}
+                                            onChange={(e) =>
+                                              handleUpdateCvInfo(cv.id, 'name', e.target.value)
+                                            }
+                                            size="sm"
+                                            className="h-8 text-body-sm bg-surface border-hairline"
+                                          />
+                                        </div>
+                                        <div className="flex flex-col gap-1">
+                                          <label className="text-eyebrow text-ink-subtle">
+                                            Email Address
+                                          </label>
+                                          <Input
+                                            value={cv.email}
+                                            onChange={(e) =>
+                                              handleUpdateCvInfo(cv.id, 'email', e.target.value)
+                                            }
+                                            size="sm"
+                                            className="h-8 text-body-sm bg-surface border-hairline"
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {cv.status === 'error' && (
+                                  <span className="text-xs text-rose-500 bg-rose-50/50 border border-rose-100 rounded p-2 mt-1">
+                                    {cv.error}
+                                  </span>
+                                )}
                               </div>
-                              {cv.status === 'ready' && (
-                                <div className="grid grid-cols-2 gap-2.5 bg-canvas p-2.5 rounded-lg border border-hairline">
-                                  <div className="flex flex-col gap-1">
-                                    <label className="text-eyebrow text-ink-subtle">
-                                      Candidate Name
-                                    </label>
-                                    <Input
-                                      value={cv.name}
-                                      onChange={(e) =>
-                                        handleUpdateCvInfo(cv.id, 'name', e.target.value)
-                                      }
-                                      size="sm"
-                                      className="h-8 text-body-sm bg-surface border-hairline"
-                                    />
-                                  </div>
-                                  <div className="flex flex-col gap-1">
-                                    <label className="text-eyebrow text-ink-subtle">
-                                      Email Address
-                                    </label>
-                                    <Input
-                                      value={cv.email}
-                                      onChange={(e) =>
-                                        handleUpdateCvInfo(cv.id, 'email', e.target.value)
-                                      }
-                                      size="sm"
-                                      className="h-8 text-body-sm bg-surface border-hairline"
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -2301,7 +2372,15 @@ export function SmartrecruitPage() {
                             : 'border-transparent text-ink-subtle hover:text-ink',
                         )}
                       >
-                        Passed ({candidatesList.filter((c) => (c.fit_score ?? 0) >= 70).length})
+                        Passed (
+                        {
+                          candidatesList.filter(
+                            (c) =>
+                              !hasSecurityReviewRisk(c.screening_report?.security) &&
+                              (c.fit_score ?? 0) >= 70,
+                          ).length
+                        }
+                        )
                       </button>
                       <button
                         type="button"
@@ -2313,7 +2392,33 @@ export function SmartrecruitPage() {
                             : 'border-transparent text-ink-subtle hover:text-ink',
                         )}
                       >
-                        Not passed ({candidatesList.filter((c) => (c.fit_score ?? 0) < 70).length})
+                        Not passed (
+                        {
+                          candidatesList.filter(
+                            (c) =>
+                              !hasSecurityReviewRisk(c.screening_report?.security) &&
+                              (c.fit_score ?? 0) < 70,
+                          ).length
+                        }
+                        )
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCandidateFilter('needsReview')}
+                        className={cn(
+                          'px-3 py-2 text-body-sm font-medium border-b-2 transition-colors shrink-0',
+                          candidateFilter === 'needsReview'
+                            ? 'border-red-500 text-red-600'
+                            : 'border-transparent text-ink-subtle hover:text-ink',
+                        )}
+                      >
+                        Needs review (
+                        {
+                          candidatesList.filter((c) =>
+                            hasSecurityReviewRisk(c.screening_report?.security),
+                          ).length
+                        }
+                        )
                       </button>
                       <button
                         type="button"
@@ -2334,8 +2439,12 @@ export function SmartrecruitPage() {
                       {filteredCandidates.map((cand) => {
                         const isSelected = selectedCandidate?.id === cand.id;
                         const fitScore = cand.fit_score ?? 0;
-                        const scoreColor =
-                          fitScore >= 70
+                        const needsSecurityReview = hasSecurityReviewRisk(
+                          cand.screening_report?.security,
+                        );
+                        const scoreColor = needsSecurityReview
+                          ? 'text-red-500 bg-red-500/10 border-red-500/20'
+                          : fitScore >= 70
                             ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
                             : 'text-amber-500 bg-amber-500/10 border-amber-500/20';
                         const draft = draftsList.find((d) => d.candidate_id === cand.id);
@@ -2358,6 +2467,11 @@ export function SmartrecruitPage() {
                               <span className="text-eyebrow text-ink-subtle truncate">
                                 {cand.email}
                               </span>
+                              {needsSecurityReview && (
+                                <span className="text-eyebrow font-semibold w-fit mt-1 px-1.5 py-0.5 rounded border bg-red-500/10 text-red-600 border-red-500/20">
+                                  Needs security review
+                                </span>
+                              )}
                               {draft && (
                                 <span
                                   className={cn(
@@ -2381,7 +2495,7 @@ export function SmartrecruitPage() {
                                   scoreColor,
                                 )}
                               >
-                                {fitScore}%
+                                {needsSecurityReview ? '!' : `${fitScore}%`}
                               </div>
                               <ChevronRight className="size-4 text-ink-tertiary" />
                             </div>
@@ -2406,7 +2520,9 @@ export function SmartrecruitPage() {
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-eyebrow text-ink-subtle">Fit Score:</span>
-                          {selectedCandidate.status === 'screening_failed' ? (
+                          {hasSecurityReviewRisk(selectedCandidate.screening_report?.security) ? (
+                            <Badge className="bg-red-500 text-white">Needs Review</Badge>
+                          ) : selectedCandidate.status === 'screening_failed' ? (
                             <Badge className="bg-rose-500 text-white">Screening failed</Badge>
                           ) : (
                             <Badge className="bg-emerald-500 text-white">

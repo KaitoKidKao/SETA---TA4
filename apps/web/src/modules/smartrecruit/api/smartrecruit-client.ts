@@ -65,6 +65,7 @@ export const smartrecruitApi = {
       candidatePhone?: string;
       cvPath?: string;
       cvText: string;
+      security?: any;
     }>;
   }): Promise<any> {
     return request<any>('/api/smartrecruit/v1/campaigns', {
@@ -164,7 +165,21 @@ export const smartrecruitApi = {
     });
   },
 
-  async uploadCv(file: File): Promise<{ filename: string; text: string }> {
+  async uploadCv(file: File): Promise<{
+    filename: string;
+    text: string;
+    security?: {
+      riskLevel?: 'low' | 'medium' | 'high';
+      requiresHumanReview?: boolean;
+      ocrComparisonAvailable?: boolean;
+      flags?: Array<{
+        code?: string;
+        severity?: 'warning' | 'error';
+        message?: string;
+        snippet?: string;
+      }>;
+    };
+  }> {
     const formData = new FormData();
     formData.append('file', file);
     const res = await fetch('/api/smartrecruit/v1/upload-cv', {
@@ -173,9 +188,24 @@ export const smartrecruitApi = {
       body: formData, // fetch sets boundary automatically for FormData
     });
     if (!res.ok) {
-      throw new Error(`Failed to upload CV: ${res.status}`);
+      const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      throw new Error(body.message || body.error || `Failed to upload CV: ${res.status}`);
     }
-    return res.json() as Promise<{ filename: string; text: string }>;
+    return res.json() as Promise<{
+      filename: string;
+      text: string;
+      security?: {
+        riskLevel?: 'low' | 'medium' | 'high';
+        requiresHumanReview?: boolean;
+        ocrComparisonAvailable?: boolean;
+        flags?: Array<{
+          code?: string;
+          severity?: 'warning' | 'error';
+          message?: string;
+          snippet?: string;
+        }>;
+      };
+    }>;
   },
 
   async uploadJd(file: File): Promise<{ filename: string; text: string }> {
